@@ -1,6 +1,6 @@
 # 4BIT FORGE – Internal Reference Spec
 
-DeepSeek-V3 Expert Pruning + 4-bit AWQ Quantization Pipeline
+DeepSeek-Math-V2 Expert Pruning + 4-bit AWQ Quantization Pipeline
 Target: ~100B math-specialized dense-ish model runnable on 1×H100 using vLLM.
 
 This document gives a **mental model of the repo** in terms of components, data structures, and control flows, without going into implementation details.
@@ -12,7 +12,7 @@ This document gives a **mental model of the repo** in terms of components, data 
 4BIT FORGE is composed of six conceptual subsystems:
 
 1. **Checkpoint I/O Layer**
-   Reads and writes DeepSeek-V3 weights as a stream of layer chunks. Provides a uniform interface over SafeTensors / shard formats.
+   Reads and writes DeepSeek-Math-V2 weights as a stream of layer chunks. Provides a uniform interface over SafeTensors / shard formats.
 
 2. **Calibration Streamer**
    Runs a no-grad, layer-wise forward pass over math calibration data. Produces an `Expert_Hit_Map` for all MoE layers.
@@ -43,7 +43,7 @@ These are the core logical data structures that everything revolves around.
 
 ### 2.1 Model Geometry
 
-* `num_layers` (int): total transformer blocks (≈ 61 for DeepSeek-V3).
+* `num_layers` (int): total transformer blocks (≈ 61 for DeepSeek-Math-V2).
 * `num_moe_layers` (int): subset of layers that are MoE.
 * `num_experts` (int): experts per MoE layer (e.g., 256).
 * `top_k` (int): router top-k (e.g., 4 or 8).
@@ -341,7 +341,7 @@ Performance constraints:
 
 High-level driver that takes:
 
-* Original DeepSeek-V3 checkpoint.
+* Original DeepSeek-Math-V2 checkpoint.
 * Expert translation table.
 * AWQ quantization kernel.
 
