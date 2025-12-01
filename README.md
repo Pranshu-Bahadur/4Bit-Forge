@@ -1,2 +1,2 @@
-# 4Bit-Forge
-big llm become smol using CUDA
+![4Bit-Forge logo](assets/4Bit-Forge.png)
+
