@@ -328,8 +328,8 @@ std::tuple<torch::Tensor, torch::Tensor> build_group_meta_packed_cuda(
 
     size_t shmem_bytes = 2 * static_cast<size_t>(threads) * sizeof(float); // smin + smax
 
-    auto stream = at::cuda::getCurrentCUDAStream();
-    at::cuda::CUDAGuard guard(device);
+    auto stream = c10::cuda::getCurrentCUDAStream();
+    c10::cuda::CUDAGuard guard(device);
 
     const auto dtype = x_groups.scalar_type();
 
@@ -409,8 +409,8 @@ torch::Tensor mse_scale_groups_packed_cuda(
     p        = p.contiguous();
 
     auto device = x_groups.device();
-    at::cuda::CUDAGuard guard(device);
-    auto stream = at::cuda::getCurrentCUDAStream();
+    c10::cuda::CUDAGuard guard(device);
+    auto stream = c10::cuda::getCurrentCUDAStream();
 
     // Copy shrink factors to constant memory
     CUDA_CHECK(cudaMemcpyToSymbol(
@@ -421,7 +421,7 @@ torch::Tensor mse_scale_groups_packed_cuda(
         cudaMemcpyDeviceToDevice
     ));
 
-    const cudaDeviceProp* prop = at::cuda::getCurrentDeviceProperties();
+    const cudaDeviceProp* prop = c10::cuda::getCurrentDeviceProperties();
     size_t smem_cap = prop->sharedMemPerBlockOptin
                       ? (size_t)prop->sharedMemPerBlockOptin
                       : (size_t)prop->sharedMemPerBlock;
