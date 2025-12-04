@@ -68,8 +68,13 @@ class GPTQ:
         if group_size % 32 != 0:
             raise ValueError(f"group_size must be a multiple of 32, got {group_size}")
 
-        # Work in fp32 for grid building (even if weight is bf16/fp16/fp8)
-        W = weight.to(torch.float32).contiguous()
+        # Branch early: GPU vs CPU so we don't accidentally upcast on CUDA.
+        if device.type == "cuda":
+            # Keep original dtype (fp16/bf16/fp32/fp8) to avoid extra 64–256 MB copies.
+            W = weight.contiguous()
+        else:
+            # CPU reference runs in fp32.
+            W = weight.to(torch.float32).contiguous()
 
         # Compute number of groups along R and pad last group if needed
         num_groups = (R + group_size - 1) // group_size
@@ -191,12 +196,11 @@ class GPTQ:
                 if end > R:
                     end = R  # last partial group
 
-                # skip empty
                 if end <= start:
                     continue
 
-                s = scale_row[g]      # scalar tensor (device)
-                q0 = qzero_row[g]     # scalar tensor (device)
+                s = scale_row[g]      # scalar tensor (device, fp32)
+                q0 = qzero_row[g]     # scalar tensor (device, fp32)
 
                 # x: (slice_len,)
                 x = W[j, start:end]
@@ -214,8 +218,7 @@ class GPTQ:
 
                 # propagate error to future rows for this slice
                 if h_tail is not None:
-                    # h_tail: [F], e: [slice_len]
-                    # Update W[j+1:, start:end] += h_tail[:, None] * e[None, :]
+                    # W[j+1:, start:end] += h_tail[:, None] * e[None, :]
                     W[j + 1 :, start:end] += h_tail.unsqueeze(1) * e.unsqueeze(0)
 
         return qweight
@@ -225,7 +228,7 @@ class GPTQ:
     @torch.no_grad()
     def _build_quant_grid_gpu(
         self,
-        x_groups: torch.Tensor,    # (G_total, group_size) fp32
+        x_groups: torch.Tensor,    # (G_total, group_size), same dtype as weight
         bits: int,
         symmetric: bool,
         mode: str,
@@ -242,7 +245,6 @@ class GPTQ:
         device = x_groups.device
 
         # 1) Initial range-based meta
-        # FIX: C++ allocates and returns (qmeta, maxq). Do not pass an out buffer.
         qmeta_bytes, maxq = kernels.build_group_meta_packed(
             x_groups,
             bits,
@@ -255,16 +257,15 @@ class GPTQ:
                 1.0,
                 quant_max_shrink,
                 quant_n_grid,
-                dtype=x_groups.dtype,
+                dtype=torch.float32,  # must be float32 for cudaMemcpyToSymbol(c_p)
                 device=device,
             )
-            
-            # This call is correct (updated in-place, returns reference)
+
             qmeta_bytes = kernels.mse_scale_groups_packed(
                 x_groups,
                 p,
                 qmeta_bytes,
-                float(maxq.item()), # maxq is a tensor, convert to float
+                float(maxq.item()),
                 float(quant_norm),
             )
 
@@ -381,7 +382,6 @@ class GPTQ:
         assert qmeta_bytes.dtype == torch.uint8
 
         device = qmeta_bytes.device
-        G = qmeta_bytes.size(0)
 
         lo = qmeta_bytes[:, 0].to(torch.int16)
         hi = qmeta_bytes[:, 1].to(torch.int16)

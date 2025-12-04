@@ -2,7 +2,7 @@ import math
 import pytest
 import torch
 
-from gptq import GPTQ
+from forge.gptq import GPTQ
 
 def has_cuda():
     return torch.cuda.is_available()
@@ -215,7 +215,7 @@ def test_build_quant_grid_mse_does_not_increase_error(mode):
 
 # ---------- tests for solver ----------
 
-@pytest.mark.parametrize("C,R", [(4, 16), (6, 32)])
+@pytest.mark.parametrize("C,R", [(4, 32), (6, 64)])
 def test_solver_matches_reference_cpu(C, R):
     """
     Compare GPTQ.solver (using packed qmeta) against pure reference (unpacked scale)

@@ -7,6 +7,8 @@
 #include <cuda_fp8.h>   // for __nv_fp8_e4m3
 #include <cuda_bf16.h>  // for __nv_bfloat16 if you want bf16
 #include <cuda_fp16.h>  // for __half
+#include <stdio.h>
+
 
 
 #include <cstdint>
