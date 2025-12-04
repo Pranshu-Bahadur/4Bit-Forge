@@ -16,8 +16,6 @@
 #include <tuple>
 
 
-namespace {
-
 
 std::tuple<torch::Tensor, torch::Tensor> build_group_meta_packed_cuda(
     torch::Tensor x_groups,   // [G, group_size], any of {f32,f16,bf16,fp8_e4m3*}
@@ -33,7 +31,6 @@ torch::Tensor mse_scale_groups_packed_cuda(
         double norm
 );
 
-}
 
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {

@@ -21,8 +21,6 @@
     TORCH_CHECK(_err == cudaSuccess, "CUDA error: ", cudaGetErrorString(_err)); \
   } while (0)
 
-namespace quant_grid {
-
 // -----------------------------------------------------------------------------
 // Metadata packing: QMetaPacked (4 bytes per group)
 // -----------------------------------------------------------------------------
@@ -485,6 +483,4 @@ torch::Tensor mse_scale_groups_packed_cuda(
 
     return qmeta_bytes;
 }
-
-} // namespace quant_grid
 
