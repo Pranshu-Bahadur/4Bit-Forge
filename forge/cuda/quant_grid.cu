@@ -320,7 +320,6 @@ std::tuple<torch::Tensor, torch::Tensor> build_group_meta_packed_cuda(
     return std::make_tuple(qmeta_tensor, maxq);
 }
 
-
 torch::Tensor mse_scale_groups_packed_cuda(
     torch::Tensor x_groups,
     torch::Tensor p,
