@@ -152,44 +152,51 @@ __global__ void mse_scale_groups_kernel_typed(
     float maxq,
     float norm
 ) {
-    int g = blockIdx.x;
+    // One block = one group, one warp per block
+    const int g = blockIdx.x;
     if (g >= G) return;
 
-    int tid  = threadIdx.x;
+    const int lane      = threadIdx.x;  // 0..31
+    const int warp_size = 32;
     int64_t base = static_cast<int64_t>(g) * group_size;
 
+    // Decode base scale + zero point
     QMetaPacked m = qmeta[g];
     float base_s  = decode_scale_q88(m.log2_scale_fp);
     float q0      = float(m.qzero);
 
-    extern __shared__ float smem[];
-    float* cached_x       = smem;
-    float* shared_partial = smem + group_size;
+    // Shared memory: cached group weights only
+    extern __shared__ float cached_x[];
 
-    for (int64_t i = tid; i < group_size; i += blockDim.x) {
+    // Load group once from global → shared
+    for (int64_t i = lane; i < group_size; i += warp_size) {
         cached_x[i] = static_cast<float>(x[base + i]);
     }
-    __syncthreads();
+    __syncthreads();  // single barrier for the whole kernel
 
     float best_loss = 1e30f;
     float best_s    = base_s;
 
-    int lane     = tid & 31;
-    int wid      = tid >> 5;
-    int numWarps = (blockDim.x + 31) / 32;
-
+    // Grid search over shrink factors
     for (int64_t k = 0; k < P; ++k) {
         float shrink = c_p[k];
         float s = base_s * shrink;
         if (s <= 0.0f) continue;
 
         float local_loss = 0.0f;
-        for (int64_t i = tid; i < group_size; i += blockDim.x) {
+
+        // Each lane handles every warp_size-th element
+        for (int64_t i = lane; i < group_size; i += warp_size) {
             float v = cached_x[i];
+
+            // quantize
             float q = rintf(v / s + q0);
             q = fminf(fmaxf(q, 0.0f), maxq);
+
+            // dequant + error
             float y    = (q - q0) * s;
             float diff = fabsf(y - v);
+
             if (IS_L2_NORM) {
                 local_loss += diff * diff;
             } else {
@@ -197,29 +204,21 @@ __global__ void mse_scale_groups_kernel_typed(
             }
         }
 
-        local_loss = warpReduceSum(local_loss);
+        // Warp-level reduction, no block sync needed (blockDim.x == 32)
+        float loss = warpReduceSum(local_loss);
 
-        if (lane == 0 && wid < 32) {
-            shared_partial[wid] = local_loss;
+        if (lane == 0 && loss < best_loss) {
+            best_loss = loss;
+            best_s    = s;
         }
-        __syncthreads();
-
-        if (wid == 0) {
-            float val = (lane < numWarps) ? shared_partial[lane] : 0.0f;
-            val = warpReduceSum(val);
-            if (lane == 0 && val < best_loss) {
-                best_loss = val;
-                best_s    = s;
-            }
-        }
-        __syncthreads();
     }
 
-    if (tid == 0) {
+    if (lane == 0) {
         m.log2_scale_fp = encode_scale_q88(best_s);
         qmeta[g] = m;
     }
 }
+
 
 // Helpers for host launcher
 static inline int align_to_warp(int threads) {
@@ -321,6 +320,7 @@ std::tuple<torch::Tensor, torch::Tensor> build_group_meta_packed_cuda(
     return std::make_tuple(qmeta_tensor, maxq);
 }
 
+
 torch::Tensor mse_scale_groups_packed_cuda(
     torch::Tensor x_groups,
     torch::Tensor p,
@@ -328,60 +328,59 @@ torch::Tensor mse_scale_groups_packed_cuda(
     double maxq,
     double norm
 ) {
-    TORCH_CHECK(x_groups.is_cuda(), "x_groups must be CUDA");
-    TORCH_CHECK(p.is_cuda(),        "p must be CUDA");
-    TORCH_CHECK(qmeta_bytes.is_cuda(), "qmeta_bytes must be CUDA");
+    TORCH_CHECK(x_groups.is_cuda(),      "x_groups must be CUDA");
+    TORCH_CHECK(p.is_cuda(),             "p must be CUDA");
+    TORCH_CHECK(qmeta_bytes.is_cuda(),   "qmeta_bytes must be CUDA");
 
     auto G          = x_groups.size(0);
     auto group_size = x_groups.size(1);
     auto P          = p.size(0);
 
     TORCH_CHECK(group_size % 32 == 0, "group_size must be multiple of 32");
-    TORCH_CHECK(P > 0 && P <= 1024, "P must be in (0, 1024]");
+    TORCH_CHECK(P > 0 && P <= 1024,   "P must be in (0, 1024]");
 
     x_groups = ensure_contiguous_same_dtype(x_groups);
-    p        = p.contiguous();
+    p        = p.to(torch::kFloat32).contiguous();  // shrink factors always float32
 
     auto device = x_groups.device();
     auto stream = at::cuda::getCurrentCUDAStream();
 
+    // Load shrink factors into constant memory
     CUDA_CHECK(cudaMemcpyToSymbol(
-        c_p, p.data_ptr<float>(), static_cast<size_t>(P) * sizeof(float), 0, cudaMemcpyDeviceToDevice
+        c_p,
+        p.data_ptr<float>(),
+        static_cast<size_t>(P) * sizeof(float),
+        0,
+        cudaMemcpyDeviceToDevice
     ));
 
-    const cudaDeviceProp* prop = at::cuda::getCurrentDeviceProperties();
-    size_t smem_cap = prop->sharedMemPerBlockOptin ? (size_t)prop->sharedMemPerBlockOptin : (size_t)prop->sharedMemPerBlock;
+    // One warp per group
+    const int threads = 32;
+    const int blocks  = static_cast<int>(G);
 
-    int threads = choose_threads_that_fit(static_cast<int>(group_size), smem_cap);
-    if (threads > prop->maxThreadsPerBlock) threads = prop->maxThreadsPerBlock;
-    threads = align_to_warp(threads);
-
-    int blocks = static_cast<int>(G);
-    size_t smem_bytes = calc_smem_gptq(static_cast<int>(group_size), threads);
-
-    // Opt-in for large SMEM if needed (A100)
-    if (smem_bytes > 48 * 1024) {
-        cudaFuncSetAttribute(mse_scale_groups_kernel_typed<float, true>, cudaFuncAttributeMaxDynamicSharedMemorySize, smem_bytes);
-        cudaFuncSetAttribute(mse_scale_groups_kernel_typed<float, false>, cudaFuncAttributeMaxDynamicSharedMemorySize, smem_bytes);
-        // Add other template instantiations if using half/bf16 inputs for MSE
-    }
+    // Shared memory: just the cached group weights
+    const size_t smem_bytes = static_cast<size_t>(group_size) * sizeof(float);
 
     float maxq_f = static_cast<float>(maxq);
     float norm_f = static_cast<float>(norm);
 
     using QMetaLocal = QMetaPacked;
-    auto* qmeta_ptr = reinterpret_cast<QMetaLocal*>(qmeta_bytes.data_ptr<uint8_t>());
+    auto* qmeta_ptr  = reinterpret_cast<QMetaLocal*>(qmeta_bytes.data_ptr<uint8_t>());
     const auto dtype = x_groups.scalar_type();
 
     if (dtype == torch::kFloat8_e4m3fn || dtype == torch::kFloat8_e4m3fnuz) {
+        // Promote FP8 → FP32 for math
         auto x_f32 = x_groups.to(torch::kFloat32).contiguous();
         const float* x_ptr = x_f32.data_ptr<float>();
+
         if (std::fabs(norm_f - 2.0f) < 1e-5f) {
-            mse_scale_groups_kernel_typed<float, true><<<blocks, threads, smem_bytes, stream>>>(
-                x_ptr, qmeta_ptr, G, group_size, P, maxq_f, norm_f);
+            mse_scale_groups_kernel_typed<float, true>
+                <<<blocks, threads, smem_bytes, stream>>>(
+                    x_ptr, qmeta_ptr, G, group_size, P, maxq_f, norm_f);
         } else {
-            mse_scale_groups_kernel_typed<float, false><<<blocks, threads, smem_bytes, stream>>>(
-                x_ptr, qmeta_ptr, G, group_size, P, maxq_f, norm_f);
+            mse_scale_groups_kernel_typed<float, false>
+                <<<blocks, threads, smem_bytes, stream>>>(
+                    x_ptr, qmeta_ptr, G, group_size, P, maxq_f, norm_f);
         }
     } else {
         AT_DISPATCH_FLOATING_TYPES_AND2(
@@ -389,12 +388,15 @@ torch::Tensor mse_scale_groups_packed_cuda(
             [&]() {
                 using scalar_t_ = scalar_t;
                 const scalar_t_* x_ptr = x_groups.data_ptr<scalar_t_>();
+
                 if (std::fabs(norm_f - 2.0f) < 1e-5f) {
-                    mse_scale_groups_kernel_typed<scalar_t_, true><<<blocks, threads, smem_bytes, stream>>>(
-                        x_ptr, qmeta_ptr, G, group_size, P, maxq_f, norm_f);
+                    mse_scale_groups_kernel_typed<scalar_t_, true>
+                        <<<blocks, threads, smem_bytes, stream>>>(
+                            x_ptr, qmeta_ptr, G, group_size, P, maxq_f, norm_f);
                 } else {
-                    mse_scale_groups_kernel_typed<scalar_t_, false><<<blocks, threads, smem_bytes, stream>>>(
-                        x_ptr, qmeta_ptr, G, group_size, P, maxq_f, norm_f);
+                    mse_scale_groups_kernel_typed<scalar_t_, false>
+                        <<<blocks, threads, smem_bytes, stream>>>(
+                            x_ptr, qmeta_ptr, G, group_size, P, maxq_f, norm_f);
                 }
             }
         );
