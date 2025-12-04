@@ -1,8 +1,9 @@
 # 4BIT FORGE: GPTQ Implementation Specification & Kernel Reference
 
-**Version:** 2.1 (GPTQ, activation-iterator Hessian)
-**Target:** DeepSeek-scale models (300B–671B) → 4-bit GPTQ W4A16
-**Goal:** Minimal, kernel-centric toolkit for GPTQ quantization + runtime kernels.
+**Version:** 2.2 (GPTQ, Streaming Calibration, MoE-Aware)  
+**Target:** DeepSeek-scale models (300B–671B, MoE) → 4-bit GPTQ W4A16  
+**Goal:** Minimal, kernel-centric toolkit for GPTQ quantization + runtime kernels, with
+          streaming-friendly calibration and per-expert MoE support.
 
 ---
 
@@ -12,30 +13,31 @@
 
 4Bit Forge should:
 
-* Take a **HuggingFace / vLLM-style checkpoint folder** (sharded safetensors or `.bin`).
-* Run **GPTQ 4-bit weight quantization (W4A16)** per linear layer.
-* Emit a **sharded quantized checkpoint** with clearly defined layout for:
-
-  * Custom W4A16 matmul kernels (`group_gemm` / “marlin-style”).
-  * Future vLLM / custom runtime adapters.
+- Take a **HuggingFace / vLLM-style checkpoint folder** (sharded safetensors or `.bin`).
+- Run **GPTQ 4-bit weight quantization (W4A16)** per *linear*:
+  - Dense linears (attention/MLP).
+  - MoE experts’ linears (per expert).
+- Emit a **sharded quantized checkpoint** with a clear layout for:
+  - Custom W4A16 matmul kernels (`group_gemm` / “Marlin-style”).
+  - Future vLLM / custom runtime adapters.
 
 ### 0.2 Core Principles
 
-* **Minimal Python, maximal CUDA.**
-
-  * Python is just glue + orchestration.
-  * All heavy math goes into kernels or a small number of core Torch routines.
-* **Layer-local GPTQ.**
-
-  * Calibration is per layer; Hessian is built from that layer’s input activations only.
-  * Quantization consumes:
-
-    * The layer’s full-precision weight `W`.
-    * Groupwise Hessian blocks `H_blocks` (block-diagonal approximation).
-* **Activation-agnostic Hessian core.**
-
-  * Hessian builder only sees an **iterator of activations**.
-  * It doesn’t care *how* those activations were produced (full model, subgraph, offloaded tensors).
+- **Minimal Python, maximal CUDA.**
+  - Python = glue + orchestration + reference paths.
+  - Heavy math = CUDA kernels, small number of core Torch ops.
+- **Layer-local GPTQ.**
+  - Calibration is per layer / per expert.
+  - Hessian for a layer/expert only uses its own input activations.
+- **Streaming-first.**
+  - Calibration does **not** assume the full model fits in GPU VRAM.
+  - Both weights and activations are treated as streams:
+    - Weights: safetensors or `.bin` shards, loaded lazily.
+    - Activations: batch-by-batch, layer-by-layer, offloaded if needed.
+- **MoE-aware.**
+  - MoE layers are treated as:
+    - A gate + multiple experts.
+    - Each expert has its own Hessian and GPTQ quantization.
 
 ---
 
@@ -47,54 +49,51 @@ Keep the structure small and focused:
 4bit-forge/
   forge/
     __init__.py
-    io.py          # config + streaming weights + sharded save
+    io.py          # config + streaming weights + sharded save + simple activation I/O
     gptq.py        # Hessian core + GPTQ orchestration (minimal Python)
     kernels.py     # C++/CUDA bindings only (no logic)
   csrc/
-    forge_kernels.cu    # all CUDA kernels + pybind shim
+    forge_kernels.cu    # all CUDA kernels + small C++/pybind shim
   tests/
-    test_gptq_hessian.py    # Hessian parity vs dense
+    test_gptq_hessian.py    # Hessian parity vs dense (Torch reference)
     test_gptq_small.py      # small-layer GPTQ correctness
     test_layout_parity.py   # pack/unpack correctness
     test_group_gemm.py      # runtime GEMM correctness vs FP
-```
-
-You can merge tests later if you’re chasing LOC, but structurally this is enough.
+````
 
 ---
 
 ## 2. I/O & Config (`forge/io.py`)
 
-Goal: solve all checkpoint + config I/O in **~200–300 lines**.
-
 ### 2.1 Config Loader
 
 ```python
-from transformers import AutoConfig
+from transformers import AutoConfig, PretrainedConfig
 
-def load_model_config(model_dir: str, trust_remote_code: bool = True):
-    """
-    Thin wrapper around AutoConfig.from_pretrained(model_dir).
-    """
+def load_model_config(model_dir: str, trust_remote_code: bool = True) -> PretrainedConfig:
+    """Thin wrapper around AutoConfig.from_pretrained(model_dir)."""
 
-def extract_llm_dims(config) -> dict:
+def extract_llm_dims(config: PretrainedConfig) -> dict:
     """
-    Returns:
+    Returns a dict like:
         {
           "hidden_size": int,
           "num_attention_heads": int,
           "num_hidden_layers": int,
           "num_key_value_heads": Optional[int],
+          "intermediate_size": Optional[int],
+          "num_experts": Optional[int],            # for MoE
+          "num_experts_per_tok": Optional[int],    # for MoE gating
           ...
         }
     """
 ```
 
-Use this for sanity checks and for sizing matmul / buffers when needed.
+Used for sanity checks and sizing matmul/buffers.
 
 ### 2.2 Streaming Weight Loader (Input)
 
-Single high-level entrypoint:
+High-level entrypoint:
 
 ```python
 from typing import Iterator, Tuple
@@ -113,6 +112,8 @@ def unified_weights_iterator(
       - Sharded safetensors with model.safetensors.index.json
       - Sharded bin with pytorch_model.bin.index.json
       - Single-file safetensors or bin.
+
+    'allowed_prefixes' can filter parameters, e.g. ["model."].
     """
 ```
 
@@ -120,20 +121,23 @@ Implementation sketch:
 
 * If `model.safetensors.index.json` exists:
 
-  * Load JSON.
-  * Group `weight_map` by shard file.
+  * Load the JSON, group `weight_map` by shard filename.
   * For each shard:
 
-    * `safe_open(..., framework="pt", device="cpu")`
-    * Yield `(name, tensor)` for all params in that file.
-* Else if `.bin` index exists:
+    * `safe_open(path, framework="pt", device="cpu")` as `f`.
+    * Yield `(name, f.get_tensor(name))` for each tensor listed in that file.
+    * Close file → release RAM.
+* Else if `pytorch_model.bin.index.json` exists:
 
-  * Same idea with `torch.load` on each shard.
+  * Similar logic with `torch.load` shard-by-shard.
 * Else:
 
-  * Try `model.safetensors` or `pytorch_model.bin` directly.
+  * Try `model.safetensors` or `pytorch_model.bin`.
 
-`allowed_prefixes` lets you ignore optimizer states, extra heads, etc.
+This is used both for:
+
+* **Quantization-time weight streaming** (quantizing one layer at a time).
+* Potential **streaming calibration runners** that build partial models.
 
 ### 2.3 Sharded Saver (Output)
 
@@ -152,61 +156,73 @@ def save_sharded_safetensors(
       - ...
       - forge_model.safetensors.index.json
 
-    weight_map[name] = shard_filename
-    metadata stored in top-level "metadata" field.
+    The index file has:
+      {
+        "metadata": { ... },
+        "weight_map": { param_name: shard_filename, ... }
+      }
     """
 ```
 
 Logic:
 
-* Compute `.numel() * element_size()` per tensor.
-* Greedy pack tensors into shards under `max_shard_size_bytes`.
-* Use `safetensors.torch.save_file` per shard.
-* Build and write `forge_model.safetensors.index.json`.
+* Compute bytes per tensor: `tensor.numel() * tensor.element_size()`.
+* Greedy pack into shards ≤ `max_shard_size`.
+* For each shard:
 
-### 2.4 Activation Offload (Optional, Tiny)
+  * `safetensors.torch.save_file(sub_state_dict, shard_path, metadata=None)`.
+* Build `weight_map` and write `forge_model.safetensors.index.json`.
 
-For large calibration runs, you can offload layer inputs:
+### 2.4 Activation Offload Helpers (Optional)
+
+For large calibration runs:
 
 ```python
-def save_activation(layer_idx: int, batch_idx: int, x: torch.Tensor, offload_dir: str) -> None:
-    # torch.save({"hidden_states": x.cpu()}, f"{offload_dir}/layer{layer_idx}_batch{batch_idx}.pt")
+import torch
+from typing import Iterable, Generator, Dict
+
+def save_activation(
+    layer_key: str,          # e.g. "layer_12.w1" or "layer_12.expert_3.w2"
+    batch_idx: int,
+    x: torch.Tensor,
+    offload_dir: str,
+) -> None:
+    path = f"{offload_dir}/{layer_key}_batch{batch_idx:05d}.pt"
+    torch.save({"hidden_states": x.cpu()}, path)
 
 def activation_stream_from_files(
     paths: list[str],
     key: str = "hidden_states",
-):
+) -> Generator[torch.Tensor, None, None]:
     for p in paths:
         obj = torch.load(p, map_location="cpu")
         yield obj[key] if isinstance(obj, dict) else obj
 ```
 
-Small, reusable, and keeps main logic clean.
+These are small utilities; they keep main calibration logic clean.
 
 ---
 
-## 3. GPTQ Calibration & Hessian (`forge/gptq.py`)
+## 3. Calibration & Streaming
 
-### 3.1 Activation Sources (Pluggable)
+### 3.1 Activation Sources (Abstract)
 
-We treat activations (inputs to a given linear) as coming from **an iterator**:
+We treat “inputs to a given linear (or expert)” as coming from an **iterator** of tensors, not from a fixed in-memory dataset.
 
 ```python
-from typing import Iterable, Generator, Dict
-import torch
-import torch.nn as nn
+from typing import Iterable, Generator
 
 def activation_stream_from_model_layer(
-    model: nn.Module,
-    layer: nn.Linear,
-    dataloader: Iterable[Dict[str, torch.Tensor]],
-    device: torch.device,
+    model,
+    layer_path: str,
+    dataloader,
+    device,
 ) -> Generator[torch.Tensor, None, None]:
     """
-    Yields layer-input activations for calibration.
-    Shapes: [B, S, D] or [T, D].
+    Streams inputs to a given linear (dense or expert) by registering hooks
+    on the model and running forward passes batch-by-batch.
+    Yields tensors with last dim == in_features.
     """
-    # full model path (hook-based)
     ...
 
 def activation_stream_from_files(
@@ -214,83 +230,188 @@ def activation_stream_from_files(
     key: str = "hidden_states",
 ):
     """
-    Yields layer-input activations loaded from disk.
+    Streams pre-saved activations from disk (see 2.4).
     """
     ...
 ```
 
-These are **low-LOC helper functions**, not central logic.
+The Hessian builder only requires an **Iterable[Tensor]**; how those tensors are produced is up to the calibration backend.
 
-### 3.2 Core Hessian Builder (Pure Torch)
+---
 
-This is the core we already wrote; spec it formally:
+### 3.2 Streaming Calibration for Huge Models (1T-Scale)
+
+For DeepSeek-scale MoE models that **cannot fit in a single GPU’s VRAM**, 4Bit Forge assumes a **layer-wise streaming calibrator**:
+
+**Conceptual pipeline (per calibration pass):**
+
+1. **Dataloader streaming**
+   Iterate over calibration batches on CPU (or small GPU staging).
+
+2. **Layer-wise streaming forward:**
+
+   For each transformer layer index `L`:
+
+   * Use the checkpoint + model config to know which parameters belong to layer `L`:
+
+     * Dense: `model.layers.L.self_attn.*`, `model.layers.L.mlp.*`
+     * MoE:   `model.layers.L.experts.[0..E-1].*`, gate weights.
+
+   * For a given batch:
+
+     1. Load only the weights for layer `L` from safetensors shards (via `unified_weights_iterator` filtered by name).
+     2. Move those weights to the GPU.
+     3. Feed the layer’s input hidden states through this layer to obtain:
+
+        * new hidden states for the next layer.
+        * activations that are inputs to the target linears (dense or experts).
+     4. For each target linear / expert:
+
+        * Feed its input activations into `accumulate_groupwise_hessian_*` (see below).
+     5. Drop GPU-resident weights for layer `L`; keep only Hessian accumulators (small) on device.
+
+   * Move to `L+1`, reusing the updated hidden states as input.
+
+3. **MoE gating in streaming mode:**
+
+   * Gating decisions happen during the (`L`) forward pass.
+   * Each token is routed to one or more experts.
+   * In practice, you:
+
+     * Collect **routed activations per expert** inside the MoE layer (via hooks).
+     * For each expert `e`:
+
+       * Accumulate Hessian with its own activation stream.
+
+4. **Memory model:**
+
+   * At any point:
+
+     * Only one or a few layers’ weights are in GPU memory.
+     * Hidden states are kept as `[batch, seq, hidden_size]` for the current calibration step.
+   * No assumption that the full model fits in VRAM.
+
+The exact implementation details of this streaming calibrator are outside Forge core; the core just needs an `activation_iter` per (layer, expert).
+
+---
+
+### 3.3 Dense Layer Hessian (Core Function)
+
+Core “single-layer, dense” Hessian builder:
+
+```python
+import torch
+from typing import Iterable, Tuple
+
+@torch.no_grad()
+def accumulate_groupwise_hessian_from_activations_tensor(
+    inputs: torch.Tensor,
+    block_size: int,
+) -> torch.Tensor:
+    """
+    Convenience reference:
+
+    inputs: [N, in_features] on CUDA or CPU
+    block_size: int (e.g. 128) along input dim.
+
+    Returns:
+      H_blocks: [n_blocks, block_size, block_size] float32
+                with last block padded as needed.
+
+    Definition:
+      Let D = in_features, G = ceil(D / block_size).
+      For each group g:
+        start = g * block_size
+        end   = min(start + block_size, D)
+        Xg    = inputs[:, start:end]
+        Hg    = (Xg.T @ Xg) / N
+      H_blocks[g, :d, :d] = Hg, with d = end - start.
+    """
+```
+
+Streaming/iterator version:
 
 ```python
 @torch.no_grad()
-def accumulate_groupwise_hessian_from_activations(
+def accumulate_groupwise_hessian_from_activations_iter(
     activation_iter: Iterable[torch.Tensor],
     in_features: int,
-    group_size: int = 128,
+    block_size: int = 128,
     max_tokens: int = 4096,
     device: torch.device = torch.device("cuda"),
     act_dtype: torch.dtype = torch.float16,
     hess_dtype: torch.dtype = torch.float32,
-) -> tuple[torch.Tensor, int]:
+) -> Tuple[torch.Tensor, int]:
     """
-    Core GPTQ Hessian builder for one layer.
+    Streaming Hessian builder for one layer.
 
     Inputs:
-      activation_iter: iterable yielding layer inputs:
-                       - [T, D] or [B, S, D], last dim = in_features.
-      in_features    : D.
-      group_size     : GPTQ block size along input dim (multiple of 32).
-      max_tokens     : cap on total tokens used.
-      device         : where to accumulate H.
-      act_dtype      : dtype for activations during accumulation.
-      hess_dtype     : dtype for H blocks (usually fp32).
+      activation_iter: iterable yielding layer inputs; shapes can be:
+                        - [T, D]
+                        - [B, S, D]
+                       (last dim must equal in_features)
+      in_features    : D
+      block_size     : grouping along D (GPTQ block size)
+      max_tokens     : cap on total tokens used for H (for calibration budget)
+      device         : where to keep H_blocks
+      act_dtype      : cast inputs to this before accumulation
+      hess_dtype     : dtype of H_blocks
 
     Output:
-      H_blocks: [G, group_size, group_size], where
-                G = ceil(D / group_size), last block padded with zeros.
-      n_seen  : number of tokens actually used.
+      H_blocks: [G, block_size, block_size] on 'device'
+      n_seen  : number of tokens actually accumulated (<= max_tokens)
     """
 ```
 
-Mathematically:
+This is the canonical layer Hessian representation used by GPTQ in Forge.
 
-* Let `X ∈ R^{N × D}` be concatenation of all activations.
+---
 
-* For each group `g` of input channels:
+### 3.4 MoE Layer Hessian (Per Expert)
 
-  * Indices `[g * group_size : g * group_size + d_g]`
-  * Block Hessian:
-
-    [
-    H_g = \frac{1}{N} X_g^\top X_g \in \mathbb{R}^{d_g \times d_g}
-    ]
-
-* We store `H_blocks[g, :d_g, :d_g] = H_g`, rest zero.
-
-This is the **canonical GPTQ Hessian representation** for Forge.
-
-### 3.3 Optional GPU Hessian Kernel
-
-For very large `D` and large `max_tokens`, a CUDA version can replace the pure Torch loop.
-
-Interface (Python wrapper):
+For a MoE layer with `E` experts, each expert `e` has its own linear(s) and its own Hessian:
 
 ```python
-def gptq_build_hessian_cuda(
-    activation_tensor: torch.Tensor,    # [T, D] on CUDA
-    group_size: int,
-) -> torch.Tensor:                      # [G, group_size, group_size] on CUDA
+from typing import Dict
+
+@torch.no_grad()
+def accumulate_moe_hessians(
+    moe_activation_iter: Iterable[Dict[int, torch.Tensor]],
+    in_features: int,
+    block_size: int = 128,
+    max_tokens_per_expert: int = 4096,
+    device: torch.device = torch.device("cuda"),
+) -> Dict[int, Tuple[torch.Tensor, int]]:
     """
-    CUDA kernel path; mirrors accumulate_groupwise_hessian_from_activations
-    but for a single big activation tensor.
+    MoE Hessian accumulation.
+
+    moe_activation_iter yields per-batch dicts:
+
+      {
+        expert_id_0: X0,   # [N0, D]
+        expert_id_1: X1,   # [N1, D]
+        ...
+      }
+
+    For each expert 'e', we maintain its own:
+      H_blocks[e]: [G, block_size, block_size]
+      n_seen[e]   : number of tokens for expert e
+
+    Returns:
+      {
+        expert_id: (H_blocks_e, n_seen_e)
+      }
     """
 ```
 
-You can keep this optional and fall back to the pure Torch version.
+How `moe_activation_iter` is produced:
+
+* Inside a streaming forward of a MoE layer:
+
+  * Use the gate outputs / routing indices to bucket tokens by expert.
+  * For each batch, build a dict `expert_id -> expert_inputs` and yield it.
+
+The Hessian math is unchanged; only the **routing** differs.
 
 ---
 
@@ -298,53 +419,58 @@ You can keep this optional and fall back to the pure Torch version.
 
 ### 4.1 GPTQ Input/Output Contract
 
-Given:
+For **one linear** with weight `W ∈ R[out, in]`:
 
-* Weight `W`: `[out_features, in_features]` (FP16/FP32).
-* Groupwise Hessian `H_blocks`: `[G, group_size, group_size]`.
-* GPTQ settings:
+Inputs:
 
-  * `block_size` (input grouping).
-  * `symmetric` vs `asymmetric` (zero-points).
+* `weight`: `[out_features, in_features]` (FP16/FP32, CUDA).
+* `H_blocks`: `[G, block_size, block_size]` (FP32, CUDA).
+* GPTQ config:
 
-We want:
+  * `block_size` == `group_size` along input dim.
+  * `symmetric` (zero-point = 0) vs future asymmetric.
 
-* Unpacked quantized weights `qweight_u4`: `[out_features, in_features]` int8 (low 4 bits meaningful).
-* Scale and zero tensors, per group and output:
+Outputs:
 
-  * `scales`: `[(in_groups), out_features]` (or `[G, out]`), FP16.
-  * `qzeros`: `[(in_groups), out_features]` (or packed later).
+* `qweight_u4`: `[out_features, in_features]` int8 (low 4 bits used).
+* `scales`:     `[G, out_features]` FP16 (or FP32).
+* `qzeros`:     `[G, out_features]` int8 or int32 (unpacked zero-points).
 
-### 4.2 Python API (Orchestrator Level)
-
-Keep the Python side **very thin**:
+### 4.2 Python API: From Hessian
 
 ```python
+import torch
+from typing import Tuple
+
 def gptq_quantize_linear_from_H(
     weight: torch.Tensor,         # [out, in], fp16/fp32, CUDA
-    H_blocks: torch.Tensor,       # [G, block_size, block_size], CUDA fp32
+    H_blocks: torch.Tensor,       # [G, block_size, block_size], fp32, CUDA
     block_size: int = 128,
     symmetric: bool = True,
     use_cuda_kernels: bool = True,
-):
+) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """
+    Single-layer GPTQ quantization using precomputed H_blocks.
+
     Returns:
-      qweight_u4: [out, in] int8 (low 4 bits used)
-      scales:     [G, out] or [in_groups, out]
-      qzeros:     [G, out] or [in_groups, out] (unpacked or to-be-packed)
+      qweight_u4: [out, in], int8 (low 4 bits used)
+      scales:     [G, out]
+      qzeros:     [G, out] (unpacked; may be all zeros if symmetric)
     """
 ```
 
-Internally:
+Implementation:
 
 * If `use_cuda_kernels`:
 
-  * Call `gptq_quantize_rows_launch` (CUDA kernel).
+  * Calls `gptq_quantize_rows_launch` (CUDA).
 * Else:
 
-  * Fallback to CPU/reference GPTQ (slow, only for tests).
+  * CPU/Torch reference path for testing only.
 
-You can also add a helper that wraps Hessian building:
+### 4.3 Convenience: From Activations (Dense or MoE)
+
+Dense per-layer:
 
 ```python
 def gptq_quantize_linear_from_activations(
@@ -357,37 +483,39 @@ def gptq_quantize_linear_from_activations(
     device: torch.device = torch.device("cuda"),
 ):
     """
-    Convenience path:
-      1. H_blocks = accumulate_groupwise_hessian_from_activations(...)
-      2. gptq_quantize_linear_from_H(...)
+    1. H_blocks = accumulate_groupwise_hessian_from_activations_iter(...)
+    2. Run gptq_quantize_linear_from_H(...)
     """
 ```
 
-But the **core contract** is: GPTQ quantization operates on `(W, H_blocks)`.
+MoE per-expert will typically be orchestrated outside this helper:
+
+* For each expert `e`:
+
+  * Build `H_blocks_e`.
+  * Call `gptq_quantize_linear_from_H(W_e, H_blocks_e, ...)`.
 
 ---
 
 ## 5. CUDA Kernels (`csrc/forge_kernels.cu`)
 
-All kernels live in **one** CU file with pybind at the bottom.
+All kernels live in one compilation unit with a `PYBIND11_MODULE` shim.
 
 ### 5.1 Common Definitions
 
 * `#define WARP_SIZE 32`
-
 * 4-bit representation:
 
-  * Store as signed 4-bit two’s complement in low nibble of `int8` during intermediate steps.
-  * Packed into `uint32_t` with 8 nibbles per word.
-
+  * Intermediate: `int8` with low nibble ∈ `[-8..7]` in two’s complement.
+  * Packed: `uint32_t` with 8 nibbles → 32 bits.
 * Grouping:
 
-  * `group_size` (a.k.a. block size) ∈ {128, 256, 512}, multiple of 32.
-  * `G = ceil(D / group_size)` groups along input dim.
+  * `group_size` (GPTQ block size) ∈ {128, 256, 512}, multiple of 32.
+  * `G = ceil(D / group_size)`.
 
 ### 5.2 (Optional) Groupwise Hessian Kernel
 
-You may implement a GPU Hessian builder later; spec:
+Interface:
 
 ```cpp
 void gptq_build_hessian_launch(
@@ -397,19 +525,15 @@ void gptq_build_hessian_launch(
 );
 ```
 
-Kernel logic per group `g`:
-
-* Load `X_g` = inputs[:, start:end] into registers/SMEM tiles.
-* Accumulate `H_g += X_g^T X_g`.
+* Each block processes a (group, tile_of_T).
+* Accumulate `H_g += X_g^T X_g` in FP32.
 * Normalize by T at the end.
 
-This is effectively the CUDA version of `accumulate_groupwise_hessian_from_activations` when you have a big `[T, D]` tensor on device.
+This is a faster alternative to `accumulate_groupwise_hessian_from_activations_tensor` when you already have `[T, D]` on device.
 
-### 5.3 GPTQ Row Quantization Kernel (Core)
+### 5.3 GPTQ Row Quantization Kernel
 
-This is the main GPTQ engine on GPU.
-
-Launcher:
+Main GPTQ engine:
 
 ```cpp
 void gptq_quantize_rows_launch(
@@ -417,7 +541,7 @@ void gptq_quantize_rows_launch(
     torch::Tensor H_blocks,    // [G, group_size, group_size], float32, CUDA
     torch::Tensor qweight_u4,  // [out, in], int8, CUDA (low 4 bits used)
     torch::Tensor scales,      // [G, out], float16
-    torch::Tensor qzeros,      // [G, out], int8 or int32 (unpacked)
+    torch::Tensor qzeros,      // [G, out], int8 or int32, CUDA
     int block_size,
     bool symmetric
 );
@@ -425,78 +549,79 @@ void gptq_quantize_rows_launch(
 
 Per row `out_idx`:
 
-1. For each group `g`:
+* For each group `g` along input dim:
 
-   * Slice `w_block` = `w[out_idx, start:end]`.
-   * Slice Hessian block `H_g`.
-   * Apply GPTQ update:
+  * Slice `w_block = weight[out_idx, start:end]`.
+  * Get `H_g` = `H_blocks[g]`.
+  * GPTQ step for that block:
 
-     * Compute factorization `H_g = L L^T` or approximate.
-     * Classic GPTQ step: quantize and adjust residual using H-norm metric.
-   * Compute scale (and optionally zero) for that block.
-   * Write quantized 4-bit values (as `int8` low nibble) into `qweight_u4[out_idx, start:end]`.
-   * Write scale/zero into `scales[g, out_idx]`, `qzeros[g, out_idx]`.
+    * Factorize `H_g` (e.g. Cholesky).
+    * Use H-norm–aware quantization to choose 4-bit values.
+    * Compute scale (and zero-point if asymmetric).
+  * Write:
 
-For v1, you can start with a simpler per-block scheme:
+    * `qweight_u4[out_idx, start:end]` (low nibble).
+    * `scales[g, out_idx]`, `qzeros[g, out_idx]`.
 
-* Scale = max-abs / 7.
-* Zero-point = 0 (symmetric).
-* Use H_blocks only to weight errors or for later iterations.
+For v1, a simplified scheme is allowed:
 
-The full GPTQ search / triangular solve can be added once the structure is stable.
+* `scale_g = max_abs(w_block) / 7`.
+* `q = clamp(round(w_block / scale_g), -8, 7)`.
+* `zero = 0` if `symmetric`.
+* Still store `H_blocks` for future upgrades / debugging.
 
 ### 5.4 Int4 Packing Kernel
 
-Purpose: pack `qweight_u4` into a matmul-friendly layout.
-
-Launcher:
+Packs `qweight_u4` into a layout for matmul kernels.
 
 ```cpp
 void pack_int4_launch(
     torch::Tensor qweight_u4,     // [out, in], int8 (low 4 bits)
-    torch::Tensor qweight_packed, // [in, out_packs] or [out, in_packs], int32
+    torch::Tensor qweight_packed, // e.g. [in, out_packs], int32
     bool transpose_for_runtime
 );
 ```
 
-Layout choice (one canonical version):
+Canonical runtime layout (example):
 
-* **Runtime layout:** `[IC, OC_packs]`, where `OC_packs = ceil(OC / 8)`.
+* `qweight_packed`: `[IC, OC_packs]`, with `OC_packs = ceil(OC / 8)`.
 
-  * `ic` = input channel index.
-  * `oc_pack` = block of 8 consecutive output channels.
+Packing:
 
-* For channels `c..c+7` and fixed `ic`, you have 8 weights:
+* For each `ic` and each `oc_pack`:
 
-  ```text
-  q0 = w_q[c + 0, ic]
-  q1 = w_q[c + 1, ic]
-  ...
-  q7 = w_q[c + 7, ic]
-  ```
+  * Let `c = oc_pack * 8`.
 
-* Packed into an `uint32_t` with nibble order chosen for your matmul kernel.
-  Example (vLLM-style):
+  * Read:
 
-  ```text
-  Bits 0–3  <- q0
-  Bits 4–7  <- q2
-  Bits 8–11 <- q4
-  Bits 12–15<- q6
-  Bits 16–19<- q1
-  Bits 20–23<- q3
-  Bits 24–27<- q5
-  Bits 28–31<- q7
-  ```
+    ```text
+    q0 = qweight_u4[c + 0, ic]
+    q1 = qweight_u4[c + 1, ic]
+    ...
+    q7 = qweight_u4[c + 7, ic]
+    ```
 
-Kernel details:
+  * Pack into an `uint32_t` with a chosen nibble order (e.g. vLLM-like):
 
-* One warp handles a tile, using a **butterfly transpose** if you need to rotate data into packing order without SMEM bank conflicts.
-* You already have PackBoost-style templates (`encode_cuts` / butterfly transpose) to emulate.
+    ```text
+    Bits 0–3   <- q0
+    Bits 4–7   <- q2
+    Bits 8–11  <- q4
+    Bits 12–15 <- q6
+    Bits 16–19 <- q1
+    Bits 20–23 <- q3
+    Bits 24–27 <- q5
+    Bits 28–31 <- q7
+    ```
+
+* Kernel:
+
+  * Warp per tile.
+  * Use register-based or shared-memory-plus-butterfly transpose (PackBoost-style) to optimize coalesced reads/writes and avoid bank conflicts.
 
 ### 5.5 group_gemm / “Marlin-Style” W4A16 Matmul
 
-Runtime kernel, separate from quantization:
+Runtime matmul:
 
 ```cpp
 void group_gemm_w4a16_launch(
@@ -511,35 +636,25 @@ void group_gemm_w4a16_launch(
 
 Core idea:
 
-* For each tile `[B_tile, out_tile]`:
+* For each output tile:
 
-  * For each group `g` of input channels:
+  * Loop over input groups.
+  * For each group:
 
-    * Load a chunk of packed `qweight` and `qzeros`.
-
-    * Unpack 4-bit nibbles into registers.
-
+    * Load a chunk of `qweight` and `qzeros`.
+    * Unpack nibbles into registers.
     * Dequantize on the fly:
 
-      [
-      w_{\text{fp}} = (q - z) \cdot \text{scale}
-      ]
+      * `w_fp = (q - z) * scale`.
+    * Multiply with corresponding slice of `x` and accumulate into `y`.
 
-    * Multiply with corresponding `x` slice and accumulate into `y`.
-
-* Marlin / group_gemm techniques applied:
-
-  * Vectorized loads (`int4`/`int8`/`uint32_t`).
-  * Shared memory tiling.
-  * Per-warp MMA loops.
-
-This can be iterated on separately without touching GPTQ code.
+The exact tiling / warp-level strategy follows Marlin/group_gemm patterns and can evolve independently of GPTQ.
 
 ---
 
 ## 6. Python Bindings (`forge/kernels.py`)
 
-This file stays tiny:
+Just bindings, no logic:
 
 ```python
 import torch
@@ -552,82 +667,89 @@ _forge_kernels = load(
     extra_cflags=[...],
 )
 
-gptq_build_hessian   = getattr(_forge_kernels, "gptq_build_hessian", None)
-gptq_quantize_rows   = _forge_kernels.gptq_quantize_rows
-pack_int4            = _forge_kernels.pack_int4
-group_gemm_w4a16     = _forge_kernels.group_gemm_w4a16
+gptq_build_hessian = getattr(_forge_kernels, "gptq_build_hessian", None)
+gptq_quantize_rows = _forge_kernels.gptq_quantize_rows
+pack_int4          = _forge_kernels.pack_int4
+group_gemm_w4a16   = _forge_kernels.group_gemm_w4a16
 ```
-
-No logic, just exports.
 
 ---
 
 ## 7. Tests (`tests/`)
 
-Focus on *sharp* tests that exercise the math and layouts.
-
 ### 7.1 `test_gptq_hessian.py`
 
-* Construct random activations `X ∈ R^{T×D}`.
+* Generate random activations `X ∈ R^{T×D}`.
 
-* Call:
+* Compute:
 
   ```python
-  H_blocks, n_seen = accumulate_groupwise_hessian_from_activations(
+  H_blocks, n_seen = accumulate_groupwise_hessian_from_activations_iter(
       activation_iter=[X],
       in_features=D,
-      group_size=group_size,
+      block_size=block_size,
       max_tokens=T,
       device=device,
       act_dtype=torch.float32,
       hess_dtype=torch.float32,
   )
-  ```
-
-* Compare to dense reference:
-
-  ```python
   H_full = (X.T @ X) / T
   ```
 
-* For each block `g`, verify `H_blocks[g]` matches `H_full[slice, slice]` within tolerance.
+* For each block `g`, compare `H_blocks[g, :d, :d]` vs `H_full[slice, slice]`.
 
-If you later implement `gptq_build_hessian_launch`, add a CUDA path and test equality with the same reference.
+If CUDA Hessian kernel exists, also test parity:
+
+* `H_blocks_cuda = gptq_build_hessian_launch(X_cuda, ...)`.
 
 ### 7.2 `test_gptq_small.py`
 
-* Tiny linear:
+* Small linear:
 
   ```python
   W = torch.randn(16, 32, dtype=torch.float32, device=device)
   X = torch.randn(256, 32, dtype=torch.float32, device=device)
   ```
 
-* Build `H_blocks` via `accumulate_groupwise_hessian_from_activations`.
-
-* Run `gptq_quantize_linear_from_H` → `qweight_u4, scales, qzeros`.
-
-* Dequantize:
+* Build Hessian:
 
   ```python
-  W_q_approx = dequantize(qweight_u4, scales, qzeros, block_size)
+  H_blocks, _ = accumulate_groupwise_hessian_from_activations_iter(
+      activation_iter=[X],
+      in_features=32,
+      block_size=16,
+      max_tokens=256,
+      device=device,
+  )
   ```
 
-* Compare `X @ W.T` vs `X @ W_q_approx.T`.
+* GPTQ:
+
+  ```python
+  qweight_u4, scales, qzeros = gptq_quantize_linear_from_H(
+      W.to(device),
+      H_blocks,
+      block_size=16,
+      symmetric=True,
+      use_cuda_kernels=True,
+  )
+  ```
+
+* Dequantize and compare `X @ W.T` vs `X @ W_q.T`.
 
 ### 7.3 `test_layout_parity.py`
 
-* Random int4 tensor:
+* Random int4 values:
 
   ```python
-  q_u4 = torch.randint(-8, 8, (out, in_), dtype=torch.int8)
+  q_u4 = torch.randint(-8, 8, (out, in_), dtype=torch.int8, device=device)
   ```
 
 * Pack → `q_packed`.
 
 * Unpack via CPU reference.
 
-* Assert equality of all 4-bit values.
+* Assert all 4-bit values match.
 
 ### 7.4 `test_group_gemm.py`
 
@@ -639,62 +761,103 @@ If you later implement `gptq_build_hessian_launch`, add a CUDA path and test equ
   W = torch.randn(O, D, dtype=torch.float32, device=device)
   ```
 
-* Quantize `W` → `qweight_packed, scales, qzeros`.
+* Run Hessian + GPTQ to obtain `qweight_packed, scales, qzeros`.
 
 * Run `group_gemm_w4a16`.
 
-* Compare result to `X @ W.T` (FP32 baseline) within reasonable tolerance.
+* Compare to `X @ W.T` baseline.
+
+### 7.5 MoE Smoke Test (Optional)
+
+* Synthetic MoE:
+
+  * 2 experts, simple gate that routes half tokens to each.
+* Build `moe_activation_iter` that yields `expert_id -> X_e`.
+* Accumulate Hessians per expert.
+* GPTQ each expert’s weight separately.
+* Check matmul parity per expert.
 
 ---
 
-## 8. End-to-End Orchestrator (Quantize Whole Model)
+## 8. End-to-End Orchestrator (Dense + MoE)
 
-Simple driver sketch:
+High-level driver (quantization only; calibration assumed done or streamed):
 
 ```python
-from forge.io import unified_weights_iterator, save_sharded_safetensors, load_model_config
+from forge.io import unified_weights_iterator, save_sharded_safetensors
 from forge.gptq import (
-    accumulate_groupwise_hessian_from_activations,
+    accumulate_groupwise_hessian_from_activations_iter,
     gptq_quantize_linear_from_H,
 )
 
 def forge_gptq_quantize_model(
     model_dir: str,
-    calib_activations_resolver,   # function that yields activation_iter for given (layer_idx)
+    calib_activations_resolver,  # fn(layer_key) -> activation_iter (dense or MoE view)
     output_dir: str,
     block_size: int = 128,
     max_tokens: int = 4096,
 ):
-    cfg = load_model_config(model_dir)
+    """
+    calib_activations_resolver:
+      - For dense layers:
+          layer_key -> activation_iter (yielding [*, D])
+      - For MoE experts:
+          layer_key -> moe_activation_iter (yielding {expert_id: [*, D]})
+    """
     quant_state = {}
 
     for name, w_cpu in unified_weights_iterator(model_dir, allowed_prefixes=["model."]):
         if is_linear_weight_you_care_about(name, w_cpu):
-            layer_idx, proj_kind = parse_layer_and_proj(name)
+            layer_key, expert_id_opt, proj_kind = parse_layer_and_proj(name)
+            in_features = w_cpu.shape[1]
 
-            activation_iter = calib_activations_resolver(layer_idx)  # iterable
-            H_blocks, _ = accumulate_groupwise_hessian_from_activations(
-                activation_iter=activation_iter,
-                in_features=w_cpu.shape[1],
-                group_size=block_size,
-                max_tokens=max_tokens,
-                device=torch.device("cuda"),
-            )
+            if expert_id_opt is None:
+                # Dense linear
+                activation_iter = calib_activations_resolver(layer_key)
+                H_blocks, _ = accumulate_groupwise_hessian_from_activations_iter(
+                    activation_iter=activation_iter,
+                    in_features=in_features,
+                    block_size=block_size,
+                    max_tokens=max_tokens,
+                    device=torch.device("cuda"),
+                )
+                qweight_u4, scales, qzeros = gptq_quantize_linear_from_H(
+                    weight=w_cpu.cuda(),
+                    H_blocks=H_blocks,
+                    block_size=block_size,
+                    symmetric=True,
+                    use_cuda_kernels=True,
+                )
+                quant_state[f"{name}.qweight_u4"] = qweight_u4.cpu()
+                quant_state[f"{name}.scales"]     = scales.cpu()
+                quant_state[f"{name}.qzeros"]     = qzeros.cpu()
 
-            qweight_u4, scales, qzeros = gptq_quantize_linear_from_H(
-                weight=w_cpu.cuda(),
-                H_blocks=H_blocks,
-                block_size=block_size,
-                symmetric=True,
-                use_cuda_kernels=True,
-            )
+            else:
+                # MoE expert linear
+                moe_activation_iter = calib_activations_resolver(layer_key)
+                # accumulate_moe_hessians returns a dict expert_id -> (H_blocks_e, n_seen_e)
+                H_moe = accumulate_moe_hessians(
+                    moe_activation_iter,
+                    in_features=in_features,
+                    block_size=block_size,
+                    max_tokens_per_expert=max_tokens,
+                    device=torch.device("cuda"),
+                )
+                H_blocks_e, _ = H_moe[expert_id_opt]
+                qweight_u4, scales, qzeros = gptq_quantize_linear_from_H(
+                    weight=w_cpu.cuda(),
+                    H_blocks=H_blocks_e,
+                    block_size=block_size,
+                    symmetric=True,
+                    use_cuda_kernels=True,
+                )
+                quant_state[f"{name}.qweight_u4"] = qweight_u4.cpu()
+                quant_state[f"{name}.scales"]     = scales.cpu()
+                quant_state[f"{name}.qzeros"]     = qzeros.cpu()
 
-            # Layout your final names however you want:
-            quant_state[f"{name}.qweight_u4"] = qweight_u4.cpu()
-            quant_state[f"{name}.scales"]    = scales.cpu()
-            quant_state[f"{name}.qzeros"]    = qzeros.cpu()
         else:
-            quant_state[name] = w_cpu  # copy unchanged
+            # Copy untouched (e.g., embedding, layer norms, gate weights)
+            quant_state[name] = w_cpu
 
     save_sharded_safetensors(
         quant_state,
@@ -706,9 +869,3 @@ def forge_gptq_quantize_model(
         },
     )
 ```
-
-The calibrations source (`calib_activations_resolver`) can be:
-
-* Hook-based full-model forward.
-* Offloaded safetensors on disk.
-* Synthetic X for quick experiments.
