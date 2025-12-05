@@ -27,18 +27,13 @@ struct QMetaPacked {
     uint8_t  flags;
 };
 
-// Constant memory for search grids (Coarse factors + Fine multipliers)
 __constant__ float c_p[1024];
 
 // ---- Fast Math & Intrinsics ----------------------------------------
 
 __device__ __forceinline__ float fast_log2(float x) { return log2f(x); }
 __device__ __forceinline__ float fast_exp2(float x) { return exp2f(x); }
-
-// PackBoost-style: use intrinsic for rounding to avoid rintf overhead
-__device__ __forceinline__ float fast_round(float x) { 
-    return __float2int_rn(x); 
-}
+__device__ __forceinline__ float fast_round(float x) { return __float2int_rn(x); }
 
 __device__ __forceinline__ int16_t encode_scale_q88(float s) {
     float log2s = fast_log2(fmaxf(s, 1e-20f));
@@ -91,7 +86,7 @@ static inline int align_to_warp(int threads) {
 }
 
 // ====================================================================
-// 1) ABSMAX / RANGE META (Standard)
+// 1) META BUILDER
 // ====================================================================
 
 template <typename scalar_t>
@@ -112,7 +107,7 @@ __global__ void build_group_meta_optimized(
     float local_min = 1e30f;
     float local_max = -1e30f;
 
-    // 16-byte vectorized loads
+    // Vectorized Load Strategy (128-bit)
     constexpr int bytes_per_load = 16;
     constexpr int elems_per_load = bytes_per_load / sizeof(scalar_t);
     const int4* x_vec = reinterpret_cast<const int4*>(x + base);
@@ -139,57 +134,40 @@ __global__ void build_group_meta_optimized(
     local_min = butterflyReduceMin(local_min);
     local_max = butterflyReduceMax(local_max);
 
-    extern __shared__ float sdata[];
-    int warps_per_block = blockDim.x / 32;
-    float* smin = sdata;
-    float* smax = sdata + warps_per_block;
+    if (tid == 0) {
+        // Shared memory reduction only needed if blockDim > 32. 
+        // Current host code forces 32 threads for small groups, but this 
+        // check handles larger blocks generically.
+        // For standard usage (Single Warp), tid 0 holds the correct warp reduction.
+        
+        float xmin = local_min;
+        float xmax = local_max;
+        float maxq = float((1 << bit_width) - 1);
+        float eps  = 1e-12f;
+        float s, q0;
 
-    int lane   = tid & 31;
-    int warpId = tid >> 5;
-
-    if (lane == 0) {
-        smin[warpId] = local_min;
-        smax[warpId] = local_max;
-    }
-    __syncthreads();
-
-    if (warpId == 0) {
-        float red_min = (tid < warps_per_block) ? smin[tid] : 1e30f;
-        float red_max = (tid < warps_per_block) ? smax[tid] : -1e30f;
-
-        red_min = butterflyReduceMin(red_min);
-        red_max = butterflyReduceMax(red_max);
-
-        if (tid == 0) {
-            float xmin = red_min;
-            float xmax = red_max;
-            float maxq = float((1 << bit_width) - 1);
-            float eps  = 1e-12f;
-            float s, q0;
-
-            if (symmetric) {
-                float amax = fmaxf(fabsf(xmin), fabsf(xmax));
-                s  = (2.0f / maxq) * amax + eps;
-                q0 = 0.5f * (maxq + 1.0f);
-            } else {
-                s  = (xmax - xmin) / maxq + eps;
-                float q = -xmin / s;
-                q = fminf(fmaxf(q, 0.0f), maxq);
-                q0 = rintf(q);
-            }
-
-            QMetaPacked m;
-            m.log2_scale_fp = encode_scale_q88(s);
-            float q0_clamped = fminf(fmaxf(q0, 0.0f), maxq);
-            m.qzero          = static_cast<uint8_t>(lrintf(q0_clamped));
-            m.flags          = symmetric ? 1 : 0;
-            qmeta[g] = m;
+        if (symmetric) {
+            float amax = fmaxf(fabsf(xmin), fabsf(xmax));
+            s  = (2.0f / maxq) * amax + eps;
+            q0 = 0.5f * (maxq + 1.0f);
+        } else {
+            s  = (xmax - xmin) / maxq + eps;
+            float q = -xmin / s;
+            q = fminf(fmaxf(q, 0.0f), maxq);
+            q0 = rintf(q);
         }
+
+        QMetaPacked m;
+        m.log2_scale_fp = encode_scale_q88(s);
+        float q0_clamped = fminf(fmaxf(q0, 0.0f), maxq);
+        m.qzero          = static_cast<uint8_t>(lrintf(q0_clamped));
+        m.flags          = symmetric ? 1 : 0;
+        qmeta[g] = m;
     }
 }
 
 // ====================================================================
-// 2) 2-STAGE MSE SEARCH (Coarse -> Broadcast -> Fine)
+// 2) 2-STAGE MSE SEARCH (Auto-Split)
 // ====================================================================
 
 template <typename scalar_t, bool IS_L2_NORM>
@@ -199,14 +177,14 @@ __global__ void mse_2stage_tiled_kernel(
     int64_t G,
     int64_t group_size,
     int64_t P_total,
-    int64_t P_coarse, // Number of coarse candidates
+    int64_t P_coarse, 
     float maxq,
     float norm
 ) {
     const int g = blockIdx.x;
     if (g >= G) return;
 
-    const int lane = threadIdx.x; // 0..31
+    const int lane = threadIdx.x;
     int64_t base = static_cast<int64_t>(g) * group_size;
 
     QMetaPacked m = qmeta[g];
@@ -215,25 +193,20 @@ __global__ void mse_2stage_tiled_kernel(
 
     extern __shared__ float cached_x[];
 
-    // Load group (Coalesced)
-    // One warp handling 128 elements = loop 4 times
+    // Coalesced Load
     for (int64_t i = lane; i < group_size; i += 32) {
         cached_x[i] = static_cast<float>(x[base + i]);
     }
-    // Strict barrier to ensure all data is loaded before any math starts
-    // Important even for single-warp block to prevent read-after-write hazards 
-    // if compiler reorders load latency.
-    __syncthreads(); 
+    __syncthreads(); // Ensure load is visible
 
     float best_loss = FLT_MAX;
     float best_s    = base_s;
 
-    // --- STAGE 1: COARSE SEARCH ---
-    // Candidates [0 ... P_coarse - 1] apply relative to 'base_s'
+    // --- STAGE 1: COARSE (0 to P_coarse) ---
     int64_t k = 0;
     int64_t P_coarse_vec = P_coarse & ~3;
 
-    // Unroll 4
+    // Register Tiling: 4 candidates per loop
     for (; k < P_coarse_vec; k += 4) {
         float p0 = c_p[k];   float p1 = c_p[k+1];
         float p2 = c_p[k+2]; float p3 = c_p[k+3];
@@ -269,7 +242,7 @@ __global__ void mse_2stage_tiled_kernel(
             if (loss3 < best_loss) { best_loss = loss3; best_s = s3; }
         }
     }
-    // Tail of Stage 1
+    // Tail Stage 1
     for (; k < P_coarse; ++k) {
         float s = base_s * c_p[k];
         float rcp = 1.0f / s;
@@ -285,13 +258,13 @@ __global__ void mse_2stage_tiled_kernel(
         if (lane == 0 && loss < best_loss) { best_loss = loss; best_s = s; }
     }
 
-    // --- INTER-STAGE SYNC ---
-    // Broadcast the Coarse Winner from Lane 0 to all lanes.
+    // --- INTER-STAGE BROADCAST ---
+    // The winner of Stage 1 becomes the center of Stage 2.
+    // Lane 0 holds the winner; broadcast it to all lanes.
     float coarse_s = __shfl_sync(0xffffffff, best_s, 0);
 
-    // --- STAGE 2: FINE SEARCH ---
-    // Candidates [P_coarse ... P_total - 1] apply relative to 'coarse_s'
-    
+    // --- STAGE 2: FINE SEARCH (P_coarse to P_total) ---
+    // Candidates apply relative to 'coarse_s'
     int64_t P_fine_count = P_total - P_coarse;
     int64_t j = 0;
     
@@ -301,7 +274,6 @@ __global__ void mse_2stage_tiled_kernel(
         float p0 = c_p[idx];   float p1 = c_p[idx+1];
         float p2 = c_p[idx+2]; float p3 = c_p[idx+3];
 
-        // Apply fine factors to the COARSE WINNER
         float s0 = coarse_s * p0; float rcp0 = 1.0f / s0;
         float s1 = coarse_s * p1; float rcp1 = 1.0f / s1;
         float s2 = coarse_s * p2; float rcp2 = 1.0f / s2;
@@ -333,7 +305,7 @@ __global__ void mse_2stage_tiled_kernel(
             if (loss3 < best_loss) { best_loss = loss3; best_s = s3; }
         }
     }
-    // Tail of Stage 2
+    // Tail Stage 2
     for (; j < P_fine_count; ++j) {
         float s = coarse_s * c_p[P_coarse + j];
         float rcp = 1.0f / s;
@@ -385,35 +357,33 @@ std::tuple<torch::Tensor, torch::Tensor> build_group_meta_packed_cuda(
     using QMetaLocal = QMetaPacked;
     auto* qmeta_ptr = reinterpret_cast<QMetaLocal*>(qmeta_tensor.data_ptr<uint8_t>());
 
-    // launch config
     int threads = std::min<int64_t>(256, group_size);
     threads = align_to_warp(threads);
     if (threads < 32) threads = 32;
     const int blocks = static_cast<int>(G);
 
+    // Calculate Dynamic SMEM for Meta Builder
     const int warps_per_block = threads / 32;
+    // We need 2 floats (min/max) per warp in shared mem if warps > 1
+    // If threads=32, warps=1, smem=0 effectively used by reduction, 
+    // but allocation is cheap.
     const size_t smem_bytes = 2 * static_cast<size_t>(warps_per_block) * sizeof(float);
 
     auto stream = at::cuda::getCurrentCUDAStream();
 
-    if (dtype == torch::kFloat8_e4m3fn || dtype == torch::kFloat8_e4m3fnuz) {
-        auto x_f32 = x_groups.to(torch::kFloat32).contiguous();
-        const float* x_ptr = x_f32.data_ptr<float>();
-        build_group_meta_optimized<float><<<blocks, threads, smem_bytes, stream>>>(
-            x_ptr, qmeta_ptr, G, group_size, static_cast<int>(bit_width), symmetric
-        );
-    } else {
-        AT_DISPATCH_FLOATING_TYPES_AND2(
-            torch::kHalf, torch::kBFloat16, dtype, "build_group_meta_packed_cuda",
-            [&]() {
-                using scalar_t_ = scalar_t;
-                const scalar_t_* x_ptr = x_groups.data_ptr<scalar_t_>();
-                build_group_meta_optimized<scalar_t_><<<blocks, threads, smem_bytes, stream>>>(
+    AT_DISPATCH_FLOATING_TYPES_AND2(
+        torch::kHalf, torch::kBFloat16, dtype, "build_group_meta_packed_cuda",
+        [&]() {
+            using scalar_t_ = scalar_t;
+            const scalar_t_* x_ptr = x_groups.data_ptr<scalar_t_>();
+            build_group_meta_optimized<scalar_t_>
+                <<<blocks, threads, smem_bytes, stream>>>(
                     x_ptr, qmeta_ptr, G, group_size, static_cast<int>(bit_width), symmetric
                 );
-            }
-        );
-    }
+        }
+    );
+
+    CUDA_CHECK(cudaGetLastError());
 
     float maxq_val = float((1 << bit_width) - 1);
     auto maxq = torch::full({}, maxq_val, x_groups.options().dtype(torch::kFloat32));
@@ -426,8 +396,7 @@ torch::Tensor mse_scale_groups_packed_cuda(
     torch::Tensor p,
     torch::Tensor qmeta_bytes,
     double maxq,
-    double norm,
-    int64_t p_coarse_count = 16 // Default to 16 if not provided
+    double norm
 ) {
     TORCH_CHECK(x_groups.is_cuda(),    "x_groups must be CUDA");
     TORCH_CHECK(p.is_cuda(),           "p must be CUDA");
@@ -439,11 +408,19 @@ torch::Tensor mse_scale_groups_packed_cuda(
 
     TORCH_CHECK(group_size % 32 == 0, "group_size must be multiple of 32");
     TORCH_CHECK(P > 0 && P <= 1024,   "P must be in (0, 1024]");
-    TORCH_CHECK(p_coarse_count > 0 && p_coarse_count < P, "p_coarse must be between 0 and P");
+
+    // --- INFER OPTIMAL COARSE COUNT ---
+    // This maximizes search resolution for a fixed P budget.
+    int64_t p_coarse = P / 2;
+    
+    // Safety clamp
+    if (p_coarse >= P) p_coarse = P; 
 
     x_groups = ensure_contiguous_same_dtype(x_groups);
     p        = p.contiguous();
 
+    auto device = x_groups.device();
+    auto dtype  = x_groups.scalar_type();
     auto stream = at::cuda::getCurrentCUDAStream();
 
     CUDA_CHECK(cudaMemcpyToSymbol(
@@ -464,23 +441,25 @@ torch::Tensor mse_scale_groups_packed_cuda(
     float maxq_f = static_cast<float>(maxq);
     float norm_f = static_cast<float>(norm);
 
-    auto dtype = x_groups.scalar_type();
-
     AT_DISPATCH_FLOATING_TYPES_AND2(
-        torch::kHalf, torch::kBFloat16, dtype, "mse_2stage_tiled",
+        torch::kHalf, torch::kBFloat16, dtype, "mse_scale_groups_packed_cuda",
         [&]() {
             using scalar_t_ = scalar_t;
             const scalar_t_* x_ptr = x_groups.data_ptr<scalar_t_>();
+            
+            // Check L2 optimization (norm == 2.0)
             bool is_l2 = (std::fabs(norm_f - 2.0f) < 1e-5f);
 
             if (is_l2) {
-                mse_2stage_tiled_kernel<scalar_t_, true><<<blocks, threads, smem_bytes, stream>>>(
-                    x_ptr, qmeta_ptr, G, group_size, P, p_coarse_count, maxq_f, norm_f
-                );
+                mse_2stage_tiled_kernel<scalar_t_, true>
+                    <<<blocks, threads, smem_bytes, stream>>>(
+                        x_ptr, qmeta_ptr, G, group_size, P, p_coarse, maxq_f, norm_f
+                    );
             } else {
-                mse_2stage_tiled_kernel<scalar_t_, false><<<blocks, threads, smem_bytes, stream>>>(
-                    x_ptr, qmeta_ptr, G, group_size, P, p_coarse_count, maxq_f, norm_f
-                );
+                mse_2stage_tiled_kernel<scalar_t_, false>
+                    <<<blocks, threads, smem_bytes, stream>>>(
+                        x_ptr, qmeta_ptr, G, group_size, P, p_coarse, maxq_f, norm_f
+                    );
             }
         }
     );
