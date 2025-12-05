@@ -29,11 +29,15 @@ struct QMetaPacked {
 
 __constant__ float c_p[1024];
 
-// ---- Fast Math & Intrinsics ----------------------------------------
+// ---- PackBoost Style Intrinsics ------------------------------------
 
 __device__ __forceinline__ float fast_log2(float x) { return log2f(x); }
 __device__ __forceinline__ float fast_exp2(float x) { return exp2f(x); }
-__device__ __forceinline__ float fast_round(float x) { return __float2int_rn(x); }
+
+// PackBoost uses direct intrinsics for rounding to ensure single instruction (CVT)
+__device__ __forceinline__ float fast_round(float x) {
+    return __float2int_rn(x); 
+}
 
 __device__ __forceinline__ int16_t encode_scale_q88(float s) {
     float log2s = fast_log2(fmaxf(s, 1e-20f));
@@ -47,8 +51,10 @@ __device__ __forceinline__ float decode_scale_q88(int16_t q) {
     return fast_exp2(fp);
 }
 
-// ---- Butterfly Reductions ------------------------------------------
+// ---- Butterfly Network Primitives ----------------------------------
 
+// This IS the 5-stage butterfly reduction you mentioned.
+// It collapses values from 32 lanes down to Lane 0 in log2(32) steps.
 template <typename T>
 __device__ __forceinline__ T butterflyReduceSum(T val) {
     #pragma unroll
@@ -86,7 +92,7 @@ static inline int align_to_warp(int threads) {
 }
 
 // ====================================================================
-// 1) META BUILDER
+// 1) ABSMAX / RANGE META
 // ====================================================================
 
 template <typename scalar_t>
@@ -107,9 +113,9 @@ __global__ void build_group_meta_optimized(
     float local_min = 1e30f;
     float local_max = -1e30f;
 
-    // Vectorized Load Strategy (128-bit)
     constexpr int bytes_per_load = 16;
     constexpr int elems_per_load = bytes_per_load / sizeof(scalar_t);
+
     const int4* x_vec = reinterpret_cast<const int4*>(x + base);
     int total_vecs = static_cast<int>(group_size / elems_per_load);
 
@@ -134,57 +140,73 @@ __global__ void build_group_meta_optimized(
     local_min = butterflyReduceMin(local_min);
     local_max = butterflyReduceMax(local_max);
 
-    if (tid == 0) {
-        // Shared memory reduction only needed if blockDim > 32. 
-        // Current host code forces 32 threads for small groups, but this 
-        // check handles larger blocks generically.
-        // For standard usage (Single Warp), tid 0 holds the correct warp reduction.
-        
-        float xmin = local_min;
-        float xmax = local_max;
-        float maxq = float((1 << bit_width) - 1);
-        float eps  = 1e-12f;
-        float s, q0;
+    extern __shared__ float sdata[];
+    int warps_per_block = blockDim.x / 32;
+    float* smin = sdata;
+    float* smax = sdata + warps_per_block;
 
-        if (symmetric) {
-            float amax = fmaxf(fabsf(xmin), fabsf(xmax));
-            s  = (2.0f / maxq) * amax + eps;
-            q0 = 0.5f * (maxq + 1.0f);
-        } else {
-            s  = (xmax - xmin) / maxq + eps;
-            float q = -xmin / s;
-            q = fminf(fmaxf(q, 0.0f), maxq);
-            q0 = rintf(q);
+    int lane   = tid & 31;
+    int warpId = tid >> 5;
+
+    if (lane == 0) {
+        smin[warpId] = local_min;
+        smax[warpId] = local_max;
+    }
+    __syncthreads();
+
+    if (warpId == 0) {
+        float red_min = (tid < warps_per_block) ? smin[tid] : 1e30f;
+        float red_max = (tid < warps_per_block) ? smax[tid] : -1e30f;
+
+        red_min = butterflyReduceMin(red_min);
+        red_max = butterflyReduceMax(red_max);
+
+        if (tid == 0) {
+            float xmin = red_min;
+            float xmax = red_max;
+            float maxq = float((1 << bit_width) - 1);
+            float eps  = 1e-12f;
+            float s, q0;
+
+            if (symmetric) {
+                float amax = fmaxf(fabsf(xmin), fabsf(xmax));
+                s  = (2.0f / maxq) * amax + eps;
+                q0 = 0.5f * (maxq + 1.0f);
+            } else {
+                s  = (xmax - xmin) / maxq + eps;
+                float q = -xmin / s;
+                q = fminf(fmaxf(q, 0.0f), maxq);
+                q0 = rintf(q);
+            }
+
+            QMetaPacked m;
+            m.log2_scale_fp = encode_scale_q88(s);
+            float q0_clamped = fminf(fmaxf(q0, 0.0f), maxq);
+            m.qzero          = static_cast<uint8_t>(lrintf(q0_clamped));
+            m.flags          = symmetric ? 1u : 0u;
+            qmeta[g] = m;
         }
-
-        QMetaPacked m;
-        m.log2_scale_fp = encode_scale_q88(s);
-        float q0_clamped = fminf(fmaxf(q0, 0.0f), maxq);
-        m.qzero          = static_cast<uint8_t>(lrintf(q0_clamped));
-        m.flags          = symmetric ? 1 : 0;
-        qmeta[g] = m;
     }
 }
 
 // ====================================================================
-// 2) 2-STAGE MSE SEARCH (Auto-Split)
+// 2) MSE SCALE REFINEMENT
 // ====================================================================
 
 template <typename scalar_t, bool IS_L2_NORM>
-__global__ void mse_2stage_tiled_kernel(
+__global__ void mse_scale_groups_optimized(
     const scalar_t* __restrict__ x,
     QMetaPacked* __restrict__ qmeta,
     int64_t G,
     int64_t group_size,
-    int64_t P_total,
-    int64_t P_coarse, 
+    int64_t P,
     float maxq,
     float norm
 ) {
     const int g = blockIdx.x;
     if (g >= G) return;
 
-    const int lane = threadIdx.x;
+    const int lane = threadIdx.x;  // 0..31
     int64_t base = static_cast<int64_t>(g) * group_size;
 
     QMetaPacked m = qmeta[g];
@@ -193,47 +215,69 @@ __global__ void mse_2stage_tiled_kernel(
 
     extern __shared__ float cached_x[];
 
-    // Coalesced Load
     for (int64_t i = lane; i < group_size; i += 32) {
         cached_x[i] = static_cast<float>(x[base + i]);
     }
-    __syncthreads(); // Ensure load is visible
+    __syncthreads();
 
     float best_loss = FLT_MAX;
     float best_s    = base_s;
 
-    // --- STAGE 1: COARSE (0 to P_coarse) ---
     int64_t k = 0;
-    int64_t P_coarse_vec = P_coarse & ~3;
+    int64_t P_vec = P & ~3;
 
-    // Register Tiling: 4 candidates per loop
-    for (; k < P_coarse_vec; k += 4) {
-        float p0 = c_p[k];   float p1 = c_p[k+1];
-        float p2 = c_p[k+2]; float p3 = c_p[k+3];
+    for (; k < P_vec; k += 4) {
+        float p0 = c_p[k];
+        float p1 = c_p[k+1];
+        float p2 = c_p[k+2];
+        float p3 = c_p[k+3];
 
         float s0 = base_s * p0; float rcp0 = 1.0f / s0;
         float s1 = base_s * p1; float rcp1 = 1.0f / s1;
         float s2 = base_s * p2; float rcp2 = 1.0f / s2;
         float s3 = base_s * p3; float rcp3 = 1.0f / s3;
 
-        float loss0 = 0.0f; float loss1 = 0.0f;
-        float loss2 = 0.0f; float loss3 = 0.0f;
+        float loss0 = 0.0f;
+        float loss1 = 0.0f;
+        float loss2 = 0.0f;
+        float loss3 = 0.0f;
 
         #pragma unroll 4
         for (int64_t i = lane; i < group_size; i += 32) {
             float v = cached_x[i];
-            { float q = fminf(fmaxf(fast_round(v*rcp0 + q0), 0.0f), maxq);
-              float d = fabsf((q-q0)*s0 - v); loss0 += (IS_L2_NORM ? d*d : powf(d, norm)); }
-            { float q = fminf(fmaxf(fast_round(v*rcp1 + q0), 0.0f), maxq);
-              float d = fabsf((q-q0)*s1 - v); loss1 += (IS_L2_NORM ? d*d : powf(d, norm)); }
-            { float q = fminf(fmaxf(fast_round(v*rcp2 + q0), 0.0f), maxq);
-              float d = fabsf((q-q0)*s2 - v); loss2 += (IS_L2_NORM ? d*d : powf(d, norm)); }
-            { float q = fminf(fmaxf(fast_round(v*rcp3 + q0), 0.0f), maxq);
-              float d = fabsf((q-q0)*s3 - v); loss3 += (IS_L2_NORM ? d*d : powf(d, norm)); }
+
+            // Manually Unrolled Grid Search using fast intrinsic rounding
+            {
+                float q = fast_round(v * rcp0 + q0);
+                q = fminf(fmaxf(q, 0.0f), maxq);
+                float d = fabsf((q - q0) * s0 - v);
+                if constexpr (IS_L2_NORM) loss0 += d * d; else loss0 += powf(d, norm);
+            }
+            {
+                float q = fast_round(v * rcp1 + q0);
+                q = fminf(fmaxf(q, 0.0f), maxq);
+                float d = fabsf((q - q0) * s1 - v);
+                if constexpr (IS_L2_NORM) loss1 += d * d; else loss1 += powf(d, norm);
+            }
+            {
+                float q = fast_round(v * rcp2 + q0);
+                q = fminf(fmaxf(q, 0.0f), maxq);
+                float d = fabsf((q - q0) * s2 - v);
+                if constexpr (IS_L2_NORM) loss2 += d * d; else loss2 += powf(d, norm);
+            }
+            {
+                float q = fast_round(v * rcp3 + q0);
+                q = fminf(fmaxf(q, 0.0f), maxq);
+                float d = fabsf((q - q0) * s3 - v);
+                if constexpr (IS_L2_NORM) loss3 += d * d; else loss3 += powf(d, norm);
+            }
         }
 
-        loss0 = butterflyReduceSum(loss0); loss1 = butterflyReduceSum(loss1);
-        loss2 = butterflyReduceSum(loss2); loss3 = butterflyReduceSum(loss3);
+        // 5-Stage Butterfly Reduction (Accumulate lanes)
+        loss0 = butterflyReduceSum(loss0);
+        loss1 = butterflyReduceSum(loss1);
+        loss2 = butterflyReduceSum(loss2);
+        loss3 = butterflyReduceSum(loss3);
 
         if (lane == 0) {
             if (loss0 < best_loss) { best_loss = loss0; best_s = s0; }
@@ -242,83 +286,31 @@ __global__ void mse_2stage_tiled_kernel(
             if (loss3 < best_loss) { best_loss = loss3; best_s = s3; }
         }
     }
-    // Tail Stage 1
-    for (; k < P_coarse; ++k) {
-        float s = base_s * c_p[k];
-        float rcp = 1.0f / s;
-        float loss = 0.0f;
-        #pragma unroll 4
-        for (int64_t i = lane; i < group_size; i += 32) {
-            float v = cached_x[i];
-            float q = fminf(fmaxf(fast_round(v*rcp + q0), 0.0f), maxq);
-            float d = fabsf((q-q0)*s - v);
-            loss += (IS_L2_NORM ? d*d : powf(d, norm));
-        }
-        loss = butterflyReduceSum(loss);
-        if (lane == 0 && loss < best_loss) { best_loss = loss; best_s = s; }
-    }
 
-    // --- INTER-STAGE BROADCAST ---
-    // The winner of Stage 1 becomes the center of Stage 2.
-    // Lane 0 holds the winner; broadcast it to all lanes.
-    float coarse_s = __shfl_sync(0xffffffff, best_s, 0);
+    for (; k < P; ++k) {
+        float shrink = c_p[k];
+        float s = base_s * shrink;
+        if (s <= 1e-12f) continue;
 
-    // --- STAGE 2: FINE SEARCH (P_coarse to P_total) ---
-    // Candidates apply relative to 'coarse_s'
-    int64_t P_fine_count = P_total - P_coarse;
-    int64_t j = 0;
-    
-    // Unroll 4 for Stage 2
-    for (; j < (P_fine_count & ~3); j += 4) {
-        int64_t idx = P_coarse + j;
-        float p0 = c_p[idx];   float p1 = c_p[idx+1];
-        float p2 = c_p[idx+2]; float p3 = c_p[idx+3];
-
-        float s0 = coarse_s * p0; float rcp0 = 1.0f / s0;
-        float s1 = coarse_s * p1; float rcp1 = 1.0f / s1;
-        float s2 = coarse_s * p2; float rcp2 = 1.0f / s2;
-        float s3 = coarse_s * p3; float rcp3 = 1.0f / s3;
-
-        float loss0 = 0.0f; float loss1 = 0.0f;
-        float loss2 = 0.0f; float loss3 = 0.0f;
+        float rcp_s = 1.0f / s;
+        float local_loss = 0.0f;
 
         #pragma unroll 4
         for (int64_t i = lane; i < group_size; i += 32) {
             float v = cached_x[i];
-            { float q = fminf(fmaxf(fast_round(v*rcp0 + q0), 0.0f), maxq);
-              float d = fabsf((q-q0)*s0 - v); loss0 += (IS_L2_NORM ? d*d : powf(d, norm)); }
-            { float q = fminf(fmaxf(fast_round(v*rcp1 + q0), 0.0f), maxq);
-              float d = fabsf((q-q0)*s1 - v); loss1 += (IS_L2_NORM ? d*d : powf(d, norm)); }
-            { float q = fminf(fmaxf(fast_round(v*rcp2 + q0), 0.0f), maxq);
-              float d = fabsf((q-q0)*s2 - v); loss2 += (IS_L2_NORM ? d*d : powf(d, norm)); }
-            { float q = fminf(fmaxf(fast_round(v*rcp3 + q0), 0.0f), maxq);
-              float d = fabsf((q-q0)*s3 - v); loss3 += (IS_L2_NORM ? d*d : powf(d, norm)); }
+            float q = fast_round(v * rcp_s + q0);
+            q = fminf(fmaxf(q, 0.0f), maxq);
+            float diff = fabsf((q - q0) * s - v);
+
+            if constexpr (IS_L2_NORM) local_loss += diff * diff;
+            else local_loss += powf(diff, norm);
         }
 
-        loss0 = butterflyReduceSum(loss0); loss1 = butterflyReduceSum(loss1);
-        loss2 = butterflyReduceSum(loss2); loss3 = butterflyReduceSum(loss3);
-
-        if (lane == 0) {
-            if (loss0 < best_loss) { best_loss = loss0; best_s = s0; }
-            if (loss1 < best_loss) { best_loss = loss1; best_s = s1; }
-            if (loss2 < best_loss) { best_loss = loss2; best_s = s2; }
-            if (loss3 < best_loss) { best_loss = loss3; best_s = s3; }
+        local_loss = butterflyReduceSum(local_loss);
+        if (lane == 0 && local_loss < best_loss) {
+            best_loss = local_loss;
+            best_s    = s;
         }
-    }
-    // Tail Stage 2
-    for (; j < P_fine_count; ++j) {
-        float s = coarse_s * c_p[P_coarse + j];
-        float rcp = 1.0f / s;
-        float loss = 0.0f;
-        #pragma unroll 4
-        for (int64_t i = lane; i < group_size; i += 32) {
-            float v = cached_x[i];
-            float q = fminf(fmaxf(fast_round(v*rcp + q0), 0.0f), maxq);
-            float d = fabsf((q-q0)*s - v);
-            loss += (IS_L2_NORM ? d*d : powf(d, norm));
-        }
-        loss = butterflyReduceSum(loss);
-        if (lane == 0 && loss < best_loss) { best_loss = loss; best_s = s; }
     }
 
     if (lane == 0) {
@@ -362,28 +354,32 @@ std::tuple<torch::Tensor, torch::Tensor> build_group_meta_packed_cuda(
     if (threads < 32) threads = 32;
     const int blocks = static_cast<int>(G);
 
-    // Calculate Dynamic SMEM for Meta Builder
     const int warps_per_block = threads / 32;
-    // We need 2 floats (min/max) per warp in shared mem if warps > 1
-    // If threads=32, warps=1, smem=0 effectively used by reduction, 
-    // but allocation is cheap.
     const size_t smem_bytes = 2 * static_cast<size_t>(warps_per_block) * sizeof(float);
 
     auto stream = at::cuda::getCurrentCUDAStream();
 
-    AT_DISPATCH_FLOATING_TYPES_AND2(
-        torch::kHalf, torch::kBFloat16, dtype, "build_group_meta_packed_cuda",
-        [&]() {
-            using scalar_t_ = scalar_t;
-            const scalar_t_* x_ptr = x_groups.data_ptr<scalar_t_>();
-            build_group_meta_optimized<scalar_t_>
-                <<<blocks, threads, smem_bytes, stream>>>(
-                    x_ptr, qmeta_ptr, G, group_size, static_cast<int>(bit_width), symmetric
-                );
-        }
-    );
+    if (dtype == torch::kFloat8_e4m3fn || dtype == torch::kFloat8_e4m3fnuz) {
+        auto x_f32 = x_groups.to(torch::kFloat32).contiguous();
+        const float* x_ptr = x_f32.data_ptr<float>();
 
-    CUDA_CHECK(cudaGetLastError());
+        build_group_meta_optimized<float>
+            <<<blocks, threads, smem_bytes, stream>>>(
+                x_ptr, qmeta_ptr, G, group_size, static_cast<int>(bit_width), symmetric
+            );
+    } else {
+        AT_DISPATCH_FLOATING_TYPES_AND2(
+            torch::kHalf, torch::kBFloat16, dtype, "build_group_meta_packed_cuda",
+            [&]() {
+                using scalar_t_ = scalar_t;
+                const scalar_t_* x_ptr = x_groups.data_ptr<scalar_t_>();
+                build_group_meta_optimized<scalar_t_>
+                    <<<blocks, threads, smem_bytes, stream>>>(
+                        x_ptr, qmeta_ptr, G, group_size, static_cast<int>(bit_width), symmetric
+                    );
+            }
+        );
+    }
 
     float maxq_val = float((1 << bit_width) - 1);
     auto maxq = torch::full({}, maxq_val, x_groups.options().dtype(torch::kFloat32));
@@ -409,13 +405,6 @@ torch::Tensor mse_scale_groups_packed_cuda(
     TORCH_CHECK(group_size % 32 == 0, "group_size must be multiple of 32");
     TORCH_CHECK(P > 0 && P <= 1024,   "P must be in (0, 1024]");
 
-    // --- INFER OPTIMAL COARSE COUNT ---
-    // This maximizes search resolution for a fixed P budget.
-    int64_t p_coarse = P / 2;
-    
-    // Safety clamp
-    if (p_coarse >= P) p_coarse = P; 
-
     x_groups = ensure_contiguous_same_dtype(x_groups);
     p        = p.contiguous();
 
@@ -435,34 +424,48 @@ torch::Tensor mse_scale_groups_packed_cuda(
     auto* qmeta_ptr = reinterpret_cast<QMetaLocal*>(qmeta_bytes.data_ptr<uint8_t>());
 
     const int blocks = static_cast<int>(G);
-    const int threads = 32;  // Single Warp execution
+    const int threads = 32;
     const size_t smem_bytes = static_cast<size_t>(group_size) * sizeof(float);
 
     float maxq_f = static_cast<float>(maxq);
     float norm_f = static_cast<float>(norm);
 
-    AT_DISPATCH_FLOATING_TYPES_AND2(
-        torch::kHalf, torch::kBFloat16, dtype, "mse_scale_groups_packed_cuda",
-        [&]() {
-            using scalar_t_ = scalar_t;
-            const scalar_t_* x_ptr = x_groups.data_ptr<scalar_t_>();
-            
-            // Check L2 optimization (norm == 2.0)
-            bool is_l2 = (std::fabs(norm_f - 2.0f) < 1e-5f);
+    if (dtype == torch::kFloat8_e4m3fn || dtype == torch::kFloat8_e4m3fnuz) {
+        auto x_f32 = x_groups.to(torch::kFloat32).contiguous();
+        const float* x_ptr = x_f32.data_ptr<float>();
 
-            if (is_l2) {
-                mse_2stage_tiled_kernel<scalar_t_, true>
-                    <<<blocks, threads, smem_bytes, stream>>>(
-                        x_ptr, qmeta_ptr, G, group_size, P, p_coarse, maxq_f, norm_f
-                    );
-            } else {
-                mse_2stage_tiled_kernel<scalar_t_, false>
-                    <<<blocks, threads, smem_bytes, stream>>>(
-                        x_ptr, qmeta_ptr, G, group_size, P, p_coarse, maxq_f, norm_f
-                    );
-            }
+        if (fabsf(norm_f - 2.0f) < 1e-5f) {
+            mse_scale_groups_optimized<float, true>
+                <<<blocks, threads, smem_bytes, stream>>>(
+                    x_ptr, qmeta_ptr, G, group_size, P, maxq_f, norm_f
+                );
+        } else {
+            mse_scale_groups_optimized<float, false>
+                <<<blocks, threads, smem_bytes, stream>>>(
+                    x_ptr, qmeta_ptr, G, group_size, P, maxq_f, norm_f
+                );
         }
-    );
+    } else {
+        AT_DISPATCH_FLOATING_TYPES_AND2(
+            torch::kHalf, torch::kBFloat16, dtype, "mse_scale_groups_packed_cuda",
+            [&]() {
+                using scalar_t_ = scalar_t;
+                const scalar_t_* x_ptr = x_groups.data_ptr<scalar_t_>();
+
+                if (fabsf(norm_f - 2.0f) < 1e-5f) {
+                    mse_scale_groups_optimized<scalar_t_, true>
+                        <<<blocks, threads, smem_bytes, stream>>>(
+                            x_ptr, qmeta_ptr, G, group_size, P, maxq_f, norm_f
+                        );
+                } else {
+                    mse_scale_groups_optimized<scalar_t_, false>
+                        <<<blocks, threads, smem_bytes, stream>>>(
+                            x_ptr, qmeta_ptr, G, group_size, P, maxq_f, norm_f
+                        );
+                }
+            }
+        );
+    }
 
     CUDA_CHECK(cudaGetLastError());
     return qmeta_bytes;
