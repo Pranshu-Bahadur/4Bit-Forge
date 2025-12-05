@@ -30,11 +30,17 @@ __constant__ float c_p[1024];
 
 // ---- small helpers -------------------------------------------------
 
-__device__ __forceinline__ float fast_log2(float x) { return __log2f(x); }
-__device__ __forceinline__ float fast_exp2(float x) { return __exp2f(x); }
+__device__ __forceinline__ float fast_log2(float x) { 
+    return log2f(x); 
+}
+
+__device__ __forceinline__ float fast_exp2(float x) { 
+    return exp2f(x); 
+}
 
 __device__ __forceinline__ int16_t encode_scale_q88(float s) {
-    float log2s = fast_log2(fmaxf(s, 1e-20f));   // avoid log2(0)
+    // fmaxf ensures we don't hit log2(0)
+    float log2s = fast_log2(fmaxf(s, 1e-20f));
     float fp    = log2s * 256.0f;
     fp = fminf(fmaxf(fp, -32768.0f), 32767.0f);
     return static_cast<int16_t>(lrintf(fp));
