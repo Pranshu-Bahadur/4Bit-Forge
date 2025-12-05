@@ -10,6 +10,7 @@
 #include <cstdint>
 #include <cmath>
 #include <tuple>
+#include <cfloat>
 
 #define CUDA_CHECK(expr)                                      \
   do {                                                        \
@@ -26,6 +27,7 @@ struct QMetaPacked {
     uint8_t  flags;
 };
 
+// Constant memory for shrink factors (fastest broadcast access)
 __constant__ float c_p[1024];
 
 // ---- small helpers -------------------------------------------------
@@ -191,7 +193,7 @@ __global__ void build_group_meta_optimized(
 }
 
 // ====================================================================
-// 2) MSE SCALE REFINEMENT (single-warp kernel, shared cached_x)
+// 2) MSE SCALE REFINEMENT (PackBoost Style: Tiled & Register Heavy)
 // ====================================================================
 
 template <typename scalar_t, bool IS_L2_NORM>
@@ -204,7 +206,6 @@ __global__ void mse_scale_groups_optimized(
     float maxq,
     float norm
 ) {
-    // Single block = one group, single warp (blockDim.x == 32)
     const int g = blockIdx.x;
     if (g >= G) return;
 
@@ -215,18 +216,95 @@ __global__ void mse_scale_groups_optimized(
     float base_s  = decode_scale_q88(m.log2_scale_fp);
     float q0      = float(m.qzero);
 
+    // Shared memory cache
     extern __shared__ float cached_x[];
-
-    // Load group from global -> shared (stride 32)
     for (int64_t i = lane; i < group_size; i += 32) {
         cached_x[i] = static_cast<float>(x[base + i]);
     }
     __syncthreads();
 
-    float best_loss = 1e30f;
+    float best_loss = FLT_MAX;
     float best_s    = base_s;
 
-    for (int64_t k = 0; k < P; ++k) {
+    // -----------------------------------------------------------
+    // OPTIMIZATION: Register Tiling (4 candidates at once)
+    // -----------------------------------------------------------
+    int64_t k = 0;
+    int64_t P_vec = P & ~3; // Process groups of 4
+
+    for (; k < P_vec; k += 4) {
+        // Load 4 factors from constant memory (zero latency)
+        float p0 = c_p[k];
+        float p1 = c_p[k+1];
+        float p2 = c_p[k+2];
+        float p3 = c_p[k+3];
+
+        // Precompute scales & reciprocals to avoid division
+        float s0 = base_s * p0; float rcp0 = 1.0f / s0;
+        float s1 = base_s * p1; float rcp1 = 1.0f / s1;
+        float s2 = base_s * p2; float rcp2 = 1.0f / s2;
+        float s3 = base_s * p3; float rcp3 = 1.0f / s3;
+
+        // Register accumulators
+        float loss0 = 0.0f;
+        float loss1 = 0.0f;
+        float loss2 = 0.0f;
+        float loss3 = 0.0f;
+
+        #pragma unroll 4
+        for (int64_t i = lane; i < group_size; i += 32) {
+            float v = cached_x[i];
+
+            // Candidate 0
+            {
+                float q = rintf(v * rcp0 + q0);
+                q = fminf(fmaxf(q, 0.0f), maxq);
+                float diff = fabsf((q - q0) * s0 - v);
+                if constexpr (IS_L2_NORM) loss0 += diff * diff;
+                else loss0 += powf(diff, norm);
+            }
+            // Candidate 1
+            {
+                float q = rintf(v * rcp1 + q0);
+                q = fminf(fmaxf(q, 0.0f), maxq);
+                float diff = fabsf((q - q0) * s1 - v);
+                if constexpr (IS_L2_NORM) loss1 += diff * diff;
+                else loss1 += powf(diff, norm);
+            }
+            // Candidate 2
+            {
+                float q = rintf(v * rcp2 + q0);
+                q = fminf(fmaxf(q, 0.0f), maxq);
+                float diff = fabsf((q - q0) * s2 - v);
+                if constexpr (IS_L2_NORM) loss2 += diff * diff;
+                else loss2 += powf(diff, norm);
+            }
+            // Candidate 3
+            {
+                float q = rintf(v * rcp3 + q0);
+                q = fminf(fmaxf(q, 0.0f), maxq);
+                float diff = fabsf((q - q0) * s3 - v);
+                if constexpr (IS_L2_NORM) loss3 += diff * diff;
+                else loss3 += powf(diff, norm);
+            }
+        }
+
+        // Warp Reduce
+        loss0 = warpReduceSum(loss0);
+        loss1 = warpReduceSum(loss1);
+        loss2 = warpReduceSum(loss2);
+        loss3 = warpReduceSum(loss3);
+
+        if (lane == 0) {
+            if (loss0 < best_loss) { best_loss = loss0; best_s = s0; }
+            if (loss1 < best_loss) { best_loss = loss1; best_s = s1; }
+            if (loss2 < best_loss) { best_loss = loss2; best_s = s2; }
+            if (loss3 < best_loss) { best_loss = loss3; best_s = s3; }
+        }
+    }
+
+    // Handle remaining candidates
+    for (; k < P; ++k) {
         float shrink = c_p[k];
         float s = base_s * shrink;
         if (s <= 1e-12f) continue;
@@ -237,22 +315,15 @@ __global__ void mse_scale_groups_optimized(
         #pragma unroll 4
         for (int64_t i = lane; i < group_size; i += 32) {
             float v = cached_x[i];
-
             float q = rintf(v * rcp_s + q0);
             q = fminf(fmaxf(q, 0.0f), maxq);
+            float diff = fabsf((q - q0) * s - v);
 
-            float y    = (q - q0) * s;
-            float diff = fabsf(y - v);
-
-            if constexpr (IS_L2_NORM) {
-                local_loss += diff * diff;
-            } else {
-                local_loss += powf(diff, norm);
-            }
+            if constexpr (IS_L2_NORM) local_loss += diff * diff;
+            else local_loss += powf(diff, norm);
         }
 
         float loss = warpReduceSum(local_loss);
-
         if (lane == 0 && loss < best_loss) {
             best_loss = loss;
             best_s    = s;
@@ -272,7 +343,7 @@ __global__ void mse_scale_groups_optimized(
 // ======================================================================
 
 std::tuple<torch::Tensor, torch::Tensor> build_group_meta_packed_cuda(
-    torch::Tensor x_groups,   // [G, group_size]
+    torch::Tensor x_groups,
     int64_t bit_width,
     bool symmetric
 ) {
@@ -288,7 +359,6 @@ std::tuple<torch::Tensor, torch::Tensor> build_group_meta_packed_cuda(
     auto device = x_groups.device();
     auto dtype  = x_groups.scalar_type();
 
-    // layout: [G, 4] bytes (each QMetaPacked is 4 bytes)
     auto qmeta_tensor = torch::empty(
         {G, 4},
         torch::TensorOptions().dtype(torch::kUInt8).device(device)
@@ -296,7 +366,6 @@ std::tuple<torch::Tensor, torch::Tensor> build_group_meta_packed_cuda(
     using QMetaLocal = QMetaPacked;
     auto* qmeta_ptr = reinterpret_cast<QMetaLocal*>(qmeta_tensor.data_ptr<uint8_t>());
 
-    // launch config
     int threads = std::min<int64_t>(256, group_size);
     threads = align_to_warp(threads);
     if (threads < 32) threads = 32;
@@ -308,7 +377,6 @@ std::tuple<torch::Tensor, torch::Tensor> build_group_meta_packed_cuda(
     auto stream = at::cuda::getCurrentCUDAStream();
 
     if (dtype == torch::kFloat8_e4m3fn || dtype == torch::kFloat8_e4m3fnuz) {
-        // promote fp8 -> fp32 for meta computation
         auto x_f32 = x_groups.to(torch::kFloat32).contiguous();
         const float* x_ptr = x_f32.data_ptr<float>();
 
@@ -356,9 +424,9 @@ std::tuple<torch::Tensor, torch::Tensor> build_group_meta_packed_cuda(
 }
 
 torch::Tensor mse_scale_groups_packed_cuda(
-    torch::Tensor x_groups,    // [G, group_size]
-    torch::Tensor p,           // [P] float
-    torch::Tensor qmeta_bytes, // [G, 4] uint8
+    torch::Tensor x_groups,
+    torch::Tensor p,
+    torch::Tensor qmeta_bytes,
     double maxq,
     double norm
 ) {
@@ -384,7 +452,7 @@ torch::Tensor mse_scale_groups_packed_cuda(
     auto dtype  = x_groups.scalar_type();
     auto stream = at::cuda::getCurrentCUDAStream();
 
-    // push shrink factors to constant memory
+    // Copy to Constant Memory (Zero Latency Broadcast)
     CUDA_CHECK(cudaMemcpyToSymbol(
         c_p,
         p.data_ptr<float>(),
@@ -400,7 +468,7 @@ torch::Tensor mse_scale_groups_packed_cuda(
     const int blocks = static_cast<int>(G);
     const int threads = 32;  // single warp
     const size_t smem_bytes =
-        static_cast<size_t>(group_size) * sizeof(float); // cached_x
+        static_cast<size_t>(group_size) * sizeof(float);
 
     float maxq_f = static_cast<float>(maxq);
     float norm_f = static_cast<float>(norm);
@@ -412,24 +480,12 @@ torch::Tensor mse_scale_groups_packed_cuda(
         if (fabsf(norm_f - 2.0f) < 1e-5f) {
             mse_scale_groups_optimized<float, true>
                 <<<blocks, threads, smem_bytes, stream>>>(
-                    x_ptr,
-                    qmeta_ptr,
-                    G,
-                    group_size,
-                    P,
-                    maxq_f,
-                    norm_f
+                    x_ptr, qmeta_ptr, G, group_size, P, maxq_f, norm_f
                 );
         } else {
             mse_scale_groups_optimized<float, false>
                 <<<blocks, threads, smem_bytes, stream>>>(
-                    x_ptr,
-                    qmeta_ptr,
-                    G,
-                    group_size,
-                    P,
-                    maxq_f,
-                    norm_f
+                    x_ptr, qmeta_ptr, G, group_size, P, maxq_f, norm_f
                 );
         }
     } else {
@@ -444,24 +500,12 @@ torch::Tensor mse_scale_groups_packed_cuda(
                 if (fabsf(norm_f - 2.0f) < 1e-5f) {
                     mse_scale_groups_optimized<scalar_t_, true>
                         <<<blocks, threads, smem_bytes, stream>>>(
-                            x_ptr,
-                            qmeta_ptr,
-                            G,
-                            group_size,
-                            P,
-                            maxq_f,
-                            norm_f
+                            x_ptr, qmeta_ptr, G, group_size, P, maxq_f, norm_f
                         );
                 } else {
                     mse_scale_groups_optimized<scalar_t_, false>
                         <<<blocks, threads, smem_bytes, stream>>>(
-                            x_ptr,
-                            qmeta_ptr,
-                            G,
-                            group_size,
-                            P,
-                            maxq_f,
-                            norm_f
+                            x_ptr, qmeta_ptr, G, group_size, P, maxq_f, norm_f
                         );
                 }
             }
