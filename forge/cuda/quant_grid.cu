@@ -251,7 +251,7 @@ __global__ void mse_scale_groups_optimized(
         float loss2 = 0.0f;
         float loss3 = 0.0f;
 
-        #pragma unroll 4
+        //#pragma unroll 4
         for (int64_t i = lane; i < group_size; i += 32) {
             float v = cached_x[i];
 
