@@ -379,6 +379,8 @@ torch::Tensor mse_scale_groups_packed_cuda(
     x_groups = ensure_contiguous_same_dtype(x_groups);
     p        = p.contiguous();
 
+    auto device = x_groups.device();
+    auto dtype  = x_groups.scalar_type();
     auto stream = at::cuda::getCurrentCUDAStream();
 
     CUDA_CHECK(cudaMemcpyToSymbol(
@@ -398,8 +400,6 @@ torch::Tensor mse_scale_groups_packed_cuda(
 
     float maxq_f = static_cast<float>(maxq);
     float norm_f = static_cast<float>(norm);
-
-    auto dtype = x_groups.scalar_type();
 
     // FP8 Dispatch Support
     if (dtype == c10::ScalarType::Float8_e4m3fn || dtype == c10::ScalarType::Float8_e4m3fnuz) {
