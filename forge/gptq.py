@@ -1,6 +1,7 @@
 import torch
 import torch.nn.functional as F
-from forge.cuda import kernels
+from forge.cuda import kernels as cuda_kernels
+from forge.trt import kernels as triton_kernels
 
 
 class GPTQ:
@@ -30,6 +31,7 @@ class GPTQ:
         quant_max_shrink: float = 0.2,
         quant_n_grid: int = 100,
         quant_norm: float = 2.4,
+        impl: str = 'cuda'
     ) -> tuple[torch.Tensor, torch.Tensor, int]:
         """
         Build *groupwise* quantization metadata in packed qmeta4 format.
@@ -100,6 +102,7 @@ class GPTQ:
                 quant_max_shrink=quant_max_shrink,
                 quant_n_grid=quant_n_grid,
                 quant_norm=quant_norm,
+                impl=impl
             )
         else:
             qmeta_flat, maxq = self._build_quant_grid_cpu(
@@ -235,6 +238,7 @@ class GPTQ:
         quant_max_shrink: float,
         quant_n_grid: int,
         quant_norm: float,
+        impl: str = 'cuda'
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """
         GPU path: use qmeta4 CUDA kernels, return packed metadata.
@@ -245,7 +249,8 @@ class GPTQ:
         device = x_groups.device
 
         # 1) Initial range-based meta
-        qmeta_bytes, maxq = kernels.build_group_meta_packed(
+        build_group_meta_packed_fn = (cuda_kernels if impl == 'cuda' else triton_kernels).build_group_meta_packed
+        qmeta_bytes, maxq = build_group_meta_packed_fn(
             x_groups,
             bits,
             symmetric,
@@ -261,7 +266,8 @@ class GPTQ:
                 device=device,
             )
 
-            qmeta_bytes = kernels.mse_scale_groups_packed(
+            mse_scale_groups_packed_fn = (cuda_kernels if impl == 'cuda' else triton_kernels).mse_scale_groups_packed
+            qmeta_bytes = mse_scale_groups_packed_fn(
                 x_groups,
                 p,
                 qmeta_bytes,

@@ -99,7 +99,8 @@ def reference_gptq_solver(weight, hessian_inv, scale, qzero, maxq):
 
 @pytest.mark.parametrize("bits", [4, 8])
 @pytest.mark.parametrize("group_size", [32, 128])
-def test_build_quant_grid_shapes_cpu(bits, group_size):
+@pytest.mark.parametrize("impl", ['cuda', 'triton'])
+def test_build_quant_grid_shapes_cpu(bits, group_size, impl):
     torch.manual_seed(0)
     C, R = 7, 257  # odd dims to test padding logic
     W = torch.randn(C, R, dtype=torch.float32, device="cpu")
@@ -111,6 +112,7 @@ def test_build_quant_grid_shapes_cpu(bits, group_size):
         bits=bits,
         symmetric=False,
         mode="absmax",
+        impl=impl
     )
 
     num_groups = (R + group_size - 1) // group_size
@@ -126,7 +128,8 @@ def test_build_quant_grid_shapes_cpu(bits, group_size):
 
 @pytest.mark.skipif(not has_cuda(), reason="CUDA not available")
 @pytest.mark.parametrize("bits", [4])
-def test_build_quant_grid_cpu_vs_gpu_error(bits):
+@pytest.mark.parametrize("impl", ['cuda', 'triton'])
+def test_build_quant_grid_cpu_vs_gpu_error(bits, impl):
     """
     Compare CPU vs GPU grid builder indirectly by comparing quantization error.
     Note: GPU uses packed Q8.8 scales, CPU uses pure float32 emulation.
@@ -146,6 +149,7 @@ def test_build_quant_grid_cpu_vs_gpu_error(bits):
         bits=bits,
         symmetric=False,
         mode="absmax",
+        impl=impl
     )
     # Unpack packed meta to full (C, R) maps
     scale_cpu, qzero_cpu = unpack_qmeta_tensor(qmeta_cpu, group_size, R)
@@ -160,6 +164,7 @@ def test_build_quant_grid_cpu_vs_gpu_error(bits):
         bits=bits,
         symmetric=False,
         mode="absmax",
+        impl=impl
     )
     qmeta_gpu = qmeta_gpu.cpu()
     maxq_gpu = maxq_gpu.cpu()
@@ -172,7 +177,8 @@ def test_build_quant_grid_cpu_vs_gpu_error(bits):
     assert math.isclose(mse_cpu, mse_gpu, rel_tol=0.05, abs_tol=1e-4)
 
 @pytest.mark.parametrize("mode", ["absmax", "mse"])
-def test_build_quant_grid_mse_does_not_increase_error(mode):
+@pytest.mark.parametrize("impl", ['cuda', 'triton'])
+def test_build_quant_grid_mse_does_not_increase_error(mode, impl):
     """
     Check that MSE mode doesn't worsen error compared to absmax.
     """
@@ -190,6 +196,7 @@ def test_build_quant_grid_mse_does_not_increase_error(mode):
         bits=4,
         symmetric=False,
         mode="absmax",
+        impl=impl
     )
     scale_abs, qzero_abs = unpack_qmeta_tensor(qmeta_abs, group_size, R)
     _, y_abs = quantize_dequant(W, scale_abs, qzero_abs, maxq_abs)
@@ -205,6 +212,7 @@ def test_build_quant_grid_mse_does_not_increase_error(mode):
         quant_max_shrink=0.2,
         quant_n_grid=16,
         quant_norm=2.4,
+        impl=impl
     )
     scale_mse, qzero_mse = unpack_qmeta_tensor(qmeta_mse, group_size, R)
     _, y_mse = quantize_dequant(W, scale_mse, qzero_mse, maxq_mse)
@@ -216,7 +224,8 @@ def test_build_quant_grid_mse_does_not_increase_error(mode):
 # ---------- tests for solver ----------
 
 @pytest.mark.parametrize("C,R", [(4, 32), (6, 64)])
-def test_solver_matches_reference_cpu(C, R):
+@pytest.mark.parametrize("impl", ['cuda', 'triton'])
+def test_solver_matches_reference_cpu(C, R, impl):
     """
     Compare GPTQ.solver (using packed qmeta) against pure reference (unpacked scale)
     for small matrices on CPU.
@@ -235,7 +244,7 @@ def test_solver_matches_reference_cpu(C, R):
 
     # 1. Build grid -> qmeta
     qmeta, maxq, _ = gptq.build_quant_grid(
-        W, group_size=group_size, bits=bits, symmetric=False, mode="absmax"
+        W, group_size=group_size, bits=bits, symmetric=False, mode="absmax", impl=impl
     )
 
     # 2. Unpack for reference solver
@@ -260,7 +269,8 @@ def test_solver_matches_reference_cpu(C, R):
 
 @pytest.mark.skipif(not has_cuda(), reason="CUDA not available")
 @pytest.mark.parametrize("dtype", [torch.float32, torch.float16, torch.bfloat16])
-def test_build_quant_grid_supports_fp16_bf16(dtype):
+@pytest.mark.parametrize("impl", ['cuda', 'triton'])
+def test_build_quant_grid_supports_fp16_bf16(dtype, impl):
     """
     Ensure build_quant_grid works with various input dtypes on CUDA.
     """
@@ -277,6 +287,7 @@ def test_build_quant_grid_supports_fp16_bf16(dtype):
         symmetric=False,
         mode="mse",
         quant_n_grid=8,
+        impl=impl
     )
 
     num_groups = (R + group_size - 1) // group_size
@@ -285,7 +296,9 @@ def test_build_quant_grid_supports_fp16_bf16(dtype):
     assert maxq.shape == torch.Size([])
 
 @pytest.mark.skipif(not (has_cuda() and has_fp8()), reason="float8 or CUDA not available")
-def test_build_quant_grid_supports_fp8_e4m3():
+
+@pytest.mark.parametrize("impl", ['cuda', 'triton'])
+def test_build_quant_grid_supports_fp8_e4m3(impl):
     """
     Smoke test: weight in float8_e4m3fn should not crash build_quant_grid.
     """
@@ -301,6 +314,7 @@ def test_build_quant_grid_supports_fp8_e4m3():
         bits=4,
         symmetric=False,
         mode="absmax",
+        impl=impl
     )
 
     assert qmeta.shape == (C, 1, 4)
