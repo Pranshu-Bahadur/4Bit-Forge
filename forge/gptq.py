@@ -1,7 +1,7 @@
 import torch
 import torch.nn.functional as F
 from forge.cuda import kernels as cuda_kernels
-from forge.triton import kernels as triton_kernels
+from forge.trt import kernels as triton_kernels
 
 
 class GPTQ:
