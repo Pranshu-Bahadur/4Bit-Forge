@@ -180,11 +180,11 @@ __global__ void build_group_meta_optimized(
 }
 
 // ====================================================================
-// 2) MSE SCALE SEARCH (Single Stage, Register Tiled)
+// 2) MSE SCALE SEARCH 
 // ====================================================================
 
 template <typename scalar_t, bool IS_L2_NORM>
-__global__ void mse_search_kernel(
+__global__ void mse_search_kernel_nosmem(
     const scalar_t* __restrict__ x,
     QMetaPacked* __restrict__ qmeta,
     int64_t G,
@@ -193,66 +193,99 @@ __global__ void mse_search_kernel(
     float maxq,
     float norm
 ) {
-    const int g = blockIdx.x;
+    int g = blockIdx.x;
     if (g >= G) return;
 
-    const int lane = threadIdx.x;
-    int64_t base = static_cast<int64_t>(g) * group_size;
+    const int lane = threadIdx.x;    // 0..31
+    const int64_t base = static_cast<int64_t>(g) * group_size;
 
     QMetaPacked m = qmeta[g];
     float base_s  = decode_scale_q88(m.log2_scale_fp);
-    float q0      = float(m.qzero);
-
-    extern __shared__ float cached_x[];
-
-    // 1. Cooperative Load to Shared Mem (Float32 conversion happens here)
-    for (int64_t i = lane; i < group_size; i += 32) {
-        cached_x[i] = val_to_float(x[base + i]);
-    }
-    __syncthreads(); 
+    float q0      = static_cast<float>(m.qzero);
 
     float best_loss = FLT_MAX;
     float best_s    = base_s;
 
-    // 2. Brute Force Grid Search
-    // Unrolled by 4 to hide instruction latency
-    int64_t k = 0;
-    int64_t P_vec = P & ~3;
+    int64_t k   = 0;
+    int64_t P4  = P & ~3;   // largest multiple of 4 <= P
 
-    for (; k < P_vec; k += 4) {
-        // Load 4 candidates from Constant Memory
-        float p0 = c_p[k];   float p1 = c_p[k+1];
-        float p2 = c_p[k+2]; float p3 = c_p[k+3];
+    // ---- Process candidates in chunks of 4 ----
+    for (; k < P4; k += 4) {
+        float p0 = c_p[k + 0];
+        float p1 = c_p[k + 1];
+        float p2 = c_p[k + 2];
+        float p3 = c_p[k + 3];
 
         float s0 = base_s * p0; float rcp0 = 1.0f / s0;
         float s1 = base_s * p1; float rcp1 = 1.0f / s1;
         float s2 = base_s * p2; float rcp2 = 1.0f / s2;
         float s3 = base_s * p3; float rcp3 = 1.0f / s3;
 
-        float l0 = 0.0f; float l1 = 0.0f;
-        float l2 = 0.0f; float l3 = 0.0f;
+        float l0 = 0.0f;
+        float l1 = 0.0f;
+        float l2 = 0.0f;
+        float l3 = 0.0f;
 
         #pragma unroll 4
-        for (int64_t i = lane; i < group_size; i += 32) {
-            float v = cached_x[i];
-            
-            auto compute_err = [&](float rcp, float s) {
-                float q = fast_round(v * rcp + q0);
-                q = fminf(fmaxf(q, 0.0f), maxq);
-                float d = fabsf((q - q0) * s - v);
-                return IS_L2_NORM ? d * d : powf(d, norm);
-            };
+        for (int64_t idx = lane; idx < group_size; idx += 32) {
+            float v = val_to_float(x[base + idx]);
 
-            l0 += compute_err(rcp0, s0);
-            l1 += compute_err(rcp1, s1);
-            l2 += compute_err(rcp2, s2);
-            l3 += compute_err(rcp3, s3);
+            // candidate 0
+            float q = fast_round(fmaf(v, rcp0, q0));   // v * rcp0 + q0
+            q       = fminf(fmaxf(q, 0.0f), maxq);
+            float diff = fmaf(q - q0, s0, -v);         // (q - q0)*s0 - v
+            if (IS_L2_NORM) {
+                l0 = fmaf(diff, diff, l0);
+            } else {
+                float e = fmaxf(fabsf(diff), 1e-20f);
+                float lg = __logf(e);
+                float val = __expf(lg * norm);
+                l0 += val;
+            }
+
+            // candidate 1
+            q    = fast_round(fmaf(v, rcp1, q0));
+            q    = fminf(fmaxf(q, 0.0f), maxq);
+            diff = fmaf(q - q0, s1, -v);
+            if (IS_L2_NORM) {
+                l1 = fmaf(diff, diff, l1);
+            } else {
+                float e = fmaxf(fabsf(diff), 1e-20f);
+                float lg = __logf(e);
+                float val = __expf(lg * norm);
+                l1 += val;
+            }
+
+            // candidate 2
+            q    = fast_round(fmaf(v, rcp2, q0));
+            q    = fminf(fmaxf(q, 0.0f), maxq);
+            diff = fmaf(q - q0, s2, -v);
+            if (IS_L2_NORM) {
+                l2 = fmaf(diff, diff, l2);
+            } else {
+                float e = fmaxf(fabsf(diff), 1e-20f);
+                float lg = __logf(e);
+                float val = __expf(lg * norm);
+                l2 += val;
+            }
+
+            // candidate 3
+            q    = fast_round(fmaf(v, rcp3, q0));
+            q    = fminf(fmaxf(q, 0.0f), maxq);
+            diff = fmaf(q - q0, s3, -v);
+            if (IS_L2_NORM) {
+                l3 = fmaf(diff, diff, l3);
+            } else {
+                float e = fmaxf(fabsf(diff), 1e-20f);
+                float lg = __logf(e);
+                float val = __expf(lg * norm);
+                l3 += val;
+            }
         }
 
-        // Parallel Reduction
-        l0 = butterflyReduceSum(l0); 
+        l0 = butterflyReduceSum(l0);
         l1 = butterflyReduceSum(l1);
-        l2 = butterflyReduceSum(l2); 
+        l2 = butterflyReduceSum(l2);
         l3 = butterflyReduceSum(l3);
 
         if (lane == 0) {
@@ -263,30 +296,42 @@ __global__ void mse_search_kernel(
         }
     }
 
-    // Tail Loop
+    // ---- Tail: remaining P % 4 candidates ----
     for (; k < P; ++k) {
-        float s = base_s * c_p[k];
+        float p  = c_p[k];
+        float s  = base_s * p;
         float rcp = 1.0f / s;
+
         float loss = 0.0f;
 
         #pragma unroll 4
-        for (int64_t i = lane; i < group_size; i += 32) {
-            float v = cached_x[i];
-            float q = fminf(fmaxf(fast_round(v * rcp + q0), 0.0f), maxq);
-            float d = fabsf((q - q0) * s - v);
-            loss += (IS_L2_NORM ? d * d : powf(d, norm));
+        for (int64_t idx = lane; idx < group_size; idx += 32) {
+            float v = val_to_float(x[base + idx]);
+
+            float q = fast_round(fmaf(v, rcp, q0));
+            q       = fminf(fmaxf(q, 0.0f), maxq);
+            float diff = fmaf(q - q0, s, -v);
+
+            if (IS_L2_NORM) {
+                loss = fmaf(diff, diff, loss);
+            } else {
+                float e = fmaxf(fabsf(diff), 1e-20f);
+                float lg = __logf(e);
+                float val = __expf(lg * norm);
+                loss += val;
+            }
         }
+
         loss = butterflyReduceSum(loss);
-        
         if (lane == 0 && loss < best_loss) {
             best_loss = loss;
-            best_s = s;
+            best_s    = s;
         }
     }
 
     if (lane == 0) {
         m.log2_scale_fp = encode_scale_q88(best_s);
-        qmeta[g] = m;
+        qmeta[g]        = m;
     }
 }
 
@@ -394,26 +439,29 @@ torch::Tensor mse_scale_groups_packed_cuda(
     using QMetaLocal = QMetaPacked;
     auto* qmeta_ptr = reinterpret_cast<QMetaLocal*>(qmeta_bytes.data_ptr<uint8_t>());
 
-    const int blocks = static_cast<int>(G);
-    const int threads = 32;
-    const size_t smem_bytes = static_cast<size_t>(group_size) * sizeof(float);
+    const int blocks  = static_cast<int>(G);
+    const int threads = 32;   // one warp per group
+    const size_t smem_bytes = 0;  // no shared memory
 
     float maxq_f = static_cast<float>(maxq);
     float norm_f = static_cast<float>(norm);
+    bool is_l2   = (std::fabs(norm_f - 2.0f) < 1e-5f);
 
-    // FP8 Dispatch Support
-    if (dtype == c10::ScalarType::Float8_e4m3fn || dtype == c10::ScalarType::Float8_e4m3fnuz) {
-        const uint8_t* x_ptr = reinterpret_cast<uint8_t*>(x_groups.data_ptr());
-        bool is_l2 = (std::fabs(norm_f - 2.0f) < 1e-5f);
-        
+    if (dtype == c10::ScalarType::Float8_e4m3fn ||
+        dtype == c10::ScalarType::Float8_e4m3fnuz) {
+
+        const uint8_t* x_ptr = reinterpret_cast<const uint8_t*>(x_groups.data_ptr());
+
         if (is_l2) {
-            mse_search_kernel<uint8_t, true><<<blocks, threads, smem_bytes, stream>>>(
-                x_ptr, qmeta_ptr, G, group_size, P, maxq_f, norm_f
-            );
+            mse_search_kernel_nosmem<uint8_t, true>
+                <<<blocks, threads, smem_bytes, stream>>>(
+                    x_ptr, qmeta_ptr, G, group_size, P, maxq_f, norm_f
+                );
         } else {
-            mse_search_kernel<uint8_t, false><<<blocks, threads, smem_bytes, stream>>>(
-                x_ptr, qmeta_ptr, G, group_size, P, maxq_f, norm_f
-            );
+            mse_search_kernel_nosmem<uint8_t, false>
+                <<<blocks, threads, smem_bytes, stream>>>(
+                    x_ptr, qmeta_ptr, G, group_size, P, maxq_f, norm_f
+                );
         }
     } else {
         AT_DISPATCH_FLOATING_TYPES_AND2(
@@ -421,16 +469,17 @@ torch::Tensor mse_scale_groups_packed_cuda(
             [&]() {
                 using scalar_t_ = scalar_t;
                 const scalar_t_* x_ptr = x_groups.data_ptr<scalar_t_>();
-                bool is_l2 = (std::fabs(norm_f - 2.0f) < 1e-5f);
 
                 if (is_l2) {
-                    mse_search_kernel<scalar_t_, true><<<blocks, threads, smem_bytes, stream>>>(
-                        x_ptr, qmeta_ptr, G, group_size, P, maxq_f, norm_f
-                    );
+                    mse_search_kernel_nosmem<scalar_t_, true>
+                        <<<blocks, threads, smem_bytes, stream>>>(
+                            x_ptr, qmeta_ptr, G, group_size, P, maxq_f, norm_f
+                        );
                 } else {
-                    mse_search_kernel<scalar_t_, false><<<blocks, threads, smem_bytes, stream>>>(
-                        x_ptr, qmeta_ptr, G, group_size, P, maxq_f, norm_f
-                    );
+                    mse_search_kernel_nosmem<scalar_t_, false>
+                        <<<blocks, threads, smem_bytes, stream>>>(
+                            x_ptr, qmeta_ptr, G, group_size, P, maxq_f, norm_f
+                        );
                 }
             }
         );
