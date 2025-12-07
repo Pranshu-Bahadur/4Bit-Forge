@@ -143,8 +143,6 @@ class GPTQ:
         # 1. CUDA Fast Path
         # ----------------------------------------------------------------------
         if weight.is_cuda:
-            import forge.cuda as cuda_kernels
-
             return cuda_kernels.gptq_solver(
                 weight,
                 hessian_inv,
