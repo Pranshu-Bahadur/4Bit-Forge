@@ -149,7 +149,7 @@ class GPTQ:
                 qmeta,
                 group_size,
                 bits,
-                0  # block_size=0 -> let kernel infer from SMEM limits
+                32  # block_size=0 -> let kernel infer from SMEM limits
             )
 
         # ----------------------------------------------------------------------
