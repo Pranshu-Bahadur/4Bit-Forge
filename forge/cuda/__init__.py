@@ -50,6 +50,7 @@ def _load_extension() -> ModuleType:
     sources = [
         str(src_dir / "kernels.cpp"),
         str(src_dir / "quant_grid.cu"),
+        str(src_dir / "solver.cu"),
         
     ]
 
