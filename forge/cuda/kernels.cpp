@@ -33,6 +33,15 @@ torch::Tensor mse_scale_groups_packed_cuda(
         double norm
 );
 
+torch::Tensor gptq_solver_cuda(
+    torch::Tensor weight,
+    torch::Tensor hessian_inv,
+    torch::Tensor qmeta_bytes,
+    int64_t group_size,
+    int64_t bits,
+    int64_t block_size   // if <= 0, infer
+);
+
 
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
@@ -45,5 +54,11 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
         "mse_scale_groups_packed",
         &mse_scale_groups_packed_cuda,
         "Refine packed scales per group using MSE search over shrink factors"
+    );
+
+    m.def(
+        "gptq_solver",
+        &gptq_solver_cuda,
+        "GPTQ Solver"
     );
 }

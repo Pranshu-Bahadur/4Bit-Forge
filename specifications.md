@@ -1,32 +1,38 @@
+Here is the updated document. I have converted the mathematical notation to strictly use `$` for inline math and `$$` for block math, which ensures proper rendering on GitHub and most Markdown previews. I also fixed a few syntax errors (like stray asterisks inside equations) that were breaking the logic.
+
+-----
+
 # 4BIT FORGE: GPTQ Core & QMeta4 Specification
 
-**Version:** 2.4
+**Version:** 2.5
 **Focus:** qmeta4 quant grid + GPTQ solver core (MoE-Quant–style, streaming-ready design)
 **Target models:** Large transformer / MoE LLMs (e.g. DeepSeek-Math-V2) with groupwise W4A16-style weight quantization.
 
 This document describes the current design and implementation status of 4Bit Forge’s **core GPTQ engine**, centered around:
 
-* A compact **qmeta4** format for groupwise quantization metadata.
-* Fast CUDA kernels to build / refine qmeta from weights.
-* A reference **GPTQ solver** that consumes qmeta + Hessian inverse and emits quantized weights.
+  * A compact **qmeta4** format for groupwise quantization metadata.
+  * Fast CUDA kernels to build / refine qmeta from weights.
+  * A GPTQ **solver** that consumes qmeta + Hessian inverse and emits quantized weights, while staying mathematically faithful to the original GPTQ algorithm.
 
-Higher-level pieces (checkpoint I/O, calibration / Hessian builders, MoE orchestration, runtime kernels) are explicitly in scope **for the overall project**, but not implemented in this repo yet.
+Higher-level pieces (checkpoint I/O, calibration / Hessian builders, MoE orchestration, runtime kernels) are explicitly in scope for the *project*, but not implemented in this repo yet.
 
----
+-----
 
-## 0. High-Level Overview
+## 0\. High-Level Overview
 
 ### 0.1 Goals
 
-4Bit Forge aims to be a **minimal, composable GPTQ engine** that can be plugged into a larger quantization stack (e.g. MoE-Quant-style pipeline):
+4Bit Forge aims to be a **minimal, composable GPTQ engine** that can be plugged into a larger quantization stack (MoE-Quant, custom GPTQ tools, vLLM loaders, etc.):
 
-* Efficient **groupwise metadata** (scale, zero-point, flags) encoded as 4 bytes per group (**qmeta4**).
-* **CUDA-accelerated grid search** to choose good per-group scales (ABSMAX or MSE/Lᵖ).
-* A **row-wise GPTQ solver** that:
+  * Efficient **groupwise metadata** (scale, zero-point, flags) encoded as 4 bytes per group (**qmeta4**).
 
-  * Takes a single linear weight matrix and its inverse Hessian (or factor).
-  * Quantizes weights groupwise using qmeta4.
-  * Propagates quantization error using the Hessian inverse (standard GPTQ logic).
+  * **CUDA-accelerated grid search** to choose per-group scales (ABSMAX or MSE / $L^p$).
+
+  * A **row-wise GPTQ solver** that:
+
+      * Takes a single linear weight matrix and its inverse Hessian (or factor).
+      * Quantizes weights *groupwise* using qmeta4.
+      * Propagates quantization error using the Hessian inverse (same logic as GPTQ).
 
 Everything else (which model this layer belongs to, where Hessians come from, how you pack INT4 for matmuls) is handled by outer tooling.
 
@@ -34,89 +40,101 @@ Everything else (which model this layer belongs to, where Hessians come from, ho
 
 Core functionality:
 
-* [x] **qmeta4 binary format** (C++ + Torch-side encode/decode).
-* [x] **Range-based group meta builder** (CUDA + CPU reference).
-* [x] **MSE / Lᵖ grid-search refinement** (CUDA + CPU reference).
-* [x] **Python GPTQ API**:
+  * ✅ **qmeta4 binary format** (C++ + Torch-side encode/decode).
 
-  * [x] `GPTQ.build_quant_grid(...)` → qmeta4 from raw weights.
-  * [x] `GPTQ.solver(...)` → GPTQ quantization given `H⁻¹` + qmeta4.
-* [x] Support for fp32 / fp16 / bf16 / fp8 (E4M3) input weights in CUDA path.
-* [ ] Hessian / calibration utilities (`update(input)`, `quantization_pre_step()`).
-* [ ] MoE-specific helpers (expert routing, per-expert Hessians).
-* [ ] Checkpoint streaming I/O helpers (safetensors shards, etc.).
-* [ ] INT4 packing and W4A16 matmul runtime kernels.
-* [ ] True single-GPU streaming quantization (layer-wise weight/activation streaming).
+  * ✅ **Range-based group meta builder** (CUDA + CPU reference).
 
-Design-wise, the core is **“streaming-ready”** and MoE-compatible: we enforce shapes / contracts that can be fed by a streaming calibration stack later, but v2.4 itself is an **offline GPTQ kernel core**.
+  * ✅ **MSE / $L^p$ grid-search refinement** (CUDA + CPU reference).
 
-### 0.3 “Core, Not Framework” / Non-Goals Right Now
+  * ✅ **Python GPTQ API:**
+
+      * `GPTQ.build_quant_grid(...)` → qmeta4 from raw weights.
+      * `GPTQ.solver(...)` → GPTQ quantization given $H^{-1}$ + qmeta4 (PyTorch reference).
+
+  * ✅ Support for fp32 / fp16 / bf16 / fp8(E4M3) input weights in CUDA path.
+
+  * ⬜ Hessian / calibration utilities (`update(input)`, `quantization_pre_step()`).
+
+  * ⬜ MoE-specific helpers (expert routing, per-expert Hessians).
+
+  * ⬜ Checkpoint streaming I/O helpers (safetensors shards, etc.).
+
+  * ⬜ INT4 packing and W4A16 matmul runtime kernels.
+
+  * ⬜ Fused CUDA GPTQ solver kernel (Phase-2).
+
+  * ⬜ Potential Hessian-/group-aware refinements that leverage qmeta4 and log2 Q8.8 more deeply (Phase-3).
+
+Design-wise, the core is **“streaming-ready”** and MoE-compatible: we enforce shapes/contracts that fit a streaming calibration stack later, but v2.5 itself is an **offline GPTQ kernel core**.
+
+### 0.3 Non-Goals (for this repo)
 
 4Bit Forge core does **not**:
 
-* Load full LLM checkpoints (no HF/vLLM loader).
-* Run end-to-end calibration or accumulate Hessians from activations.
-* Implement MoE routing / expert-parallel orchestration.
-* Pack INT4 or implement matmul kernels.
-* Implement a full quantization CLI or training pipeline.
+  * Load full LLM checkpoints (no HF/vLLM loader).
+  * Run end-to-end calibration or accumulate Hessians from activations.
+  * Implement MoE routing / expert-parallel orchestration.
+  * Pack INT4 or implement matmul kernels.
+  * Implement a full quantization CLI or training pipeline.
 
-It is designed to be plugged into a larger stack (MoE-Quant, custom GPTQ tools, vLLM wrappers, etc.).
+It is designed to be plugged into a larger stack.
 
----
+-----
 
-## 1. Design Principles
+## 1\. Design Principles
 
-1. **Core, not framework (for now)**
+1.  **Core, not framework**
 
-   * This repo does *not* manage full models or distributed setups.
-   * It assumes you (or an upstream library) can:
+    The repo assumes you (or an upstream library) can:
 
-     * Load a linear layer’s weights.
-     * Provide its inverse Hessian (or equivalent).
-   * 4Bit Forge then provides the **fast qmeta builder + GPTQ solve** for that layer.
+      * Load a linear layer’s weights.
+      * Provide its inverse Hessian (or equivalent).
 
-2. **MoE-Quant-aligned architecture**
-   Conceptually compatible with MoE-Quant’s split:
+    4Bit Forge then provides the **fast qmeta builder + GPTQ solve** for that layer.
 
-   * Outer layer:
+2.  **MoE-Quant-aligned architecture**
 
-     * Calibration, data/expert parallelism, checkpoint plumbing.
-   * Inner engine:
+    Conceptually compatible with MoE-Quant’s split:
 
-     * Quantization grid + GPTQ loop.
+      * Outer layer: calibration, expert/data parallelism, checkpoint plumbing.
+      * Inner engine: quantization grid + GPTQ loop.
 
-   4Bit Forge sits in the **inner engine** slot.
+    4Bit Forge sits in the **inner engine** slot.
 
-3. **qmeta4-centric design**
+3.  **qmeta4-centric design**
 
-   * Instead of storing full per-element scale tensors, we store a compact 4-byte struct per **group**:
+      * Instead of storing full per-element scale tensors, we store a compact 4-byte struct per **group**:
 
-     * Q8.8 `log2(scale)`, `uint8` zero-point, and `flags`.
-   * All GPU kernels and the solver consume/produce this qmeta4 format.
-   * This makes metadata cheap to store, copy, and share between solver + runtime.
+          * Q8.8 ($\log_2(\text{scale})$), `uint8` zero-point, and flags.
 
-4. **GPU-first, CPU-parity**
+      * All GPU kernels and the solver consume/produce this qmeta4 format.
 
-   * CUDA kernels implement the fast path:
+      * This makes metadata cheap to store, copy, and share between solver + runtime.
 
-     * Warp-level butterfly reductions.
-     * Vectorized loads.
-     * Constant memory for candidate grids during MSE search.
-   * CPU reference code mirrors semantics for correctness / parity tests.
+4.  **GPU-first, CPU-parity**
 
-5. **Layer-local GPTQ**
+      * CUDA kernels implement the fast path:
 
-   * GPTQ is **per linear layer**:
+          * Warp-level butterfly reductions.
+          * Vectorized loads.
+          * Constant memory for candidate grids during MSE search.
 
-     * `weight ∈ ℝ^{C×R}` (transposed).
-     * `hessian_inv ∈ ℝ^{C×C}` for that linear.
-   * No assumptions about global model structure or specific transformer architecture.
+      * CPU reference code mirrors semantics for correctness / parity tests.
 
----
+5.  **Layer-local GPTQ**
 
-## 2. Repo Layout (Core)
+      * GPTQ is **per linear layer**:
 
-Expected minimal structure around the implemented core:
+          * weight $W \in \mathbb{R}^{C \times R}$ (transposed vs PyTorch).
+          * inverse Hessian $H^{-1} \in \mathbb{R}^{C \times C}$ for that input dimension.
+
+      * No assumptions about global model structure or specific transformer architecture.
+
+-----
+
+## 2\. Repo Layout (Core)
+
+Minimal structure around the implemented core:
 
 ```text
 forge/
@@ -134,51 +152,158 @@ tests/                 # (to be expanded with correctness tests)
 
 Status:
 
-* [x] `forge/gptq.py`
-* [x] `forge/cuda/quant_grid.cu`
-* [ ] Dedicated test suite mirroring all CUDA/CPU paths.
+  * ✅ `forge/gptq.py`
+  * ✅ `forge/cuda/quant_grid.cu`
+  * ⬜ Dedicated test suite mirroring all CUDA/CPU paths.
 
----
+-----
 
-## 3. QMeta4 Format
+## 3\. Original GPTQ Algorithm (Reference)
 
-### 3.1 Motivation
+The original GPTQ paper (Frantar et al.) gives Algorithm 1, “Quantize $W$ given inverse Hessian $H^{-1} = (2XX^\top + \lambda I)^{-1}$ and blocksize $B$.”
+
+We restate it here in text-friendly math.
+
+Let:
+
+  * $W \in \mathbb{R}^{d_{\text{row}} \times d_{\text{col}}}$ be the full-precision weight matrix.
+  * $H^{-1} \in \mathbb{R}^{d_{\text{col}} \times d_{\text{col}}}$ be the inverse Hessian in the *column* space.
+  * $B$ be a block size (number of columns per block).
+  * `quant(·)` be the scalar/vector quantizer (e.g. 4-bit uniform with per-column or per-group scales).
+
+Algorithm (conceptual):
+
+1.  Initialize:
+
+      * Quantized weights $Q \gets 0_{d_{\text{row}} \times d_{\text{col}}}$.
+      * Block errors $E \gets 0_{d_{\text{row}} \times B}$.
+
+2.  Optionally factor $H^{-1}$ via Cholesky (for stability).
+
+3.  For each block start index $i = 0, B, 2B, \ldots$:
+
+      * For each column $j = i, \ldots, i + B - 1$:
+
+        1.  **Quantize column $j$:**
+
+            $$Q_{:,j} \gets \text{quant}(W_{:,j})$$
+
+        2.  **Compute quantization error scaled by Hessian diagonal:**
+
+            $$E_{:, j-i} \gets \frac{W_{:,j} - Q_{:,j}}{(H^{-1})_{jj}}$$
+
+        3.  **Update the remaining columns *within the block*:**
+
+            $$W_{:, j+1:(i+B)} \gets W_{:, j+1:(i+B)} - E_{:, j-i} \cdot H^{-1}_{j, j+1:(i+B)}$$
+
+      * After finishing columns in the block, **update all later columns**:
+
+        $$W_{:, (i+B):} \gets W_{:, (i+B):} - E \cdot H^{-1}_{i:(i+B), (i+B):}$$
+
+Intuition:
+
+  * Quantizing column $j$ produces an error vector $e_j = W_{:,j} - Q_{:,j}$.
+  * GPTQ uses the inverse Hessian to push this error into the remaining columns so that the *overall* loss in the local quadratic approximation is minimized.
+
+-----
+
+## 4\. How MoE-Quant Implements GPTQ
+
+MoE-Quant follows the same math but uses slightly different shapes / naming:
+
+  * They work with **transposed weights**:
+
+      * `weight` has shape `(C, R)` where $C = d_{\text{col}}$ (input dim) and $R = d_{\text{row}}$ (output dim).
+
+  * The Hessian inverse `hessian_inv` has shape `(C, C)` — same dimension as the first axis of `weight`.
+
+So in MoE-Quant:
+
+  * Each "GPTQ coordinate" is a row index $j \in \{0, \ldots, C-1\}$.
+  * Each row vector `weight[j]` plays the role of a column $W_{:,j}$ in the original paper.
+
+### 4.1 Quantization step (`quantize_error_triton`)
+
+For each row $j$:
+
+  * Inputs:
+
+      * `weight[j]` (shape `(R,)`).
+      * `scale[j]`, `qzero[j]` (shape `(R,)`), already expanded from groupwise scales.
+      * `maxq`.
+
+  * Operations:
+
+      * Quantize elementwise:
+
+        $$q_{j,r} = \text{clip}\Big(\text{round}\big(\frac{w_{j,r}}{s_{j,r}} + z_{j,r}\big), 0, \text{maxq}\Big)$$
+
+      * Dequantize:
+
+        $$\hat{w}_{j,r} = (q_{j,r} - z_{j,r}) \cdot s_{j,r}$$
+
+      * Error vector:
+
+        $$e_j = \hat{w}_j - w_j$$
+
+### 4.2 Error propagation (`addvv_triton` + `addmm_`)
+
+Given `Hinv`:
+
+  * For rows within the current block $[i_1, i_2)$:
+
+    $$W_{r,:} \leftarrow W_{r,:} + H^{-1}_{j,r} \cdot e_j \quad\text{for } r \in (j, i_2)$$
+
+  * For rows outside the block $r \ge i_2$, they use a batched matmul:
+
+    $$W_{i_2:, :} \leftarrow W_{i_2:, :} - (H^{-1}_{i_1:i_2, i_2:})^\top \cdot E_{\text{block}}$$
+
+This is the same **outer-product update** as Algorithm 1, just with:
+
+  * transposed weights `(C, R)` instead of $(d_{\text{row}}, d_{\text{col}})$, and
+  * a blockwise implementation for efficiency.
+
+-----
+
+## 5\. 4Bit Forge QMeta4 Format
+
+### 5.1 Motivation
 
 Typical GPTQ pipelines (incl. MoE-Quant) often store:
 
-* `scale: [..., C]` or `[..., G]` as float16/float32.
-* `qzero: [..., C]` or `[..., G]` as float/ints.
+  * `scale: (C, R)` as fp16/fp32,
+  * `qzero: (C, R)` as fp16/fp32/int.
 
 For big layers, this is:
 
-* Large in memory.
-* Expensive to move across device boundaries.
-* Awkward to reuse between solver + runtime (different layouts / lifecycles).
+  * Large in memory,
+  * Expensive to move across device boundaries,
+  * Awkward to reuse between solver + runtime.
 
 4Bit Forge collapses groupwise metadata into a **4-byte struct** per group, making it:
 
-* Smaller to store and move (huge reduction in bandwidth).
-* Naturally shared across:
+  * Much smaller to store and move,
 
-  * GPTQ solver,
-  * W4 matmul kernels,
-  * On-disk representation.
+  * Naturally shared across:
+
+      * GPTQ solver,
+      * W4 matmul kernels,
+      * On-disk representation.
 
 Trade-offs:
 
-* **Pros:**
+  * Pros:
 
-  * ~128× less metadata per element (for group size 128).
-  * Fixed-width, GPU-friendly struct.
-  * Shared binary layout C++ ↔ PyTorch.
-* **Cons:**
+      * For group size $G = 128$, metadata is $\approx 128\times$ smaller per element vs per-element scales.
+      * Fixed-width, GPU-friendly struct.
+      * Shared binary layout C++ ↔ PyTorch.
 
-  * Q8.8 fixed precision for `log2(scale)`.
-  * `qzero` limited to `uint8` (0..255).
+  * Cons:
 
-This is fine for 4–8 bit quant with typical group sizes (G=128).
+      * Q8.8 fixed precision for $\log_2(\text{scale})$.
+      * `qzero` limited to 0…255.
 
-### 3.2 Binary Layout (C++)
+### 5.2 Binary Layout
 
 ```cpp
 struct QMetaPacked {
@@ -188,147 +313,91 @@ struct QMetaPacked {
 };
 ```
 
-* `log2_scale_fp`
+**Encoding:**
 
-  * Represents `log2(scale)` multiplied by 256 and rounded.
-  * Stored as signed int16 → ~±128 in log2 units.
+Let $s > 0$ be the floating-point scale.
 
-* `qzero`
+1.  Compute $\ell = \log_2(s)$.
 
-  * `uint8` zero-point.
-  * For symmetric quant, typically `(maxq + 1)/2`.
+2.  Fixed-point value:
 
-* `flags`
+    $$q = \text{round}( \ell \cdot 256 )$$
 
-  * Bit 0: `1` if symmetric quantization was requested.
-  * Other bits reserved (e.g. per-group overrides, “disabled group”, etc.).
+3.  Store:
 
-In CUDA, `qmeta_bytes` is a `torch::Tensor` of shape `[G_total, 4]` with dtype `uint8`, interpreted as an array of `QMetaPacked`.
+      * `log2_scale_fp = (int16) q`.
+      * `qzero` = rounded/clamped zero-point.
+      * `flags` = bitfield.
 
-### 3.3 Python View & Encode/Decode
+**Decoding:**
 
-Python exposes qmeta as:
+Given `log2_scale_fp = q`:
 
-* Flat: `qmeta_flat: (G_total, 4) uint8`.
-* Reshaped: `qmeta: (C, num_groups, 4) uint8`.
+$$\ell = \frac{q}{256}, \qquad s = 2^{\ell}$$
 
-Encoding (CPU reference):
+The relative quantization error on `scale` from this encoding is on the order of $\approx 10^{-3}$, negligible compared to 4-bit quantization noise.
 
-```python
-eps = 1e-12
-s = torch.clamp(scale_g, min=eps)               # (G,)
-log2_fp = torch.log2(s)                         # float32
-log2_q88 = torch.round(log2_fp * 256.0).to(torch.int16)
-
-lo = (log2_q88 & 0xFF).to(torch.uint8)
-hi = ((log2_q88 >> 8) & 0xFF).to(torch.uint8)
-
-qzero_u8 = qzero_g.round().clamp(0, 255).to(torch.uint8)
-
-qmeta = torch.empty(G, 4, dtype=torch.uint8, device=device)
-qmeta[:, 0] = lo
-qmeta[:, 1] = hi
-qmeta[:, 2] = qzero_u8
-qmeta[:, 3] = 0  # flags (set by CUDA path if needed)
-```
-
-Decoding (used in solver):
-
-```python
-lo = qmeta_bytes[:, 0].to(torch.int16)
-hi = qmeta_bytes[:, 1].to(torch.int16)
-log2_q88 = lo | (hi << 8)
-log2_fp = log2_q88.to(torch.float32) / 256.0
-scale = torch.exp2(log2_fp)                    # (G,)
-
-qzero = qmeta_bytes[:, 2].to(torch.float32)    # (G,)
-```
-
-CPU + CUDA both follow the same semantics.
-
-### 3.4 Shape Conventions
+### 5.3 Shape Conventions
 
 Let:
 
-* `C = out_features` (rows of weight).
-* `R = in_features` (cols of weight).
-* `group_size` (typically a multiple of 32).
-* `num_groups = ceil(R / group_size)`.
+  * $C =$ number of GPTQ coordinates (input dim),
+  * $R =$ number of outputs (fan-out),
+  * `group_size` divides $R$,
+  * `num_groups` = $\lceil R / \text{group_size} \rceil$.
 
-Then:
+Then we use reshapes:
 
-* Weight into grid builder: `weight: (C, R)` → reshaped to:
+  * Weight into grid builder:
 
-  ```text
-  W_pad     : (C, padded_R)
-  W_groups  : (C, num_groups, group_size)
-  x_groups  : (C * num_groups, group_size)  # flattened for CUDA
-  ```
+      * `weight`: `(C, R)`.
 
-* qmeta returned as:
+      * Pad to `padded_R` if needed.
 
-  ```text
-  qmeta_flat: (C * num_groups, 4)    # uint8
-  qmeta     : (C, num_groups, 4)
-  ```
+      * Reshape to groups:
 
----
+        ```text
+        W_groups  : (C, num_groups, group_size)
+        x_groups  : (C * num_groups, group_size)   # flattened for CUDA
+        ```
 
-## 4. CUDA Quant Grid Kernels (`quant_grid.cu`)
+  * qmeta returned as:
 
-### 4.1 Common Utilities
+    ```text
+    qmeta_flat: (C * num_groups, 4)  # uint8
+    qmeta     : (C, num_groups, 4)
+    ```
 
-Inspired by PackBoost-style kernels.
+Each $(j, g)$ pair (row $j$, group $g$) has one `QMetaPacked` entry.
 
-#### Warp Reductions
+-----
 
-```cpp
-template <typename T>
-__device__ __forceinline__ T butterflyReduceMin(T v) { ... }
+## 6\. CUDA Quant Grid Kernels (`quant_grid.cu`)
 
-template <typename T>
-__device__ __forceinline__ T butterflyReduceMax(T v) { ... }
-```
+### 6.1 Shared Utilities
 
-#### Type → float conversion
+**Warp reductions:**
 
-```cpp
-template <typename T>
-__device__ __forceinline__ float val_to_float(T val) {
-    return static_cast<float>(val);
-}
+  * `butterflyReduceMin`, `butterflyReduceMax`, `butterflyReduceSum` implement warp-level reductions using `__shfl_down_sync`.
 
-// FP8 specialization
-template <>
-__device__ __forceinline__ float val_to_float<uint8_t>(uint8_t val) {
-    __nv_fp8_e4m3 fp8_val = *reinterpret_cast<__nv_fp8_e4m3*>(&val);
-    return float(fp8_val);
-}
-```
+**Type → float conversion:**
 
-#### Q8.8 helpers
+  * Generic template `val_to_float(T)` casting to float.
 
-```cpp
-__device__ __forceinline__ int16_t encode_scale_q88(float s) {
-    float log2s = fast_log2(fmaxf(s, 1e-20f));
-    float fp    = log2s * 256.0f;
-    fp = fminf(fmaxf(fp, -32768.0f), 32767.0f);
-    return static_cast<int16_t>(lrintf(fp));
-}
+  * Specialization for FP8 E4M3 stored as `uint8_t`:
 
-__device__ __forceinline__ float decode_scale_q88(int16_t q) {
-    float fp = static_cast<float>(q) * (1.0f / 256.0f);
-    return fast_exp2(fp);
-}
-```
+      * Reinterpret as `__nv_fp8_e4m3` and convert to float.
 
-#### Candidate grid in constant memory
+**Q8.8 helpers:**
 
-```cpp
-__constant__ float c_p[1024];  // up to 1024 shrink factors
-```
+  * `encode_scale_q88(float s)`: encodes $\log_2(s)$ into `int16`.
+  * `decode_scale_q88(int16_t q)`: decodes back.
 
-### 4.2 Range-Based Meta Builder
+**Candidate grid:**
+
+  * `__constant__ float c_p[1024];` for up to 1024 candidate shrink factors used in MSE/ $L^p$ search.
+
+### 6.2 Range-Based Meta Builder
 
 Host wrapper:
 
@@ -342,27 +411,44 @@ std::tuple<torch::Tensor, torch::Tensor> build_group_meta_packed_cuda(
 
 Constraints:
 
-* `x_groups`:
-
-  * 2D CUDA tensor, `[G_total, group_size]`.
+  * `x_groups`: `[G_total, group_size]`, CUDA, contiguous.
   * `group_size % 32 == 0`.
-  * Dtype: `float32`, `float16`, `bfloat16`, or FP8 (E4M3) via `uint8_t`.
+  * Dtype: float32/float16/bfloat16 or fp8(E4M3) (via `uint8_t`).
 
-Kernel: `build_group_meta_optimized<scalar_t>`:
+Kernel `build_group_meta_optimized<scalar_t>`:
 
-* One block per group.
-* Steps per group:
+For each group $g$:
 
-  1. Compute `(xmin, xmax)` with vectorized loads.
-  2. Compute base `scale` + `qzero` (symmetric or asymmetric).
-  3. Encode into `QMetaPacked` with `encode_scale_q88`.
+1.  Compute:
+
+    $$x_{\min} = \min_k x_{g,k}, \quad x_{\max} = \max_k x_{g,k}$$
+
+2.  Compute base `scale` and `qzero`:
+
+      * **Symmetric:**
+
+          * $a_{\max} = \max(|x_{\min}|, |x_{\max}|)$.
+          * $s = \frac{2}{\text{maxq}} a_{\max} + \varepsilon$.
+          * $q_0 = \frac{\text{maxq} + 1}{2}$.
+
+      * **Asymmetric:**
+
+          * $s = \frac{x_{\max} - x_{\min}}{\text{maxq}} + \varepsilon$.
+          * $q = -x_{\min} / s$.
+          * Clamp $q$ to $[0, \text{maxq}]$ and round to get $q_0$.
+
+3.  Encode:
+
+      * `log2_scale_fp = encode_scale_q88(s)`,
+      * `qzero = (uint8) round(q_0)`,
+      * `flags` bit 0 = `symmetric`.
 
 Outputs:
 
-* `qmeta_tensor: [G_total, 4] uint8`.
-* `maxq: scalar` = `(1 << bit_width) - 1`.
+  * `qmeta_tensor: (G_total, 4)` uint8.
+  * `maxq: scalar` with value $2^{\text{bits}} - 1$.
 
-### 4.3 MSE / Lᵖ Scale Refinement
+### 6.3 MSE / $L^p$ Scale Refinement
 
 Host wrapper:
 
@@ -376,35 +462,51 @@ torch::Tensor mse_scale_groups_packed_cuda(
 );
 ```
 
-Constraints:
+  * `p` is a grid of shrink factors, e.g. `torch.linspace(1-quant_max_shrink, 1+quant_max_shrink, quant_n_grid)`.
 
-* `x_groups` same as above.
-* `p` length ≤ 1024 → loaded into `__constant__ c_p`.
+Kernel `mse_search_kernel_nosmem<scalar_t, IS_L2_NORM>`:
 
-Kernel: `mse_search_kernel_nosmem<scalar_t, IS_L2_NORM>`:
+For each group $g$:
 
-* Launch:
+1.  Decode base scale $s_{\text{base}}$ from qmeta:
 
-  * One warp (32 threads) per group.
-  * No shared memory (faster than SMEM variant in benchmarks).
-* Per group:
+    $$s_{\text{base}} = \text{decode_scale_q88}(\text{log2_scale_fp})$$
 
-  1. Decode base `scale` from qmeta.
-  2. For each candidate shrink factor `p_k`:
+2.  For each candidate factor $p_k$:
 
-     * Compute `s_k = base_s * p_k`.
-     * Quantize + dequantize the group.
-     * Accumulate Lᵖ loss (L² or general Lᵖ via log/exp).
-  3. Pick best candidate; write updated `log2_scale_fp` into qmeta.
+      * Test scale $s_k = s_{\text{base}} \cdot p_k$.
 
-Python picks `IS_L2_NORM` when `norm == 2.0`.
+      * For each element $x_{g,k}$ in the group:
 
----
+          * Quantize:
 
-## 5. Python GPTQ Core (`forge/gptq.py`)
+            $$q = \text{round}\Big(\frac{x}{s_k} + q_0\Big), \quad q \in [0, \text{maxq}]$$
 
-### 5.1 `GPTQ.build_quant_grid(...)`
+          * Dequantize:
 
+            $$\hat{x} = (q - q_0) s_k$$
+
+          * Error $e = \hat{x} - x$.
+
+      * Loss per candidate:
+
+          * If `IS_L2_NORM` (i.e. $p = 2$):
+
+            $$L_k = \sum e^2$$
+
+          * Else general $L^p$ via:
+
+            $$L_k = \sum |e|^p$$
+
+3.  Pick the candidate $s_k$ with minimal loss and update `log2_scale_fp` in qmeta.
+
+This search lives entirely in registers with warp-level reductions and constant-memory lookups for the grid `p`.
+
+-----
+
+## 7\. Python GPTQ Core (`forge/gptq.py`)
+
+### 7.1 `GPTQ.build_quant_grid(...)`
 ```python
 @torch.no_grad()
 def build_quant_grid(
@@ -419,41 +521,31 @@ def build_quant_grid(
     quant_norm: float = 2.4,
 ) -> tuple[torch.Tensor, torch.Tensor, int]:
 ```
+Steps:
 
-Behaviour:
+1.  Validate shapes and params.
 
-1. Validate shapes & params (`ndim == 2`, `group_size % 32 == 0`, etc).
-2. Ensure contiguity:
+2.  Compute padding and `num_groups`.
 
-   * CUDA: keep dtype, `.contiguous()`.
-   * CPU: cast to float32, `.contiguous()`.
-3. Compute padding & groups.
-4. Reshape to `[G_total, group_size]`.
-5. Dispatch:
+3.  Reshape to `x_groups: (C * num_groups, group_size)`.
 
-   * CUDA path → `build_group_meta_packed_cuda` (+ `mse_scale_groups_packed_cuda` for `mode == "mse"`).
-   * CPU path → `_find_quantization_meta_groups`, `_mse_scale_groups`, `_encode_qmeta_groups`.
-6. Reshape qmeta to `(C, num_groups, 4)` and return `(qmeta, maxq, pad)`.
+4.  If CUDA:
 
-### 5.2 `_build_quant_grid_gpu(...)`
+      * Call `build_group_meta_packed_cuda`.
+      * If `mode == "mse"`, build candidate grid `p` on GPU and call `mse_scale_groups_packed_cuda`.
 
-Internal helper that:
+5.  If CPU:
 
-* Asserts `x_groups.is_cuda`.
-* Calls CUDA kernels.
-* Builds candidate shrinkage grid `p` for MSE mode on GPU.
+      * Use reference implementations:
 
-### 5.3 `_build_quant_grid_cpu(...)`
+          * `_find_quantization_meta_groups(...)`,
+          * `_mse_scale_groups(...)`,
+          * `_encode_qmeta_groups(...)`.
 
-Internal helper that:
+6.  Reshape qmeta to `(C, num_groups, 4)` and return `(qmeta, maxq, pad)`.
 
-* Computes base scales / zeros with range-based stats.
-* Optionally refines via naive CPU MSE search.
-* Packs into qmeta4.
-
-### 5.4 `GPTQ.solver(...)` (Current Implementation)
-
-```python
+### 7.2 Reference Solver: `GPTQ.solver(...)`
+```
 @torch.no_grad()
 def solver(
     self,
@@ -470,460 +562,647 @@ def solver(
       qweight: (C, R) uint8 quantized codes (no bit-packing).
     """
 ```
+Let:
 
-Algorithm (row-wise GPTQ):
+  * $C =$ first dimension of `weight` (GPTQ coordinate dimension).
+  * $R =$ second dimension.
+  * $G =$ `num_groups`.
 
-1. Setup working copies:
+Algorithm (row-wise GPTQ, groupwise quantization):
 
-   * `W = weight.to(torch.float32).contiguous()`.
-   * `Hinv = hessian_inv.to(torch.float32).contiguous()`.
-   * `qweight = torch.empty_like(weight, dtype=torch.uint8)`.
+1.  Convert:
 
-2. Compute `num_groups` and `padded_R` from `qmeta` and `group_size`.
+      * `W = weight.to(float32)`.
+      * `Hinv = hessian_inv.to(float32)`.
+      * Allocate `qweight` as `(C, R)` uint8.
 
-3. Loop over rows `j`:
+2.  For each row $j = 0 \ldots C-1$:
 
-   * Take `h_tail = Hinv[j, j+1:]` if `j+1 < C`, else None.
+    1.  Extract the row’s group metadata:
+    ```
+      qmeta_row = qmeta[j]              # (G, 4)
+          scale_row, qzero_row = decode_qmeta_groups(qmeta_row)  # (G,), (G,)
+    ```
+    2.  For each group index $g$:
 
-   * Decode all group meta for row `j` once:
+          * Column range:
 
-     ```python
-     qmeta_row = qmeta[j]  # (G, 4)
-     scale_row, qzero_row = self._decode_qmeta_groups(qmeta_row)
-     ```
+            $$\text{start} = g \cdot \text{group_size}, \quad \text{end} = \min(\text{start} + \text{group_size}, R)$$
 
-   * For each group `g`:
+          * Group scale $s_{j,g}$, zero-point $q_{0,j,g}$.
 
-     * Compute `[start, end)` indices.
+          * Slice:
 
-     * Apply per-group quantization:
+            $$x = W[j, \text{start}:\text{end}]$$
 
-       ```python
-       s  = scale_row[g]
-       q0 = qzero_row[g]
+          * Quantize:
 
-       x = W[j, start:end]
-       q = torch.round(x / s + q0)
-       q.clamp_(0.0, maxq_val)
-       y = (q - q0) * s
-       e = y - x
+            $$q = \text{clip}\Big(\text{round}\big(\frac{x}{s_{j,g}} + q_{0,j,g}\big), 0, \text{maxq}\Big)$$
 
-       W[j, start:end] = y
-       weight[j, start:end] = y.to(weight.dtype)
-       qweight[j, start:end] = q.to(torch.uint8)
-       ```
+          * Dequantize:
 
-     * Error propagation:
+            $$\hat{x} = (q - q_{0,j,g}) \cdot s_{j,g}$$
 
-       ```python
-       if h_tail is not None:
-           W[j+1:, start:end] += h_tail.unsqueeze(1) * e.unsqueeze(0)
-       ```
+          * Error:
 
-4. Return `qweight`.
+            $$e_{g} = \hat{x} - x$$
 
-This is a **reference implementation**: matches GPTQ logic, but not yet fused into a custom CUDA kernel.
+          * Write back:
+
+              * `W[j, start:end] = hat_x`,
+              * `qweight[j, start:end] = q`.
+
+    3.  Concatenate group errors into one error vector $e_j \in \mathbb{R}^{R}$.
+
+    4.  **Error propagation (row-wise GPTQ):**
+
+          * Take `h_tail = Hinv[j, j+1:]`.
+
+          * Update later rows:
+
+            $$W[j+1:, :] \mathrel{+}= h_{\text{tail}}^\top \otimes e_j$$
+
+            i.e.
+
+            $$W[r, :] \leftarrow W[r, :] + H^{-1}_{j,r} \cdot e_j \quad \text{for } r = j+1, \dots, C-1$$
+
+3.  Return `qweight`.
+
+This is the direct analogue of MoE-Quant’s Triton implementation, but using qmeta4 and explicit group loops.
+
+### 7.3 Planned CUDA Solver (Phase-2)
+
+The fused CUDA solver kernel will:
+
+  * Take as input:
+
+      * `weight (C, R)` (or a block of rows),
+      * `hessian_inv (C, C)` (or its Cholesky factor),
+      * `qmeta_bytes (C, G, 4)`,
+      * `maxq`, `group_size`, `bits`.
+
+  * For each row `j` in a block:
+
+    1.  Decode that row’s qmeta into registers:
+
+          * Precompute $s_{j,g}$, $1/s_{j,g}$, $q_{0,j,g}$ per group.
+
+    2.  Quantize that row group-wise, producing `e_j` in registers/shared memory.
+
+    3.  Use `Hinv[j, j+1:block_end]` to update the rest of the block (outer product) and a matmul to update rows outside the block — the same structure as MoE-Quant’s `gptq_loop`.
+
+The **math** is identical to the Python reference; only the implementation changes.
+
+-----
+
+## 8\. Why 4Bit Forge’s Solver Is “True” to GPTQ
+
+We want 4Bit Forge to produce the **same end result** as Algorithm 1, while leveraging:
+
+  * groups,
+  * qmeta4 packing,
+  * log2 Q8.8 storage.
+
+### 8.1 Transpose and axis alignment
+
+Original GPTQ:
+
+  * $W \in \mathbb{R}^{d_{\text{row}} \times d_{\text{col}}}$.
+  * $H^{-1} \in \mathbb{R}^{d_{\text{col}} \times d_{\text{col}}}$.
+  * Loop over *columns* $j \in \{0, \ldots, d_{\text{col}}-1\}$.
+
+4Bit Forge / MoE-Quant:
+
+  * Work with `weight_t` = $W^\top$ of shape `(C, R)` where $C = d_{\text{col}}$, $R = d_{\text{row}}$.
+  * Hessian inverse `Hinv` has shape `(C, C)`.
+  * Loop over **rows** `j` of `(C, R)`.
+
+Mathematically this is just changing coordinates:
+
+  * Column $j$ of the original $W$ is row $j$ of `weight_t`.
+
+  * The GPTQ update:
+
+    $$W_{:,k} \leftarrow W_{:,k} - e_j \cdot H^{-1}_{j,k}$$
+
+    becomes:
+
+    $$W^\top_{k,:} \leftarrow W^\top_{k,:} + H^{-1}_{j,k} \cdot e_j$$
+
+    which is exactly what our row-wise update does.
+
+So we are still implementing Algorithm 1, just on $W^\top$ instead of $W$.
+
+### 8.2 Groupwise quantization vs per-element scales
+
+In Algorithm 1, the quantizer `quant(·)` for column $j$ is abstract; it could be:
+
+  * per-element scales,
+  * per-column scale,
+  * or per-group scale.
+
+MoE-Quant uses **groupwise** scales but stores them expanded:
+
+  * For each row `j` and group index `g`, they compute a scalar $s_{j,g}$ and zero-point $q_{0,j,g}$.
+  * Then they broadcast these to `scale[j, :]` and `qzero[j, :]` so that the quantizer still acts **groupwise**, but the data structure is `(C, R)`.
+
+4Bit Forge keeps the *same quantizer*, but:
+
+  * Stores $s_{j,g}$ and $q_{0,j,g}$ directly as qmeta4,
+  * Decodes them on the fly inside the solver kernel,
+  * Applies them over the same contiguous ranges of columns (`group_size`).
+
+So, mathematically, the quantization step:
+
+$$Q_{:,j} = \text{quant}(W_{:,j})$$
+
+is identical between MoE-Quant and 4Bit Forge — only the **representation** of the scales differs.
+
+### 8.3 Q8.8 log2 storage and correctness
+
+QMeta4 stores:
+
+  * $\tilde{\ell}_{j,g} \approx \log_2(s_{j,g}) \cdot 256$ in `int16`,
+  * decodes back as $\hat{s}_{j,g} = 2^{\tilde{\ell}_{j,g}/256}$.
+
+This is a **reparameterization** of `scale`, not a change in the optimization problem. The only difference is a tiny relative error between the float scale used by MoE-Quant and the decoded scale used by Forge:
+
+$$\frac{|\hat{s}_{j,g} - s_{j,g}|}{s_{j,g}} \ll 1$$
+
+For typical ranges, this error is on the order of $10^{-3}$, which is dwarfed by 4-bit quantization noise. So:
+
+  * The objective (minimize local quadratic loss using GPTQ) is unchanged.
+  * The solver just uses a very slightly perturbed scale (well within numerical noise).
+
+### 8.4 Blocked updates and MoE-Quant parity
+
+Algorithm 1 uses blocksize $B$ and splits updates into:
+
+  * *Within-block* updates during the inner loop,
+  * *Outer-block* updates at the block end.
+
+MoE-Quant copies this structure; 4Bit Forge’s planned Phase-2 solver does the same:
+
+  * We still iterate over rows $j$ inside blocks,
+  * Quantize each row,
+  * Accumulate block errors,
+  * Use a matmul to update rows outside the block.
+
+As long as we:
+
+  * Use the same block ordering,
+  * Use the same Hessian inverse $H^{-1}$,
+  * And define the same quantizer per row/group,
+
+we are mathematically implementing Algorithm 1, just with more efficient metadata handling.
+
+-----
+
+## 9\. Mapping to MoE-Quant Components
+
+Quick map from MoE-Quant to 4Bit Forge:
+
+| MoE-Quant Component                   | 4Bit Forge Component                            | Status |
+| ------------------------------------- | ----------------------------------------------- | ------ |
+| `GPTQ.update(input)`                  | External Hessian builder                        | ⬜      |
+| `quantization_pre_step()`             | External regularization + inversion             | ⬜      |
+| `quant_utils.get_quantization_grid()` | `GPTQ.build_quant_grid(...)` → `(qmeta4, maxq)` | ✅      |
+| Triton `mse_scale(...)`               | `mse_scale_groups_packed_cuda(...)`             | ✅      |
+| `gptq_loop` (Triton)                  | `GPTQ.solver(...)` (PyTorch ref) / CUDA solver  | ✅ / ⬜  |
+
+So 4Bit Forge drops into the “inner engine” of MoE-Quant with minimal glue.
+
+-----
+
+## 10\. Roadmap (Phases 2 & 3)
+
+### Phase-2: Fused CUDA GPTQ Solver
+
+Goals:
+
+  * Implement a CUDA kernel that mirrors MoE-Quant’s `gptq_loop` but:
+
+      * Consumes qmeta4 instead of `(C, R)` scale/qzero grids.
+      * Decodes log2-Q8.8 scales into registers per row/group.
+      * Uses warp/block-level tiling on `Hinv` and `W`.
+
+  * Add a `use_cuda_solver=True` path in `GPTQ.solver(...)`.
+
+Expected wins:
+
+  * Less bandwidth (we never load giant `scale` / `qzero` tensors).
+  * Better cache locality in the solver (group metadata is tiny; all hot data is `W` + `Hinv`).
+  * Clean CUDA Graph state: only `qmeta4`, `Hinv`, and `W` need to live in the graph.
+
+### Phase-3: Deeper qmeta4 / group-aware tricks (optional)
+
+This phase is **exploratory** and can be skipped without breaking correctness:
+
+  * Potential lines:
+
+    1.  **Group-aware scheduling:**
+
+          * Arrange the GPTQ coordinate order so that groups with similar scales or Hessian structure are processed together.
+          * Could help with numerical stability and cache reuse.
+
+    2.  **Hessian structure vs groups:**
+
+          * Exploit block structure in $H^{-1}$ (if present) that aligns with quantization groups.
+          * E.g., approximate off-group couplings, or compress $H^{-1}$ in a way that plays nicely with qmeta4.
+
+    3.  **Preconditioning in log-scale space:**
+
+          * Since qmeta4 stores $\log_2(s)$, one could do tiny local adjustments in log space (e.g. bias per channel) without touching the kernel interface.
+
+Crucially, all Phase-3 ideas must **keep the GPTQ objective intact** (local quadratic minimization with respect to $H^{-1}$); they’re allowed to approximate *how* we get there, not *what* we’re optimizing.
+
+-----
+
+## 11\. Integration Pattern (Dense & MoE Layers)
+
+For a dense `nn.Linear`:
+
+1.  Transpose weights:
+  ```
+    W = layer.weight.data              # (d_out, d_in)
+        W_t = W.transpose(0, 1).contiguous()  # (C = d_in, R = d_out)
+  ```
+2.  Build or load `Hinv` of shape `(C, C)`.
+
+3.  Build qmeta4:
+  ```
+  gptq = GPTQ(group_size=128, bits=4, symmetric=True)
+      qmeta, maxq, pad = gptq.build_quant_grid(
+          W_t, group_size=128, bits=4,
+          symmetric=True, mode="mse",
+          quant_max_shrink=0.2, quant_n_grid=100, quant_norm=2.4,
+      )
+  ```
+  4. Solve GPTQ:
+  ```
+  qweight_t = gptq.solver(
+        weight=W_t,
+        hessian_inv=Hinv,
+        qmeta=qmeta,
+        maxq=maxq,
+        group_size=128,
+        bits=4,
+    )
+  ```
+  5.  Transpose back for storage/runtime:
+  ```
+  qweight = qweight_t.transpose(0, 1).contiguous()  # (d_out, d_in)
+  ```
+  For MoE MLPs, repeat this per expert with expert-specific Hessians.
 
 ---
 
-## 6. Mapping to MoE-Quant (`gptq.py`, `quant_utils.py`, `gptq_loop.py`)
+## 12. 4Bit-Forge GPTQ Solver (qmeta4-First, Maximum Leverage)
 
-This section is “how current 4Bit Forge maps onto the MoE-Quant design”.
+This section describes the **target GPTQ solver design** for 4Bit-Forge that fully exploits:
 
-### 6.1 MoE-Quant Pipeline (Recap)
+* Groupwise quantization (`group_size`),
+* Packed **qmeta4** (`QMetaPacked`),
+* Log2 Q8.8 encoding of scales,
+* Warp-level primitives: **broadcast** and **butterfly reductions**.
 
-For a given layer:
+The goal is to stay **mathematically identical** to MoE-Quant’s GPTQ loop, while changing how metadata is represented, loaded, and applied.
 
-1. **Hessian accumulation**
+---
 
-   * `GPTQ.update(input)` builds `H ≈ 2/N Σ xᵀx` from activations.
+### 12.1 Core Principle — True qmeta4 Leverage
 
-2. **Pre-step**
+We treat `QMetaPacked` / qmeta4 as the **single source of truth for quantization metadata**:
 
-   * `quantization_pre_step()`:
+* We do **not** materialize `(C, R)` or `(C, G)` float `scale` / `qzero` tensors as full grids.
+* `scale`, `inv_scale`, `qzero`, and `maxq` are **decoded per group** directly in registers (or shared memory) from a 4-byte packed struct.
+* Warps cooperate to decode and reuse that metadata across the whole block.
 
-     * Regularizes H (damping etc).
-     * Handles distributed reduction.
-     * Inverts H via `linalg_utils.inv_sym` + Cholesky.
-     * Handles permutations based on `QuantizationOrder`.
+C++ struct:
 
-3. **Quant grid**
-
-   * `quant_utils.get_quantization_grid(...)`:
-
-     * Reshapes weight into `[..., G, group_size]`.
-     * Calls `find_quantization_meta(...)` for base scales/zeros.
-     * Optionally refines scales via `mse_scale(...)` (Triton).
-     * Broadcasts back to full `scale, qzero` grids `[C, R]`.
-
-4. **GPTQ solver**
-
-   * `gptq_loop.gptq_loop(...)`:
-
-     * Uses `quantize_error_triton` and `addvv_triton`.
-     * Iterates columns in blocks, quantizes, and spreads error using `H⁻¹`.
-
-### 6.2 4Bit Forge Mapping
-
-Right now 4Bit Forge takes **(W, H⁻¹)** as inputs and replaces steps (3) and (4) with a qmeta4-based implementation.
-
-| MoE-Quant Component                     | 4Bit Forge Component                                         | Status |
-| --------------------------------------- | ------------------------------------------------------------ | ------ |
-| `GPTQ.update(input)`                    | **External**: user / upstream handles H accumulation         | [ ]    |
-| `quantization_pre_step()`               | **External**: user / upstream handles H regularize + inverse | [ ]    |
-| `quant_utils.get_quantization_grid()`   | `GPTQ.build_quant_grid(...)` → `(qmeta4, maxq, pad)`         | [x]    |
-| `gptq_loop.gptq_loop(...)`              | `GPTQ.solver(...)` (PyTorch reference)                       | [x]    |
-| Triton `mse_scale(...)`                 | CUDA `mse_scale_groups_packed_cuda(...)` on qmeta4           | [x]    |
-| Triton `quantize_error_triton`, `addvv` | Planned `qmeta4` GPTQ CUDA kernel                            | [ ]    |
-
-So 4Bit Forge is **intentionally lower-level**:
-
-* Expects:
-
-  * Inverted Hessian (or factor).
-  * Chosen `group_size`, `bits`, `symmetric`, `mode`.
-* Provides:
-
-  * Fast **qmeta4 grid** (ABSmax + optional MSE search).
-  * GPTQ solver that consumes qmeta4.
-
-### 6.3 Target “Finished” GPTQ Interface
-
-Once the core is stable, the top-level GPTQ interface we’re aiming for looks roughly like:
-
-```python
-class GPTQ:
-    def __init__(
-        self,
-        group_size: int = 128,
-        bits: int = 4,
-        symmetric: bool = False,
-        quantization_scale: str = "absmax",  # or "mse"
-    ):
-        ...
-
-    @torch.no_grad()
-    def build_quant_grid(self, weight: torch.Tensor):
-        """
-        (C, R) -> qmeta_bytes (C, G, 4), maxq, pad
-        """
-
-    @torch.no_grad()
-    def solver(
-        self,
-        weight_t: torch.Tensor,       # (C, R), transposed
-        hessian_inv: torch.Tensor,    # (C, C)
-        qmeta_bytes: torch.Tensor,    # (C, G, 4)
-        maxq: torch.Tensor,
-    ) -> torch.Tensor:
-        """
-        Returns qweight (C, R) uint8.
-        """
-
-    @torch.no_grad()
-    def quantize_from_hinv(
-        self,
-        weight: torch.Tensor,         # (d_out, d_in)
-        hessian_inv: torch.Tensor,    # (d_in, d_in)
-    ):
-        """
-        Convenience wrapper:
-        - builds qmeta4
-        - runs solver
-        - returns (qweight, qmeta4, pad)
-        """
+```cpp
+struct QMetaPacked {
+    int16_t  log2_scale_fp;  // Q8.8 fixed-point log2(scale)
+    uint8_t  qzero;          // zero-point (0..255)
+    uint8_t  flags;          // bitfield; bit0 = symmetric, others reserved
+};
+static_assert(sizeof(QMetaPacked) == 4, "QMetaPacked must be 4 bytes.");
 ```
 
-On top of this, a **MoE-Quant-compatible wrapper** can implement:
+When viewed as `uint32_t`:
 
-* `update(input)`.
-* `quantization_pre_step()`.
-* `quantize(bits)`.
+* Bits [15:0]  → `log2_scale_fp` (Q8.8),
+* Bits [23:16] → `qzero` (uint8),
+* Bits [31:24] → `flags`.
 
-Without rewriting any of the core qmeta4/kernels.
+#### 12.1.1 Bandwidth Comparison (Illustrative, `group_size = 128`)
 
----
+Assume:
 
-## 7. Why qmeta4 Can Enable a Faster Solver
+* MoE-Quant-style solver loads **per-element** `scale` and `qzero` (e.g. FP16 tensors with shape `(C, R)`),
+* 4Bit-Forge solver loads **per-group** `QMetaPacked` (4 bytes per group).
 
-Right now the solver is still PyTorch-level, so most of qmeta4’s benefits are **structural**. But it’s specifically designed to make a future CUDA solver unusually strong.
+For a row `j`:
 
-### 7.1 Bandwidth & Cache Benefits
+| Layer type            | C    | R     | G (= ceil(R/128)) | Approx. MoE-Quant meta load per row (scale+qzero, fp16) | 4Bit-Forge qmeta load per row | Ratio |
+| --------------------- | ---- | ----- | ----------------- | ------------------------------------------------------- | ----------------------------- | ----- |
+| Attn Out (dense)      | 7168 | 7168  | 56                | ~14 KB                                                  | 56 × 4 B = 224 B              | 64×   |
+| Shared Expert Up/Gate | 7168 | 18432 | 144               | ~36 KB                                                  | 144 × 4 B = 576 B             | 64×   |
+| Routed Expert Up/Gate | 7168 | 2048  | 16                | ~4 KB                                                   | 16 × 4 B = 64 B               | 64×   |
+| MLA KV Up (wide)      | 512  | 32768 | 256               | ~64 KB                                                  | 256 × 4 B = 1 KB              | 64×   |
 
-For group size `G = 128`, bits = 4:
-
-* MoE-Quant style (full grids):
-
-  * `scale` + `qzero` stored per element → O(C·R) metadata.
-* 4Bit Forge qmeta4:
-
-  * 4 bytes per group → O(C·(R/G)) metadata.
-
-Per element:
-
-* ~4 bytes (e.g. FP16 scale, FP16 qzero) → ~0.03125 bytes for qmeta4.
-  That’s a **128× reduction** in metadata storage and memory traffic.
-
-With a fused CUDA solver:
-
-* One `QMetaPacked` load per group.
-* Decode to registers once.
-* Use those registers for all 128 elements in the group.
-
-Given GPTQ is heavily **memory-bound** (H⁻¹ + W already *hurt* bandwidth), making meta effectively free gets us closer to the compute limit.
-
-### 7.2 Cleaner CUDA Graph State
-
-MoE-Quant’s CUDA graph captures big `scale` / `qzero` tensors.
-
-With qmeta4:
-
-* Graph only needs to track a relatively tiny `(C, G, 4)` tensor.
-* Per-group expansion lives inside the kernel, not in the graph state.
-
-This simplifies:
-
-* CUDA graphs for GPTQ.
-* Sharing the same metadata between:
-
-  * GPTQ solve,
-  * Int4 matmuls,
-  * On-disk formats.
-
-### 7.3 Unified Metadata Across Solver + Runtime
-
-Instead of:
-
-* “Solver layout” for scales.
-* “Runtime layout” for scales.
-* “Checkpoint layout” for scales.
-
-We can aim for:
-
-* One canonical **qmeta4** representation reused everywhere:
-
-  * Solver.
-  * Runtime GEMMs.
-  * Saved checkpoints.
-
-That keeps everything consistent, and all the heavy lifting is in qmeta4-aware kernels rather than juggling formats.
+So once we push this into a CUDA solver, **metadata bandwidth becomes negligible** relative to Hessian + weight traffic.
 
 ---
 
-## 8. Integration Pattern (MoE-Quant-Style)
+### 12.2 Final Decode Pattern (CUDA, log2 Q8.8)
 
-Even though 4Bit Forge doesn’t yet provide the outer calibration pipeline, it’s designed to drop into that pattern.
+We use log2 Q8.8 to cheaply obtain both `scale` and `inv_scale` per group.
 
-### 8.1 Dense Linear Layer
+```cpp
+__constant__ float c_inv256 = 1.0f / 256.0f;
+__constant__ float c_half   = 0.5f;
 
-For a dense `nn.Linear` or equivalent:
+__device__ __forceinline__ void decode_qmeta(
+    uint32_t packed,
+    float&   scale,
+    float&   inv_scale,
+    float&   qzero_f,
+    float&   maxq_g,
+    uint8_t  global_bits  // e.g. 4
+) {
+    // Layout: [15:0] log2_scale_fp (Q8.8), [23:16] qzero, [31:24] flags
+    int16_t log2_q88 = static_cast<int16_t>(packed & 0xFFFFu);
+    uint8_t qzero_u8 = static_cast<uint8_t>((packed >> 16) & 0xFFu);
+    uint8_t flags    = static_cast<uint8_t>(packed >> 24);
 
-1. Transpose:
+    // log2(scale) = log2_q88 / 256
+    float log2_scale = __int2float_rn(log2_q88) * c_inv256;
+    scale     = __exp2f(log2_scale);
+    inv_scale = __exp2f(-log2_scale);  // cheap inverse via negative exponent
 
-   ```python
-   W = layer.weight.data        # (d_out, d_in)
-   W_t = W.transpose(0, 1)      # (C = d_in, R = d_out)
-   ```
+    // Bits-per-group (future-proof; current implementation uses global_bits)
+    uint8_t bits_g = global_bits;
+    // Reserved bits for per-group bits if needed later:
+    // if (flags & 0x02) bits_g = 3;
+    // if (flags & 0x04) bits_g = 5;
 
-2. Obtain H⁻¹:
+    int maxq_i = (1 << bits_g) - 1;
+    maxq_g = static_cast<float>(maxq_i);
 
-   ```python
-   Hinv = build_or_load_hessian_inverse(layer, ...)  # (C, C)
-   ```
+    // Symmetric override: qzero = (maxq + 1)/2
+    if (flags & 0x01) {
+        qzero_u8 = static_cast<uint8_t>((maxq_g + 1.0f) * c_half);
+    }
+    qzero_f = static_cast<float>(qzero_u8);
+}
+```
 
-3. Build qmeta4:
+No division, just integer ops + `exp2`.
 
-   ```python
-   gptq = GPTQ(group_size=128, bits=4, symmetric=True)
+---
 
-   qmeta, maxq, pad = gptq.build_quant_grid(
-       weight=W_t,
-       group_size=128,
-       bits=4,
-       symmetric=True,
-       mode="mse",           # or "absmax"
-       quant_max_shrink=0.3,
-       quant_n_grid=100,
-       quant_norm=2.4,
-   )
-   ```
+### 12.3 Per-Element Quant/Dequant (Fused)
 
-4. Solve GPTQ:
+Given `x` (fp32), and decoded `(scale, inv_scale, qzero_f, maxq_g)` for group `g`:
 
-   ```python
-   qweight_t = gptq.solver(
-       weight=W_t,
-       hessian_inv=Hinv,
-       qmeta=qmeta,
-       maxq=maxq,
-       group_size=128,
-       bits=4,
-   )  # (C, R)
-   ```
+```cpp
+float biased = x * inv_scale + qzero_f;          // x / s + q0
+int q = __float2int_rn(biased);                  // round-to-nearest-even
 
-5. Transpose back / store:
+int maxq_i = static_cast<int>(maxq_g);
+q = q < 0 ? 0 : (q > maxq_i ? maxq_i : q);       // clamp to [0, maxq]
 
-   ```python
-   qweight = qweight_t.transpose(0, 1).contiguous()  # (d_out, d_in)
-   # Save qweight + qmeta + pad as your quantized representation
-   ```
+float deq = __fmaf_rn(static_cast<float>(q), scale, -qzero_f * scale);
+// deq = q * s - q0 * s = (q - q0) * s
 
-### 8.2 MoE Experts
+float err = deq - x;                             // GPTQ error term
+```
 
-For MoE MLP experts:
+This is the same math MoE-Quant uses:
 
-* You just repeat the above **per expert**, with expert-specific H⁻¹:
+* Quant: `q = clamp(round(x / s + q0), 0, qmax)`
+* Dequant: `y = (q - q0) * s`, `e = y - x`
+
+We just exploit `inv_scale = 1/s` from the log2 representation.
+
+---
+
+### 12.4 Shared-Memory Block Decode (Per-Block Preload)
+
+We process columns in blocks `i..i_end` (block size `B = i_end - i_start`), and pre-decode all qmeta for that block into shared memory once.
+
+```cpp
+// For a block of B rows, each with G groups
+extern __shared__ float smem[];  // layout decided at launch
+
+float* sm_inv_scale = smem;
+float* sm_scale     = sm_inv_scale +  B * G;
+float* sm_qzero_f   = sm_scale     +  B * G;
+float* sm_maxq_g    = sm_qzero_f   +  B * G;
+
+// Optional PackBoost-style padding to avoid bank conflicts:
+// constexpr int STRIDE = ((G + 7) & ~7);  // round up to multiple of 8
+// and index by row * STRIDE + g instead of row * G + g.
+
+int block_width = i_end - i_start;  // B
+
+for (int idx = threadIdx.x; idx < block_width * G; idx += blockDim.x) {
+    int row_in_block = idx / G;     // 0..B-1
+    int g            = idx % G;     // 0..G-1
+
+    int j = i_start + row_in_block; // global row index
+
+    // qmeta_flat: [C * G] as uint32_t, row-major in groups
+    uint32_t packed = qmeta_flat[j * G + g];
+
+    float scale, inv_scale, qzero_f, maxq_g;
+    decode_qmeta(packed, scale, inv_scale, qzero_f, maxq_g, global_bits);
+
+    int off = row_in_block * G + g;
+    sm_inv_scale[off] = inv_scale;
+    sm_scale    [off] = scale;
+    sm_qzero_f  [off] = qzero_f;
+    sm_maxq_g   [off] = maxq_g;
+}
+__syncthreads();
+```
+
+After this:
+
+* Every warp processing row `j` in `[i_start, i_end)` reads its `(scale, inv_scale, qzero, maxq)` for all groups from shared memory,
+* No extra global loads for metadata inside the block.
+
+---
+
+### 12.4.1 Warp Broadcast (for Hinv Scalars)
+
+For GPTQ error propagation, each row update uses a scalar coefficient `alpha = Hinv[j, k]`.
+
+We only need **one lane** in the warp to read that value from global memory; the rest can receive it via a **warp broadcast**:
+
+```cpp
+__device__ __forceinline__ float warp_broadcast(float v, int src_lane = 0) {
+    return __shfl_sync(0xffffffff, v, src_lane);
+}
+```
+
+Usage pattern inside the solver kernel (inner-block updates):
+
+```cpp
+// Assume warp processes row k (or a tile of rows) for columns [0, R)
+int lane_id = threadIdx.x & 31;
+
+// Only lane 0 reads Hinv scalar from global memory
+float alpha = 0.0f;
+if (lane_id == 0) {
+    alpha = Hinv[j * C + k];   // Hinv[j, k]
+}
+
+// Broadcast to all lanes in this warp
+alpha = warp_broadcast(alpha, 0);
+
+// Now every lane can update its slice of W_solver[k, :]
+for (int col = lane_id; col < R; col += warpSize) {
+    float e_val = error_block[row_in_block * R + col];
+    W_solver[k * R + col] += alpha * e_val;
+}
+```
+
+This:
+
+* Cuts `Hinv` loads from `warpSize` loads → **1 load per warp**,
+* Keeps the math exactly the same as `W[k] += Hinv[j, k] * e`.
+
+---
+
+### 12.4.2 Butterfly Reductions (Local Warp Sums)
+
+We also keep a PackBoost-style **butterfly reduction** utility for any per-warp sum operations needed inside the solver (e.g. norms, diagnostics, or small tile reductions):
+
+```cpp
+template <typename T>
+__device__ __forceinline__ T butterflyReduceSum(T val) {
+    #pragma unroll
+    for (int offset = 16; offset > 0; offset >>= 1) {
+        val += __shfl_down_sync(0xffffffff, val, offset);
+    }
+    return val;
+}
+```
+
+Possible uses in the solver:
+
+* Computing per-row or per-group error norms inside the warp for diagnostics,
+* Reducing partial dot-products when doing tiny GEMM-like updates inside the block (if we ever add that path),
+* Maintaining consistency with the reduction patterns already used in `quant_grid.cu`.
+
+Functionally, this doesn’t change GPTQ math; it just gives us a standard warp-sum primitive to use wherever we need a reduction.
+
+---
+
+### 12.5 Python Reference Solver (qmeta4-First, No Scale Grid Expansion)
+
+The Python reference solver mirrors the CUDA logic but keeps everything explicit and debuggable.
+
+#### 12.5.1 Packed View of qmeta
+
+Assume:
+
+* `qmeta` is `(C, G, 4)` with dtype `torch.uint8`, contiguous.
+
+Per row `j`:
+
+```python
+# qmeta[j]: (G, 4) uint8
+qmeta_row = qmeta[j].contiguous()
+qmeta_packed = qmeta_row.view(torch.uint32).view(-1)  # (G,)
+```
+
+Then:
+
+```python
+log2_q88 = (qmeta_packed & 0xFFFF).to(torch.int16)          # (G,)
+qzero_u8 = ((qmeta_packed >> 16) & 0xFF).to(torch.uint8)    # (G,)
+flags    = (qmeta_packed >> 24).to(torch.uint8)             # (G,)
+
+log2_scale = log2_q88.to(torch.float32) / 256.0
+scale      = torch.exp2(log2_scale)                         # (G,)
+inv_scale  = torch.exp2(-log2_scale)                        # (G,)
+
+bits_g = torch.full_like(flags, bits, dtype=torch.int32)    # global bits for now
+maxq_per_group = (1 << bits_g) - 1                          # (G,)
+
+qzero = qzero_u8.to(torch.float32)                          # (G,)
+
+sym_mask = (flags & 0x01) != 0
+sym_qzero = (maxq_per_group.to(torch.float32) + 1.0) * 0.5
+qzero = torch.where(sym_mask, sym_qzero, qzero)             # (G,)
+```
+
+#### 12.5.2 Groupwise Quantization in the Reference Solver
+
+Inside `GPTQ.solver(...)`, for row `j`:
+
+```python
+# W_solver: (C, R) float32 working buffer
+# qweight:  (C, R) uint8
+
+for g in range(num_groups):
+    start = g * group_size
+    end   = min(start + group_size, R)
+    if start >= R:
+        break
+
+    s      = scale[g]                  # scalar
+    inv_s  = inv_scale[g]
+    z      = qzero[g]
+    maxq_g = maxq_per_group[g].float()
+
+    x = W_solver[j, start:end]         # (group_len,)
+
+    biased = x * inv_s + z
+    q = torch.round(biased)
+    q = torch.clamp(q, 0.0, maxq_g)    # still float
+
+    y = (q - z) * s
+    e = y - x
+
+    W_solver[j, start:end] = y
+    qweight[j, start:end]  = q.to(torch.uint8)
+    error_block[row_in_block, start:end] = e
+```
+
+Error propagation follows the standard GPTQ logic:
+
+* **Inside the block:**
 
   ```python
-  for e in range(num_experts):
-      W_e_t = W_e[e].transpose(0, 1)
-      Hinv_e = Hinv_list[e]
-
-      qmeta_e, maxq_e, pad_e = gptq.build_quant_grid(...)
-      qweight_e_t = gptq.solver(...)
+  for k in range(j + 1, i_end):
+      W_solver[k, :] += hessian_inv[j, k] * error_block[row_in_block, :]
   ```
 
-Expert-parallelism (which GPU owns what, how routing behaves) stays outside 4Bit Forge.
-
----
-
-## 9. Implementation Checklist & Roadmap
-
-### 9.1 Implemented Components (v2.4)
-
-* [x] **qmeta4 format**
-
-  * C++ `QMetaPacked` struct.
-  * Python/Torch encode/decode helpers.
-* [x] **CUDA range meta builder**
-
-  * `build_group_meta_optimized<scalar_t>` kernel.
-  * `build_group_meta_packed_cuda(...)` host wrapper.
-* [x] **CUDA MSE / Lᵖ refinement**
-
-  * `mse_search_kernel_nosmem<scalar_t, IS_L2_NORM>`.
-  * `mse_scale_groups_packed_cuda(...)` host wrapper.
-* [x] **CPU reference meta logic**
-
-  * `_find_quantization_meta_groups(...)`.
-  * `_mse_scale_groups(...)`.
-  * `_encode_qmeta_groups(...)`.
-* [x] **Python GPTQ API**
-
-  * `GPTQ.build_quant_grid(...)`.
-  * `_build_quant_grid_gpu(...)` / `_build_quant_grid_cpu(...)`.
-  * `GPTQ.solver(...)` (row-wise GPTQ using qmeta4 + Hinv).
-* [x] **Multi-dtype support for grid builder**
-
-  * FP32, FP16, BF16, FP8-E4M3 via `val_to_float`.
-
-### 9.2 Missing Kernels / Next Steps
-
-**1. QMeta4 GPTQ CUDA Solver**
-
-* [ ] Design & implement a fused CUDA solver kernel that:
-
-  * Inputs:
-
-    * `weight (C, R)` fp32/fp16.
-    * `hessian_inv (C, C)` (or Cholesky factor).
-    * `qmeta_bytes (C, G, 4)`.
-    * `maxq`, `group_size`, `bits`.
-  * Behaviour:
-
-    * Decodes qmeta per group into registers.
-    * Runs GPTQ column/block loop entirely on device.
-    * Writes `qweight (C, R)` as uint8.
-  * Then wire into `GPTQ.solver(..., use_cuda_solver=True)`.
-
-**2. MoE-Quant-Compatible Wrapper**
-
-* [ ] Add a thin adapter:
+* **Tail matmul after the block:**
 
   ```python
-  class GPTQMoECompat:
-      def __init__(self, layer: nn.Module, ...):
-          # wraps forge.GPTQ but exposes:
-          # update(input), quantization_pre_step(), quantize(bits)
+  if i_end < C:
+      delta = hessian_inv[i_start:i_end, i_end:].T @ error_block[:(i_end - i_start), :]
+      W_solver[i_end:, :] += delta
   ```
 
-* [ ] Reuse 4Bit Forge core internally for:
+This is exactly the same algorithm as MoE-Quant’s `gptq_loop`:
 
-  * `get_quantization_grid`.
-  * GPTQ loop.
+* Same column/block order,
+* Same error term `e = y - x`,
+* Same propagation `W ← W + H⁻¹ e`.
 
-**3. INT4 Packing + Runtime Bridges**
+The only differences are:
 
-* [ ] Implement kernels/utilities to:
+1. Metadata is **qmeta4**, decoded on the fly instead of pre-expanded `scale`/`qzero` grids.
+2. On CUDA, we lean on:
 
-  * Pack `qweight (uint8)` into:
+   * Shared-memory block decode of qmeta,
+   * **Warp broadcast** for Hessian scalars,
+   * **Butterfly reductions** where we need warp-sum behavior.
 
-    * Generic Nibble-packed int4 format.
-    * Specific layouts expected by runtime engines (e.g. Marlin, vLLM GPTQ).
-* [ ] Glue code for:
-
-  * Passing qmeta4 + packed int4 to inference kernels.
-
-**4. Hessian / Calibration Helpers**
-
-* [ ] Optional CUDA helpers to build H:
-
-  * `H += XᵀX` from activation batches.
-* [ ] Support for:
-
-  * Per-expert Hessians.
-  * Blockwise Hessians (for memory efficiency).
-
-**5. Tests + Parity**
-
-* [ ] Compare against MoE-Quant’s:
-
-  * `get_quantization_grid`.
-  * `gptq_loop`.
-  * Relative MSE metrics.
-
----
-
-## 10. Future Work (Streaming, Distributed, Runtime)
-
-These are intentionally **future layers** on top of the core:
-
-* **Streaming Calibration & Quantization**
-
-  * Layer-wise / shard-wise streaming for 1 TB checkpoints.
-  * Maintain H / H⁻¹ within VRAM+RAM budgets.
-  * Use same qmeta4 core for all layers/experts.
-
-* **Runtime Integration**
-
-  * vLLM / custom engines:
-
-    * Load qmeta4 + packed int4.
-    * Use groupwise W4A16 kernels that decode qmeta4 on the fly.
-
-* **Distributed / MoE Orchestration**
-
-  * Expert-parallel calibration (per-expert H).
-  * Data-parallel and tensor-parallel friendly APIs.
-
-All of that can evolve outside this repo, as long as they respect the core contracts:
-
-* `build_quant_grid`: (W) → (qmeta4, maxq, pad).
-* `solver`: (W, H⁻¹, qmeta4) → qweight.
-
----
-
-## 11. Non-Goals (For This Repo)
-
-To keep the core sharp, this repo explicitly does **not** attempt to:
-
-* Implement full Hugging Face / vLLM loaders.
-* Encode any specific transformer/MoE architecture assumptions.
-* Hard-lock a particular runtime format (that belongs in a separate “runtime” repo).
-* Hide or “black-box” the Hessian; callers remain responsible for:
-
-  * How `H` is accumulated.
-  * How `H` is regularized and inverted.
-  * Whether they use full, blockwise, or approximate H.
-
-4Bit Forge is meant to be the **small, sharp GPTQ core** you slot under whatever orchestration stack you want.
+Those are pure implementation wins; the math stays faithful to GPTQ.
