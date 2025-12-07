@@ -119,112 +119,153 @@ class GPTQ:
         qmeta = qmeta_flat.view(C, num_groups, 4)
 
         return qmeta, maxq, pad
-
+    
     @torch.no_grad()
     def solver(
         self,
-        weight: torch.Tensor,       # (C, R), transposed weight
+        weight: torch.Tensor,       # (C, R), transposed weight, modified in-place
         hessian_inv: torch.Tensor,  # (C, C), inverse Hessian
         qmeta: torch.Tensor,        # (C, G, 4) uint8, packed groupwise meta
-        maxq: torch.Tensor,         # scalar tensor
+        maxq: torch.Tensor,         # scalar tensor (kept for API; we infer from bits)
         group_size: int,
         bits: int,
     ) -> torch.Tensor:
         """
-        GPTQ solver (groupwise, qmeta4-based reference).
+        GPTQ solver (groupwise, qmeta4-based).
 
-        Uses qmeta4 directly:
-          - For each row j and each group g:
-              decode (scale_g, qzero_g) from qmeta[j, g, :]
-              quantize weight[j, group_slice] using that meta
-              compute local error e_g
-              propagate e_g to future rows via Hessian inverse.
-
-        This is a reference / parity implementation:
-          - Works on CPU or CUDA (Torch ops).
-          - Loops are in Python; inner math runs as batched tensor ops.
-
-        Args
-        ----
-        weight: (C, R) transposed weight, modified in-place to dequantized fp.
-        hessian_inv: (C, C) inverse Hessian.
-        qmeta: (C, num_groups, 4) uint8 packed metadata.
-        maxq: scalar tensor, same device as weight.
-        group_size: group size used in build_quant_grid.
-        bits: bit-width (currently used only for sanity checks / debugging).
+        CUDA fast-path (gptq_solver) + Python reference CPU fallback.
 
         Returns
         -------
-        qweight: (C, R) uint8 quantized codes (no bit-packing yet).
+        qweight: (C, R) uint8 quantized codes.
         """
+        # ----------------------------------------------------------------------
+        # 1. CUDA Fast Path
+        # ----------------------------------------------------------------------
+        if weight.is_cuda:
+            return cuda_kernels.gptq_solver(
+                weight,
+                hessian_inv,
+                qmeta,
+                group_size,
+                bits,
+                32  # block_size=0 -> let kernel infer from SMEM limits
+            )
+
+        # ----------------------------------------------------------------------
+        # 2. CPU Reference Implementation (Matches Kernel Math)
+        # ----------------------------------------------------------------------
         assert weight.ndim == 2
         C, R = weight.shape
         assert hessian_inv.shape == (C, C)
         assert qmeta.ndim == 3 and qmeta.size(0) == C and qmeta.size(2) == 4
-        assert group_size % 32 == 0
+        assert group_size > 0
 
         device = weight.device
         w_dtype = weight.dtype
 
         num_groups = qmeta.size(1)
-        padded_R = num_groups * group_size
-        pad = padded_R - R
-        if pad < 0:
-            raise ValueError("qmeta implies fewer columns than weight has")
 
-        # Work in fp32 for math
+        # Derive maxq from bits to stay in sync with CUDA
+        maxq_bits = (1 << bits) - 1
+        maxq_val = float(maxq_bits)
+
+        # Optional sanity check against provided maxq tensor
+        try:
+            if maxq is not None:
+                diff = abs(float(maxq.item()) - maxq_val)
+                if diff > 1e-3:
+                    # You can log or warn here if you want
+                    pass
+        except Exception:
+            # If maxq isn't a proper scalar tensor, just ignore it
+            pass
+
+        # Work in float32 for solver; keep original dtype for final copy-out
         W = weight.to(torch.float32).contiguous()
         Hinv = hessian_inv.to(torch.float32).contiguous()
-        maxq_val = float(maxq.to(device).item())
 
-        # Outputs
+        # Output codes
         qweight = torch.empty_like(weight, dtype=torch.uint8, device=device)
 
+        INV256 = 1.0 / 256.0
+
         for j in range(C):
-            # row j
+            # --------------------------------------------------------------
+            # A. Decode qmeta for row j  -> scales, inv_scales, qzeros
+            # --------------------------------------------------------------
+            # qmeta[j]: (G, 4) uint8 -> int32 for bit ops
+            row_meta = qmeta[j].to(torch.int32)  # (G, 4)
+
+            # bytes 0,1 = int16 log2_q88 (little endian)
+            lo = row_meta[:, 0]
+            hi = row_meta[:, 1]
+            log2_q88 = lo | (hi << 8)
+
+            # sign-extend 16-bit -> 32-bit
+            log2_q88 = torch.where(log2_q88 >= 32768, log2_q88 - 65536, log2_q88)
+
+            log2_scale = log2_q88.float() * INV256
+            scales     = torch.exp2(log2_scale)        # (G,)
+            inv_scales = torch.exp2(-log2_scale)       # (G,)
+
+            qzeros_u8 = row_meta[:, 2]
+            flags     = row_meta[:, 3]
+
+            # symmetric override: if flags & 1: qzero = (maxq + 1)/2
+            is_sym   = (flags & 1) != 0
+            sym_qzero = (maxq_val + 1.0) * 0.5
+            qzeros    = torch.where(is_sym,
+                                    sym_qzero,
+                                    qzeros_u8.float())  # (G,)
+
+            # --------------------------------------------------------------
+            # B. Quantize row j, accumulate error, propagate via Hinv
+            # --------------------------------------------------------------
             if j + 1 < C:
-                h_tail = Hinv[j, j + 1 :]  # [C - j - 1]
+                h_tail = Hinv[j, j + 1 :]   # (C - j - 1,)
             else:
                 h_tail = None
 
-            # decode all group scales/qzeros for this row once
-            qmeta_row = qmeta[j]  # (G, 4)
-            scale_row, qzero_row = self._decode_qmeta_groups(qmeta_row, dtype=None)  # (G,), (G,)
-
             for g in range(num_groups):
                 start = g * group_size
-                end = start + group_size
                 if start >= R:
-                    break  # entirely padded group
-                if end > R:
-                    end = R  # last partial group
+                    break
+                end = min(start + group_size, R)
 
-                if end <= start:
-                    continue
+                s      = scales[g]
+                inv_s  = inv_scales[g]
+                q0     = qzeros[g]
 
-                s = scale_row[g]      # scalar tensor (device, fp32)
-                q0 = qzero_row[g]     # scalar tensor (device, fp32)
+                x = W[j, start:end]        # (group_len,)
 
-                # x: (slice_len,)
-                x = W[j, start:end]
-
-                # quantize/dequant within this group
-                q = torch.round(x / s + q0)
+                # 1. Quantize: q = clamp(round(x * inv_s + q0))
+                biased = x * inv_s + q0
+                q = torch.round(biased)
                 q.clamp_(0.0, maxq_val)
+
+                # 2. Dequantize: y = (q - q0) * s
                 y = (q - q0) * s
+
+                # 3. Error: e = y - x
                 e = y - x
 
-                # write back row j
-                W[j, start:end] = y
-                weight[j, start:end] = y.to(w_dtype)
-                qweight[j, start:end] = q.to(torch.uint8)
+                # Write into working buffer + codes
+                W[j, start:end]          = y
+                qweight[j, start:end]    = q.to(torch.uint8)
 
-                # propagate error to future rows for this slice
+                # 4. Propagate error to future rows: W[k] += Hinv[j, k] * e
                 if h_tail is not None:
-                    # W[j+1:, start:end] += h_tail[:, None] * e[None, :]
+                    # h_tail: (C - j - 1,)
+                    # e    : (group_len,)
+                    # broadcast to (C - j - 1, group_len)
                     W[j + 1 :, start:end] += h_tail.unsqueeze(1) * e.unsqueeze(0)
 
+        # After all updates, copy solver buffer back to original dtype
+        weight.copy_(W.to(w_dtype))
+
         return qweight
+
 
     # ---------- GPU helpers: qmeta4 path ----------
 
