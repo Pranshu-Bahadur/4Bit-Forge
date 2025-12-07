@@ -133,7 +133,7 @@ class GPTQ:
         """
         GPTQ solver (groupwise, qmeta4-based).
 
-        CUDA fast-path (gptq_solver_cuda) + Python reference CPU fallback.
+        CUDA fast-path (gptq_solver) + Python reference CPU fallback.
 
         Returns
         -------
@@ -145,13 +145,13 @@ class GPTQ:
         if weight.is_cuda:
             import forge.cuda as cuda_kernels
 
-            return cuda_kernels.gptq_solver_cuda(
+            return cuda_kernels.gptq_solver(
                 weight,
                 hessian_inv,
                 qmeta,
                 group_size,
                 bits,
-                0,  # block_size=0 -> let kernel infer from SMEM limits
+                0  # block_size=0 -> let kernel infer from SMEM limits
             )
 
         # ----------------------------------------------------------------------
