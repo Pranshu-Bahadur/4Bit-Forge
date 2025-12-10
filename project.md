@@ -2,7 +2,7 @@
 
 4BIT FORGE v1 is a **GPTQ W4A16-G128 quantization engine** for large language models.
 
-- Scope: **Quantize an existing FP16/FP32 LLM** to 4-bit GPTQ weights.
+- Scope: **Quantize an existing FP8 LLM** to 4-bit GPTQ weights.
 - I/O and runtime are **delegated to existing libraries**:
   - `transformers`, `torch`
   - `llmcompressor` (for model graph / pipelines)
@@ -82,7 +82,7 @@ Per block:
 - Block weight view:
   - `w_block` has shape `[group_size]` (slice of that row).
 - GPTQ statistics:
-  - `H_block` ∈ ℝ^{G×G} (G=group_size) or low-rank approx of it.
+  - `H_block` $\in \mathbb{R}^{G×G}$ (G=group_size) or low-rank approx of it.
   - Optional `g_block` (first-order term) if needed.
 
 Logical types:
@@ -263,7 +263,7 @@ For each row `w` and each group `g`:
 - You want an INT4 vector `q_g` such that:
 
   \[
-    \min_{q_g} \; (w_g - D(q_g))^T H_g (w_g - D(q_g))
+    $\min_{q_g} \; (w_g - D(q_g))^T H_g (w_g - D(q_g))$
   \]
 
   where `D` is dequantize given scale+zero.
