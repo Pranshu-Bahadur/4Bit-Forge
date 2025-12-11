@@ -31,7 +31,7 @@ class GPTQ:
         quant_max_shrink: float = 0.2,
         quant_n_grid: int = 100,
         quant_norm: float = 2.4,
-        impl: str = 'cuda'
+        impl: str = "cuda",
     ) -> tuple[torch.Tensor, torch.Tensor, int]:
         """
         Build *groupwise* quantization metadata in packed qmeta4 format.
@@ -70,12 +70,10 @@ class GPTQ:
         if group_size % 32 != 0:
             raise ValueError(f"group_size must be a multiple of 32, got {group_size}")
 
-        # Branch early: GPU vs CPU so we don't accidentally upcast on CUDA.
+        # Keep original dtype on CUDA (fp16/bf16/fp32/fp8), fp32 reference on CPU.
         if device.type == "cuda":
-            # Keep original dtype (fp16/bf16/fp32/fp8) to avoid extra 64–256 MB copies.
             W = weight.contiguous()
         else:
-            # CPU reference runs in fp32.
             W = weight.to(torch.float32).contiguous()
 
         # Compute number of groups along R and pad last group if needed
@@ -84,7 +82,6 @@ class GPTQ:
         pad = padded_R - R
 
         if pad > 0:
-            # pad at the end of last dim
             W_pad = F.pad(W, (0, pad))
         else:
             W_pad = W
@@ -93,33 +90,23 @@ class GPTQ:
         W_groups = W_pad.view(C, num_groups, group_size)
         x_groups = W_groups.reshape(-1, group_size)  # [G_total, group_size], G_total = C * num_groups
 
-        if device.type == "cuda":
-            qmeta_flat, maxq = self._build_quant_grid_gpu(
-                x_groups=x_groups,
-                bits=bits,
-                symmetric=symmetric,
-                mode=mode,
-                quant_max_shrink=quant_max_shrink,
-                quant_n_grid=quant_n_grid,
-                quant_norm=quant_norm,
-                impl=impl
-            )
-        else:
-            qmeta_flat, maxq = self._build_quant_grid_cpu(
-                x_groups=x_groups,
-                bits=bits,
-                symmetric=symmetric,
-                mode=mode,
-                quant_max_shrink=quant_max_shrink,
-                quant_n_grid=quant_n_grid,
-                quant_norm=quant_norm,
-            )
+        # Unified device-dispatch for CPU / CUDA
+        qmeta_flat, maxq = self._build_quant_grid_groups(
+            x_groups=x_groups,
+            bits=bits,
+            symmetric=symmetric,
+            mode=mode,
+            quant_max_shrink=quant_max_shrink,
+            quant_n_grid=quant_n_grid,
+            quant_norm=quant_norm,
+            impl=impl,
+        )
 
         # Reshape qmeta back to (C, num_groups, 4)
         qmeta = qmeta_flat.view(C, num_groups, 4)
 
         return qmeta, maxq, pad
-    
+
     @torch.no_grad()
     def solver(
         self,
@@ -142,14 +129,14 @@ class GPTQ:
         # ----------------------------------------------------------------------
         # 1. CUDA Fast Path
         # ----------------------------------------------------------------------
-        if weight.is_cuda:
+        if weight.device.type == "cuda":
             return cuda_kernels.gptq_solver(
                 weight,
                 hessian_inv,
                 qmeta,
                 group_size,
                 bits,
-                32  # block_size=0 -> let kernel infer from SMEM limits
+                32,  # block_size=0 -> let kernel infer from SMEM limits
             )
 
         # ----------------------------------------------------------------------
@@ -175,7 +162,7 @@ class GPTQ:
             if maxq is not None:
                 diff = abs(float(maxq.item()) - maxq_val)
                 if diff > 1e-3:
-                    # You can log or warn here if you want
+                    # could warn/log here if desired
                     pass
         except Exception:
             # If maxq isn't a proper scalar tensor, just ignore it
@@ -194,7 +181,6 @@ class GPTQ:
             # --------------------------------------------------------------
             # A. Decode qmeta for row j  -> scales, inv_scales, qzeros
             # --------------------------------------------------------------
-            # qmeta[j]: (G, 4) uint8 -> int32 for bit ops
             row_meta = qmeta[j].to(torch.int32)  # (G, 4)
 
             # bytes 0,1 = int16 log2_q88 (little endian)
@@ -215,9 +201,11 @@ class GPTQ:
             # symmetric override: if flags & 1: qzero = (maxq + 1)/2
             is_sym   = (flags & 1) != 0
             sym_qzero = (maxq_val + 1.0) * 0.5
-            qzeros    = torch.where(is_sym,
-                                    sym_qzero,
-                                    qzeros_u8.float())  # (G,)
+            qzeros    = torch.where(
+                is_sym,
+                sym_qzero,
+                qzeros_u8.float(),
+            )  # (G,)
 
             # --------------------------------------------------------------
             # B. Quantize row j, accumulate error, propagate via Hinv
@@ -256,9 +244,6 @@ class GPTQ:
 
                 # 4. Propagate error to future rows: W[k] += Hinv[j, k] * e
                 if h_tail is not None:
-                    # h_tail: (C - j - 1,)
-                    # e    : (group_len,)
-                    # broadcast to (C - j - 1, group_len)
                     W[j + 1 :, start:end] += h_tail.unsqueeze(1) * e.unsqueeze(0)
 
         # After all updates, copy solver buffer back to original dtype
@@ -266,108 +251,126 @@ class GPTQ:
 
         return qweight
 
-
-    # ---------- GPU helpers: qmeta4 path ----------
+    # ---------- unified CPU / GPU quant-grid builder ----------
 
     @torch.no_grad()
-    def _build_quant_grid_gpu(
+    def _build_quant_grid_groups(
         self,
-        x_groups: torch.Tensor,    # (G_total, group_size), same dtype as weight
+        x_groups: torch.Tensor,    # (G_total, group_size)
         bits: int,
         symmetric: bool,
         mode: str,
         quant_max_shrink: float,
         quant_n_grid: int,
         quant_norm: float,
-        impl: str = 'cuda'
+        impl: str = "cuda",
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """
-        GPU path: use qmeta4 CUDA kernels, return packed metadata.
+        Unified quant-grid builder.
+
+        - On CUDA: uses fused kernels (build_group_meta_packed + optional MSE refine).
+        - On CPU: uses a slow Torch reference path + qmeta4 packing.
         """
-        assert x_groups.is_cuda
         assert x_groups.ndim == 2
-        G, group_size = x_groups.shape
         device = x_groups.device
+        mode_l = mode.lower()
 
-        # 1) Initial range-based meta
-        build_group_meta_packed_fn = (cuda_kernels if impl == 'cuda' else triton_kernels).build_group_meta_packed
-        qmeta_bytes, maxq = build_group_meta_packed_fn(
-            x_groups,
-            bits,
-            symmetric,
-        )
+        # ---------------------- CUDA path ----------------------
+        if x_groups.device.type == "cuda":
+            backend = cuda_kernels if impl == "cuda" else triton_kernels
 
-        # 2) Optional MSE refinement in-place on qmeta
-        if mode.lower() == "mse":
+            build_group_meta_packed_fn = backend.build_group_meta_packed
+            qmeta_bytes, maxq = build_group_meta_packed_fn(
+                x_groups,
+                bits,
+                symmetric,
+            )
+
+            if mode_l == "mse":
+                # p must be float32 for cudaMemcpyToSymbol(c_p) inside kernels.
+                p = torch.linspace(
+                    1.0,
+                    quant_max_shrink,
+                    quant_n_grid,
+                    dtype=torch.float32,
+                    device=device,
+                )
+                mse_scale_groups_packed_fn = backend.mse_scale_groups_packed
+                qmeta_bytes = mse_scale_groups_packed_fn(
+                    x_groups,
+                    p,
+                    qmeta_bytes,
+                    float(maxq.item()),
+                    float(quant_norm),
+                )
+
+            return qmeta_bytes, maxq
+
+        # ---------------------- CPU reference path ----------------------
+        # Expect fp32 on CPU; caller already enforces this.
+        x = x_groups.to(torch.float32)
+        G, group_size = x.shape
+
+        # Range-based meta (same semantics as CUDA build_group_meta_packed)
+        maxq_val = (1 << bits) - 1
+        maxq = torch.tensor(maxq_val, dtype=torch.float32, device=device)
+
+        xmin = x.min(dim=-1).values  # (G,)
+        xmax = x.max(dim=-1).values  # (G,)
+
+        eps = 1e-12
+        if symmetric:
+            amax = torch.maximum(xmin.abs(), xmax.abs())
+            scale = (2.0 / maxq) * amax + eps               # (G,)
+            qzero = torch.full_like(scale, ((maxq + 1.0) * 0.5).item())
+        else:
+            scale = (xmax - xmin) / maxq + eps              # (G,)
+            qzero = torch.round(-xmin / scale).clamp_(0.0, float(maxq_val))
+
+        # Optional MSE refinement on CPU (slow, but used only as reference)
+        if mode_l == "mse":
             p = torch.linspace(
                 1.0,
                 quant_max_shrink,
                 quant_n_grid,
-                dtype=torch.float32,  # must be float32 for cudaMemcpyToSymbol(c_p)
+                dtype=x.dtype,
                 device=device,
             )
 
-            mse_scale_groups_packed_fn = (cuda_kernels if impl == 'cuda' else triton_kernels).mse_scale_groups_packed
-            qmeta_bytes = mse_scale_groups_packed_fn(
-                x_groups,
-                p,
-                qmeta_bytes,
-                float(maxq.item()),
-                float(quant_norm),
-            )
+            new_scale = torch.empty_like(scale)
+            maxq_f = float(maxq_val)
 
+            for g in range(G):
+                xg = x[g]               # (group_size,)
+                base_s = float(scale[g].item())
+                q0 = float(qzero[g].item())
+
+                best_loss = float("inf")
+                best_s = base_s
+
+                for k in range(p.numel()):
+                    s = base_s * float(p[k].item())
+                    if s <= 0.0:
+                        continue
+
+                    q = torch.round(xg / s + q0)
+                    q.clamp_(0.0, maxq_f)
+                    y = (q - q0) * s
+                    diff = (y - xg).abs()
+
+                    loss = diff.pow(quant_norm).sum().item()
+                    if loss < best_loss:
+                        best_loss = loss
+                        best_s = s
+
+                new_scale[g] = best_s
+
+            scale = new_scale
+
+        # Pack into qmeta4 bytes
+        qmeta_bytes = self._encode_qmeta_groups(scale, qzero)
         return qmeta_bytes, maxq
 
-    # ---------- CPU helpers: emulate qmeta4 ----------
-
-    @torch.no_grad()
-    def _build_quant_grid_cpu(
-        self,
-        x_groups: torch.Tensor,    # (G_total, group_size) fp32
-        bits: int,
-        symmetric: bool,
-        mode: str,
-        quant_max_shrink: float,
-        quant_n_grid: int,
-        quant_norm: float,
-    ) -> tuple[torch.Tensor, torch.Tensor]:
-        """
-        CPU / Torch path: emulate qmeta4 using the same semantics.
-        """
-        assert not x_groups.is_cuda
-        assert x_groups.ndim == 2
-        device = x_groups.device
-        G, group_size = x_groups.shape
-
-        # 1) Initial range-based meta per group
-        scale_g, qzero_g, maxq = self._find_quantization_meta_groups(
-            x_groups,
-            bit_width=bits,
-            symmetric=symmetric,
-        )  # (G,), (G,), scalar
-
-        # 2) Optional MSE refinement (shrinking scale)
-        if mode.lower() == "mse":
-            p = torch.linspace(
-                1.0,
-                quant_max_shrink,
-                quant_n_grid,
-                dtype=x_groups.dtype,
-                device=device,
-            )
-            scale_g = self._mse_scale_groups(
-                x_groups,
-                p=p,
-                scale=scale_g,
-                qzero=qzero_g,
-                maxq=maxq,
-                norm=quant_norm,
-            )
-
-        # 3) Pack into qmeta4: [0..1] log2(scale) in Q8.8, [2] qzero, [3] flags=0
-        qmeta_bytes = self._encode_qmeta_groups(scale_g, qzero_g)
-
-        return qmeta_bytes, maxq
 
     # ---------- qmeta encode/decode helpers ----------
 
@@ -389,7 +392,6 @@ class GPTQ:
         assert scale_g.ndim == 1 and qzero_g.ndim == 1
         assert scale_g.shape == qzero_g.shape
         device = scale_g.device
-        G = scale_g.shape[0]
 
         # avoid log of zero
         eps = 1e-12
@@ -403,7 +405,7 @@ class GPTQ:
 
         qzero_u8 = qzero_g.round().clamp(0, 255).to(torch.uint8)
 
-        qmeta = torch.empty(G, 4, dtype=torch.uint8, device=device)
+        qmeta = torch.empty(scale_g.shape[0], 4, dtype=torch.uint8, device=device)
         qmeta[:, 0] = lo
         qmeta[:, 1] = hi
         qmeta[:, 2] = qzero_u8
@@ -442,103 +444,3 @@ class GPTQ:
             scale = scale.to(dtype=dtype).to(torch.float32)
 
         return scale.to(device=device), qzero.to(device=device)
-
-    # ---------- CPU reference quant grid math (unpacked) ----------
-
-    @torch.no_grad()
-    def _find_quantization_meta_groups(
-        self,
-        x_groups: torch.Tensor,    # (G_total, group_size)
-        bit_width: int,
-        symmetric: bool = False,
-        eps: float = 1e-12,
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        """
-        Range-based quantization meta per group over dim=-1.
-
-        x_groups: (G, group_size)
-        Returns:
-          scale_g: (G,)
-          qzero_g: (G,)
-          maxq:    scalar tensor
-        """
-        assert x_groups.ndim == 2
-        device = x_groups.device
-
-        maxq_val = (1 << bit_width) - 1
-        maxq = torch.tensor(maxq_val, dtype=torch.float32, device=device)
-
-        xmin = x_groups.min(dim=-1).values  # (G,)
-        xmax = x_groups.max(dim=-1).values  # (G,)
-
-        if symmetric:
-            amax = torch.maximum(xmin.abs(), xmax.abs())
-            scale = (2.0 / maxq) * amax + eps
-            qzero = torch.full_like(scale, ((maxq + 1.0) * 0.5).item())  # middle code
-        else:
-            scale = (xmax - xmin) / maxq + eps
-            qzero = torch.round(-xmin / scale).clamp_(0.0, float(maxq_val))
-
-        return scale, qzero, maxq
-
-    @torch.no_grad()
-    def _mse_scale_groups(
-        self,
-        x_groups: torch.Tensor,    # (G_total, group_size)
-        p: torch.Tensor,           # (P,) shrink factors
-        scale: torch.Tensor,       # (G_total,)
-        qzero: torch.Tensor,       # (G_total,)
-        maxq: torch.Tensor,        # scalar
-        norm: float = 2.4,
-    ) -> torch.Tensor:
-        """
-        Naive CPU reference for MSE-based scale refinement.
-
-        For each group g:
-          - try scale_g * p[k] for all k
-          - pick the one minimizing sum(|q(x; s_k) - x|^norm)
-
-        Returns updated `scale` (same shape).
-        """
-        assert x_groups.ndim == 2
-        G, group_size = x_groups.shape
-        assert scale.shape == (G,)
-        assert qzero.shape == (G,)
-        assert p.ndim == 1
-
-        device = x_groups.device
-        maxq_val = float(maxq.to(device).item())
-
-        x = x_groups.to(torch.float32)
-        scale = scale.to(torch.float32)
-        qzero = qzero.to(torch.float32)
-        p = p.to(torch.float32)
-
-        new_scale = torch.empty_like(scale)
-
-        for g in range(G):
-            xg = x[g]               # (group_size,)
-            base_s = scale[g].item()
-            q0 = qzero[g].item()
-
-            best_loss = float("inf")
-            best_s = base_s
-
-            for k in range(p.numel()):
-                s = base_s * float(p[k].item())
-                if s <= 0:
-                    continue
-
-                q = torch.round(xg / s + q0)
-                q.clamp_(0.0, maxq_val)
-                y = (q - q0) * s
-                diff = (y - xg).abs()
-
-                loss = diff.pow(norm).sum().item()
-                if loss < best_loss:
-                    best_loss = loss
-                    best_s = s
-
-            new_scale[g] = best_s
-
-        return new_scale

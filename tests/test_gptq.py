@@ -30,7 +30,7 @@ def unpack_qmeta_tensor(qmeta, group_size, R):
     lo = qmeta[..., 0].to(torch.int16)
     hi = qmeta[..., 1].to(torch.int16)
 
-    # Combine bytes: little-endian
+    # Combine bytes: little-endian into signed int16
     log2_q88 = (lo & 0x00FF) | (hi << 8)
 
     scale_g = torch.exp2(log2_q88.float() / 256.0)  # (C, G)
@@ -84,7 +84,6 @@ def _decode_qmeta_row_for_solver(qmeta_row: torch.Tensor, bits: int):
     - Q8.8 log2(scale) with sign extension
     - per-row symmetric flag: qzero = (maxq + 1)/2 when flags & 1
     """
-    # qmeta_row: (G, 4) uint8
     meta = qmeta_row.to(torch.int32)  # (G, 4)
 
     lo = meta[:, 0]
@@ -254,9 +253,8 @@ def test_build_quant_grid_cpu_vs_gpu_error(bits, impl):
     assert math.isclose(mse_cpu, mse_gpu, rel_tol=0.05, abs_tol=1e-4)
 
 
-@pytest.mark.parametrize("mode", ["absmax", "mse"])
 @pytest.mark.parametrize("impl", ["cuda", "triton"])
-def test_build_quant_grid_mse_does_not_increase_error(mode, impl):
+def test_build_quant_grid_mse_does_not_increase_error(impl):
     """
     Check that MSE mode doesn't worsen error compared to absmax.
     """
