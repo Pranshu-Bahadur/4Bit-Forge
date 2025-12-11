@@ -1,6 +1,6 @@
 from argparse import ArgumentParser
 from datasets import load_dataset
-from transformers import AutoModelForCausalLM, AutoTokenizer
+from transformers import DeepseekV3ForCausalLM, DeepseekV3Config, AutoTokenizer
 
 import forge
 
@@ -17,28 +17,34 @@ def main():
     # Parsing command-line arguments
     args = parse_args()
 
-    # Loading model and tokenizer
-    model_id = 'deepseek-ai/deepseek-math-7b-rl'
-    tokenizer = AutoTokenizer.from_pretrained(model_id, use_fast=True, padding_side='left', trust_remote_code=True)
-    model = AutoModelForCausalLM.from_pretrained(model_id, trust_remote_code=True, device_map='auto', dtype='auto')
+    # Loading tokenizer and macking a small mock model
+    tokenizer = AutoTokenizer.from_pretrained('deepseek-ai/DeepSeek-Math-V2', use_fast=True, padding_side='left', trust_remote_code=True)
+    model = DeepseekV3ForCausalLM(
+        DeepseekV3Config(
+            hidden_size=128,
+            intermediate_size=256,
+            moe_intermediate_size=64,
+            num_hidden_layers=2,
+            num_attention_heads=4,
+            num_key_value_heads=2,
+            n_shared_experts=1,
+            n_routed_experts=4,
+            first_k_dense_replace=2
+        )
+    )
 
     # Loading dataset for calibration
     def tokenize(example, with_completion=True):
-        if with_completion:
-            messages = [
-                {'role': 'user', 'content': example['problem']},
-                {'role': 'assistant', 'content': example['expected_answer']},
-            ]
-            text = tokenizer.apply_chat_template(messages, tokenize=False, continue_final_message=True)
-        else:
-            messages = [{'role': 'user', 'content': example['problem']}]
-            text = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
-        return tokenizer(text, return_tensors='pt').input_ids[0]
-    dataset = load_dataset('nvidia/OpenMathReasoning', split='additional_problems')
+        messages = [
+            {'role': 'user', 'content': example['text']},
+        ]
+        text = tokenizer.apply_chat_template(messages, tokenize=False, continue_final_message=True)
+        return tokenizer(text, return_tensors='pt')
+    dataset = load_dataset('Salesforce/wikitext', name='wikitext-2-v1', split='test')
     dataset = dataset.map(tokenize, remove_columns=dataset.column_names)
 
     # Quantizing the model
-    layers_to_quantize = ['*experts*'] # Quantizing experts only
+    layers_to_quantize = ['*mlp.experts*'] # Quantizing routed experts only
     forge.gptq_quantize(
         model,
         dataset,
