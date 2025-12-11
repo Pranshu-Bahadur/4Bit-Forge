@@ -259,25 +259,6 @@ class GPTQ:
     # ------------------------------------------------------------------ #
     @torch.no_grad()
     def _get_hessian_inverse_cholesky(self) -> torch.Tensor:
-        """
-        Compute the Cholesky factor of H^{-1} using:
-
-            H = 2 X^T X + λ I
-            H = L L^T  (Cholesky)
-            H^{-1} = L^{-T} L^{-1} = U^T U, with U = L^{-T}
-
-        Returns
-        -------
-        H_inv_cho: (d_col, d_col) upper-triangular tensor such that
-                   H^{-1} = H_inv_cho^T @ H_inv_cho
-
-        This is what the 4Bit-Forge solver expects as `hessian_inv`.
-
-        NOTE: We avoid any aliasing between inputs/outputs in the triangular
-        solve, so this matches the naive
-            H_reg -> H_reg^{-1} -> chol(H_reg^{-1})
-        path numerically (up to fp32 noise).
-        """
         if self.H is None:
             raise RuntimeError("Hessian is None; call update() or quantization_pre_step() first.")
         if self.W is None:
@@ -309,8 +290,10 @@ class GPTQ:
         diag_H.add_(damp)
 
         try:
-            H_inv_cho = torch.linalg.cholesky(torch.linalg.inv(H), upper=True)
-            del H
+            L = torch.linalg.cholesky(H, upper=False)  # H = L L^T
+            H_inv = torch.cholesky_inverse(L, upper=False)  # H^{-1} = L^{-T} L^{-1}
+            H_inv_cho = torch.linalg.cholesky(H_inv, upper=True)  # chol(H^{-1})
+            del H, L, H_inv  # Explicit del to free ASAP
         except Exception:
             self.issue_non_invertible = True
             H_inv_cho = torch.eye(C, device=H.device, dtype=torch.float32)
