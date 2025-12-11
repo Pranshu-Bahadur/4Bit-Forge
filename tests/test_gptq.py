@@ -2,19 +2,15 @@ import math
 import pytest
 import torch
 
-from forge.gptq import GPTQ
-
+from forge.gptq import GPTQ  # Assuming this is the module under test
 
 def has_cuda():
     return torch.cuda.is_available()
 
-
 def has_fp8():
     return hasattr(torch, "float8_e4m3fn")
 
-
 # ---------- helpers for tests ----------
-
 
 def unpack_qmeta_tensor(qmeta, group_size, R):
     """
@@ -54,7 +50,6 @@ def unpack_qmeta_tensor(qmeta, group_size, R):
 
     return scale, qzero
 
-
 def quantize_dequant(weight, scale, qzero, maxq):
     """
     Local helper to simulate affine quantization:
@@ -72,9 +67,7 @@ def quantize_dequant(weight, scale, qzero, maxq):
     y = (q - z) * s
     return q, y
 
-
 # ---------- solver-specific helpers (match CUDA solver exactly) ----------
-
 
 def _decode_qmeta_row_for_solver(qmeta_row: torch.Tensor, bits: int):
     """
@@ -108,7 +101,6 @@ def _decode_qmeta_row_for_solver(qmeta_row: torch.Tensor, bits: int):
     qzero_g = torch.where(is_sym, sym_q0, qzero_u8)
 
     return scale_g, inv_scale_g, qzero_g, maxq_val
-
 
 def reference_gptq_solver_from_qmeta(
     weight: torch.Tensor,
@@ -229,15 +221,14 @@ def reference_gptq_solver_from_qmeta(
 
     return qweight, W
 
-
 # ---------- tests for build_quant_grid ----------
 
-
-@pytest.mark.parametrize("bits", [4, 8])
-@pytest.mark.parametrize("group_size", [32, 128])
+@pytest.mark.parametrize("bits", [2, 3, 4, 8])  # Expanded bits
+@pytest.mark.parametrize("group_size", [32, 64, 128, 256])  # More group sizes
 @pytest.mark.parametrize("impl", ["cuda", "triton"])
 @pytest.mark.parametrize("mode", ["absmax", "mse"])
-def test_build_quant_grid_shapes_cpu(bits, group_size, impl, mode):
+@pytest.mark.parametrize("symmetric", [True, False])  # Added symmetric
+def test_build_quant_grid_shapes_cpu(bits, group_size, impl, mode, symmetric):
     torch.manual_seed(0)
     C, R = 7, 257  # odd dims to test padding logic
     W = torch.randn(C, R, dtype=torch.float32, device="cpu")
@@ -248,7 +239,7 @@ def test_build_quant_grid_shapes_cpu(bits, group_size, impl, mode):
         W,
         group_size=group_size,
         bits=bits,
-        symmetric=False,
+        symmetric=symmetric,
         mode=mode,
         impl=impl,
         quant_n_grid=8,
@@ -265,12 +256,13 @@ def test_build_quant_grid_shapes_cpu(bits, group_size, impl, mode):
     expected_pad = (num_groups * group_size) - R
     assert pad == expected_pad
 
-
 @pytest.mark.skipif(not has_cuda(), reason="CUDA not available")
-@pytest.mark.parametrize("bits", [4])
+@pytest.mark.parametrize("bits", [2, 3, 4, 8])  # Expanded
+@pytest.mark.parametrize("group_size", [32, 128])  
 @pytest.mark.parametrize("impl", ["cuda", "triton"])
 @pytest.mark.parametrize("mode", ["absmax", "mse"])
-def test_build_quant_grid_cpu_vs_gpu_error(bits, impl, mode):
+@pytest.mark.parametrize("symmetric", [True, False])  # Added
+def test_build_quant_grid_cpu_vs_gpu_error(bits, group_size, impl, mode, symmetric):
     """
     Compare CPU vs GPU grid builder indirectly by comparing quantization error.
 
@@ -279,7 +271,6 @@ def test_build_quant_grid_cpu_vs_gpu_error(bits, impl, mode):
     """
     torch.manual_seed(0)
     C, R = 8, 256
-    group_size = 128
     W_cpu = torch.randn(C, R, dtype=torch.float32, device="cpu")
 
     gptq = GPTQ()
@@ -289,7 +280,7 @@ def test_build_quant_grid_cpu_vs_gpu_error(bits, impl, mode):
         W_cpu,
         group_size=group_size,
         bits=bits,
-        symmetric=False,
+        symmetric=symmetric,
         mode=mode,
         impl=impl,
         quant_n_grid=8,
@@ -304,7 +295,7 @@ def test_build_quant_grid_cpu_vs_gpu_error(bits, impl, mode):
         W_gpu,
         group_size=group_size,
         bits=bits,
-        symmetric=False,
+        symmetric=symmetric,
         mode=mode,
         impl=impl,
         quant_n_grid=8,
@@ -319,15 +310,16 @@ def test_build_quant_grid_cpu_vs_gpu_error(bits, impl, mode):
     # The Q8.8 encoding error (~0.27%) is small enough that MSE should match closely
     assert math.isclose(mse_cpu, mse_gpu, rel_tol=0.05, abs_tol=1e-4)
 
-
 @pytest.mark.parametrize("impl", ["cuda", "triton"])
-def test_build_quant_grid_mse_does_not_increase_error(impl):
+@pytest.mark.parametrize("group_size", [32, 128])
+@pytest.mark.parametrize("bits", [4, 8])
+@pytest.mark.parametrize("symmetric", [True, False])
+def test_build_quant_grid_mse_does_not_increase_error(impl, group_size, bits, symmetric):
     """
     Check that MSE mode doesn't worsen error compared to absmax.
     """
     torch.manual_seed(123)
     C, R = 4, 128
-    group_size = 128
     W = torch.randn(C, R, dtype=torch.float32)
 
     gptq = GPTQ()
@@ -336,8 +328,8 @@ def test_build_quant_grid_mse_does_not_increase_error(impl):
     qmeta_abs, maxq_abs, _ = gptq.build_quant_grid(
         W,
         group_size=group_size,
-        bits=4,
-        symmetric=False,
+        bits=bits,
+        symmetric=symmetric,
         mode="absmax",
         impl=impl,
     )
@@ -349,8 +341,8 @@ def test_build_quant_grid_mse_does_not_increase_error(impl):
     qmeta_mse, maxq_mse, _ = gptq.build_quant_grid(
         W,
         group_size=group_size,
-        bits=4,
-        symmetric=False,
+        bits=bits,
+        symmetric=symmetric,
         mode="mse",
         quant_max_shrink=0.2,
         quant_n_grid=16,
@@ -364,12 +356,12 @@ def test_build_quant_grid_mse_does_not_increase_error(impl):
     # In practice mse_mse <= mse_abs; allow tiny numerical wiggle
     assert mse_mse <= mse_abs + 1e-5
 
-
 @pytest.mark.skipif(not has_cuda(), reason="CUDA not available")
 @pytest.mark.parametrize("dtype", [torch.float32, torch.float16, torch.bfloat16])
 @pytest.mark.parametrize("impl", ["cuda", "triton"])
 @pytest.mark.parametrize("mode", ["absmax", "mse"])
-def test_build_quant_grid_supports_fp16_bf16(dtype, impl, mode):
+@pytest.mark.parametrize("symmetric", [True, False])
+def test_build_quant_grid_supports_fp16_bf16(dtype, impl, mode, symmetric):
     """
     Ensure build_quant_grid works with various input dtypes on CUDA.
     """
@@ -383,7 +375,7 @@ def test_build_quant_grid_supports_fp16_bf16(dtype, impl, mode):
         W,
         group_size=group_size,
         bits=4,
-        symmetric=False,
+        symmetric=symmetric,
         mode=mode,
         quant_n_grid=8,
         impl=impl,
@@ -394,11 +386,11 @@ def test_build_quant_grid_supports_fp16_bf16(dtype, impl, mode):
     assert qmeta.dtype == torch.uint8
     assert maxq.shape == torch.Size([])
 
-
 @pytest.mark.skipif(not (has_cuda() and has_fp8()), reason="float8 or CUDA not available")
 @pytest.mark.parametrize("impl", ["cuda", "triton"])
 @pytest.mark.parametrize("mode", ["absmax", "mse"])
-def test_build_quant_grid_supports_fp8_e4m3(impl, mode):
+@pytest.mark.parametrize("symmetric", [True, False])
+def test_build_quant_grid_supports_fp8_e4m3(impl, mode, symmetric):
     """
     Smoke test: weight in float8_e4m3fn should not crash build_quant_grid.
     """
@@ -412,7 +404,7 @@ def test_build_quant_grid_supports_fp8_e4m3(impl, mode):
         W_fp8,
         group_size=128,
         bits=4,
-        symmetric=False,
+        symmetric=symmetric,
         mode=mode,
         impl=impl,
         quant_n_grid=8,
@@ -421,9 +413,39 @@ def test_build_quant_grid_supports_fp8_e4m3(impl, mode):
     assert qmeta.shape == (C, 1, 4)
     assert maxq.item() == 2**4 - 1
 
+@pytest.mark.parametrize("impl", ["cuda", "triton"])
+@pytest.mark.parametrize("mode", ["absmax", "mse"])
+def test_build_quant_grid_zero_weights(impl, mode):
+    """
+    Test with all-zero weights to check padding and zero handling.
+    """
+    torch.manual_seed(0)
+    C, R = 5, 100
+    group_size = 32
+    bits = 4
+    symmetric = False
+    W = torch.zeros(C, R, dtype=torch.float32)
+
+    gptq = GPTQ()
+    qmeta, maxq, pad = gptq.build_quant_grid(
+        W,
+        group_size=group_size,
+        bits=bits,
+        symmetric=symmetric,
+        mode=mode,
+        impl=impl,
+        quant_n_grid=8,
+    )
+
+    num_groups = (R + group_size - 1) // group_size
+    assert qmeta.shape == (C, num_groups, 4)
+    assert pad == (num_groups * group_size) - R
+
+    scale, qzero = unpack_qmeta_tensor(qmeta, group_size, R)
+    _, y = quantize_dequant(W, scale, qzero, maxq)
+    assert torch.allclose(y, W, atol=1e-6)  # Should quantize to zero perfectly
 
 # ---------- tests for Hessian inverse / Cholesky path ----------
-
 
 def _naive_hessian_inverse_cholesky(H_init: torch.Tensor,
                                     W: torch.Tensor,
@@ -464,9 +486,8 @@ def _naive_hessian_inverse_cholesky(H_init: torch.Tensor,
 
     return Hinv_cho
 
-
-@pytest.mark.parametrize("rel_damp", [1e-3, 1e-2])
-@pytest.mark.parametrize("C", [8, 16])
+@pytest.mark.parametrize("rel_damp", [1e-4, 1e-3, 1e-2, 1e-1])  # Expanded damping
+@pytest.mark.parametrize("C", [4, 8, 16, 32])  # Larger C
 def test_hessian_inverse_cholesky_matches_naive(rel_damp, C):
     """
     Compare GPTQ._get_hessian_inverse_cholesky against a naive path:
@@ -482,6 +503,8 @@ def test_hessian_inverse_cholesky_matches_naive(rel_damp, C):
     W = torch.randn(C, R, dtype=torch.float32)
     if C > 0:
         W[0].zero_()   # guaranteed dead channel
+    if C > 1:
+        W[-1].zero_()  # another dead channel
 
     # SPD-ish Hessian
     X = torch.randn(C, C, dtype=torch.float32)
@@ -507,15 +530,41 @@ def test_hessian_inverse_cholesky_matches_naive(rel_damp, C):
     Hinv_gptq = Hinv_cho_gptq.T @ Hinv_cho_gptq
     assert torch.allclose(Hinv_gptq, Hinv_ref, rtol=1e-5, atol=1e-6)
 
+@pytest.mark.parametrize("rel_damp", [1e-2])
+@pytest.mark.parametrize("C", [16])
+def test_hessian_inverse_cholesky_ill_conditioned(rel_damp, C):
+    """
+    Test with near-singular Hessian to check damping effect.
+    """
+    torch.manual_seed(1)
+    R = C
+    W = torch.randn(C, R, dtype=torch.float32)
+
+    # Ill-conditioned Hessian
+    X = torch.randn(C, C, dtype=torch.float32)
+    H_init = X @ X.T + 1e-6 * torch.eye(C, dtype=torch.float32)  # Small diagonal
+
+    gptq = GPTQ(rel_damp=rel_damp)
+    gptq.H = H_init.clone()
+    gptq.W = W.clone()
+    gptq.d_col = C
+
+    Hinv_cho = gptq._get_hessian_inverse_cholesky()
+    Hinv_recon = Hinv_cho.T @ Hinv_cho
+
+    # Check positive definite
+    assert torch.all(torch.linalg.eigvals(Hinv_recon) > 0)
 
 # ---------- tests for solver ----------
 
-
 @pytest.mark.skipif(not has_cuda(), reason="CUDA not available")
-@pytest.mark.parametrize("C,R", [(4, 32), (6, 64)])
+@pytest.mark.parametrize("C,R", [(4, 32), (6, 64), (16, 128), (32, 256)])  # Larger sizes
 @pytest.mark.parametrize("impl", ["cuda", "triton"])
 @pytest.mark.parametrize("mode", ["absmax", "mse"])
-def test_solver_matches_reference_cpu(C, R, impl, mode):
+@pytest.mark.parametrize("bits", [4, 8])
+@pytest.mark.parametrize("group_size", [32, 128])
+@pytest.mark.parametrize("symmetric", [True, False])
+def test_solver_matches_reference_cpu(C, R, impl, mode, bits, group_size, symmetric):
     """
     Compare GPTQ.solver (CUDA path) against the CPU reference solver that
     operates on Cholesky(H^{-1}) and mirrors solver.cu’s block/TRSM logic.
@@ -530,15 +579,13 @@ def test_solver_matches_reference_cpu(C, R, impl, mode):
     Hinv_cho = torch.linalg.cholesky(Hinv, upper=True)  # Cholesky(H^{-1})
 
     gptq = GPTQ()
-    group_size = min(32, R)
-    bits = 4
 
     # 1) Build qmeta on CPU
     qmeta_cpu, maxq_cpu, _ = gptq.build_quant_grid(
         W_cpu,
         group_size=group_size,
         bits=bits,
-        symmetric=False,
+        symmetric=symmetric,
         mode=mode,
         impl=impl,
         quant_n_grid=8,
@@ -570,18 +617,18 @@ def test_solver_matches_reference_cpu(C, R, impl, mode):
     assert torch.equal(q_gptq, q_ref)
     assert torch.allclose(W_solver, W_ref, rtol=1e-5, atol=1e-6)
 
-
 @pytest.mark.skipif(not has_cuda(), reason="CUDA not available")
 @pytest.mark.parametrize("mode", ["absmax", "mse"])
-def test_solver_cuda_matches_reference_cpu(mode):
+@pytest.mark.parametrize("bits", [4])
+@pytest.mark.parametrize("group_size", [128])
+@pytest.mark.parametrize("symmetric", [True, False])
+def test_solver_cuda_matches_reference_cpu(mode, bits, group_size, symmetric):
     """
     Larger-shape regression test: C=8, R=256.
     Again, compare CUDA solver against the CPU reference using Hinv_cho.
     """
     torch.manual_seed(0)
     C, R = 8, 256
-    group_size = 128
-    bits = 4
 
     # Base weights / Hessian on CPU
     W_cpu = torch.randn(C, R, dtype=torch.float32, device="cpu")
@@ -600,7 +647,7 @@ def test_solver_cuda_matches_reference_cpu(mode):
         W_gpu,
         group_size=group_size,
         bits=bits,
-        symmetric=False,
+        symmetric=symmetric,
         mode=mode,
         impl="cuda",
         quant_n_grid=8,
@@ -628,3 +675,58 @@ def test_solver_cuda_matches_reference_cpu(mode):
 
     assert torch.equal(q_gptq, q_ref)
     assert torch.allclose(W_solver, W_ref, rtol=1e-5, atol=1e-6)
+
+@pytest.mark.skipif(not has_cuda(), reason="CUDA not available")
+@pytest.mark.parametrize("mode", ["absmax"])
+@pytest.mark.parametrize("bits", [4])
+@pytest.mark.parametrize("group_size", [32])
+def test_solver_edge_case_block_size(mode, bits, group_size):
+    """
+    Test with block_size larger than C to check no-tail logic.
+    """
+    torch.manual_seed(2)
+    C, R = 4, 64
+    block_size = 8  # Larger than C
+
+    W_cpu = torch.randn(C, R, dtype=torch.float32, device="cpu")
+    X = torch.randn(C, C, dtype=torch.float32)
+    H = X @ X.T + 1e-3 * torch.eye(C, dtype=torch.float32)
+    Hinv = torch.inverse(H)
+    Hinv_cho = torch.linalg.cholesky(Hinv, upper=True)
+
+    gptq = GPTQ()
+
+    qmeta_cpu, maxq_cpu, _ = gptq.build_quant_grid(
+        W_cpu,
+        group_size=group_size,
+        bits=bits,
+        symmetric=False,
+        mode=mode,
+        impl="cuda",
+        quant_n_grid=8,
+    )
+
+    q_ref, W_ref = reference_gptq_solver_from_qmeta(
+        W_cpu, Hinv_cho, qmeta_cpu, group_size, bits, block_size=block_size
+    )
+
+    W_gpu = W_cpu.to("cuda")
+    Hinv_cho_gpu = Hinv_cho.to("cuda")
+    qmeta_gpu = qmeta_cpu.to("cuda")
+    maxq_gpu = maxq_cpu.to("cuda")
+
+    q_gptq_gpu = gptq.solver(
+        weight=W_gpu,
+        hessian_inv=Hinv_cho_gpu,
+        qmeta=qmeta_gpu,
+        maxq=maxq_gpu,
+        group_size=group_size,
+        bits=bits,
+    )
+
+    q_gptq = q_gptq_gpu.cpu()
+    W_solver = W_gpu.cpu()
+
+    assert torch.equal(q_gptq, q_ref)
+    assert torch.allclose(W_solver, W_ref, rtol=1e-5, atol=1e-6)
+
