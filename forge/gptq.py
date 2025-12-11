@@ -1,29 +1,440 @@
 import torch
+import torch.nn as nn
 import torch.nn.functional as F
+
+from torch.nn.modules.conv import _ConvNd
+
 from forge.cuda import kernels as cuda_kernels
 from forge.trt import kernels as triton_kernels
 
 
 class GPTQ:
     """
-    GPTQ grid builder + solver (qmeta4-based).
+    GPTQ grid builder + solver (qmeta4-based) + optional MoE-Quant style
+    per-layer Hessian accumulation and quantization pipeline.
 
-    Design:
-      - Grid builder works on groups of columns (group_size, typically 128).
-      - On CUDA: uses packed 4-byte metadata per group (log2(scale) in Q8.8 + qzero + flags).
-      - On CPU: emulates the same qmeta4 format via pure Torch ops.
-      - Solver consumes qmeta4 directly (groupwise), no full (C, R) scale/qzero tensors.
+    Usage modes
+    -----------
+    1) Stateless:
+       - Use `build_quant_grid(weight, ...)` and `solver(weight, hessian_inv_cholesky, ...)`
+         directly with any (C, R) transposed weight matrix.
+
+    2) Layer-bound (MoE-Quant style):
+       - Construct with a `layer` (nn.Linear / ConvNd) and hyperparameters.
+       - Call `update(input)` repeatedly on calibration batches to accumulate Hessian.
+       - Call `quantize(bits)` once to run GPTQ using 4Bit-Forge's solver, returning:
+           qweight: (out_features, in_features) uint8
+           qmeta:   (in_features, num_groups, 4) uint8
+           maxq:    scalar tensor (2**bits - 1)
+
+    Notes
+    -----
+    - Hessian is over the *input* dimension (d_col).
+    - Solver expects `hessian_inv` to be the **Cholesky factor of H^{-1}**:
+        H^{-1} = U^T U, where `hessian_inv` == U (upper-triangular).
     """
 
-    def __init__(self, device: str = ""):
-        self.device = device
+    # ------------------------------------------------------------------ #
+    # Constructor / basic state
+    # ------------------------------------------------------------------ #
+    def __init__(
+        self,
+        device: str | torch.device | None = None,
+        layer: nn.Module | None = None,
+        group_size: int | None = None,
+        sym: bool = False,
+        rel_damp: float = 1e-2,
+        quantization_scale: str = "absmax",
+    ):
+        # Optional device hint (mostly for stateless usage)
+        if device is None or device == "":
+            self.device = None
+        else:
+            self.device = torch.device(device)
 
-    # ---------- public-ish API ----------
+        # Optional bound layer (MoE-Quant style)
+        self.layer: nn.Module | None = layer
+
+        # Quantization hyperparameters
+        self.group_size = group_size
+        self.sym = sym
+        self.rel_damp = rel_damp
+        self.quantization_scale = quantization_scale  # "absmax" or "mse"
+
+        # Hessian & calibration state
+        self.H: torch.Tensor | None = None
+        self.num_samples: int = 0  # tokens collected
+
+        # Layer / weight metadata (only used when layer is provided)
+        self.W: torch.Tensor | None = None
+        self.d_row: int | None = None  # out_features
+        self.d_col: int | None = None  # in_features (Hessian dimension == C)
+        self.W_device: torch.device | None = None
+        self.W_dtype: torch.dtype | None = None
+        self.W_shape: torch.Size | None = None
+
+        # Issue flags
+        self.issue_zero_samples: bool = False
+        self.issue_nan_hessian: bool = False
+        self.issue_non_invertible: bool = False
+
+        if layer is not None:
+            self._init_from_layer(layer)
+
+    # ------------------------------------------------------------------ #
+    # Internal: initialize metadata from a bound layer
+    # ------------------------------------------------------------------ #
+    def _init_from_layer(self, layer: nn.Module) -> None:
+        if not hasattr(layer, "weight"):
+            raise TypeError("GPTQ layer must have a .weight attribute (e.g., nn.Linear or Conv).")
+
+        W = layer.weight
+        self.W_device = W.device
+        self.W_dtype = W.dtype
+        self.W_shape = W.shape
+
+        if isinstance(layer, _ConvNd):
+            # For convs, Hessian dimension is flattened input kernel dimension
+            W_flat = W.flatten(1, -1)
+            self.d_row = W_flat.shape[0]  # out_channels
+            self.d_col = W_flat.shape[1]  # in_channels * kH * kW
+        else:
+            # Linear or other 2D weight: (out_features, in_features)
+            assert W.ndim == 2, "Expected weight to be 2D for non-conv layers."
+            self.d_row, self.d_col = W.shape
+
+        # Store raw weight reference; we create working copies later
+        self.W = W
+
+    # ------------------------------------------------------------------ #
+    # MoE-Quant–style Hessian accumulation
+    # ------------------------------------------------------------------ #
+    @property
+    def tokens_collected(self) -> int:
+        """Number of calibration tokens used to build the Hessian."""
+        return self.num_samples
+
+    @torch.no_grad()
+    def update(self, input: torch.Tensor) -> None:
+        """
+        Update the estimate of the Hessian matrix from a batch of layer inputs.
+
+        Args
+        ----
+        input: batch of layer inputs (same shape as passed to the layer.forward)
+        """
+        if self.layer is None:
+            raise RuntimeError("GPTQ.update() requires a bound layer (pass layer=... in __init__).")
+        if self.d_col is None:
+            self._init_from_layer(self.layer)
+
+        # Initialize Hessian if needed
+        if self.H is None:
+            self.H = torch.zeros(
+                (self.d_col, self.d_col),
+                device=input.device,
+                dtype=torch.float32,  # keep Hessian in fp32 for stability
+            )
+
+        # Reshape input to (num_tokens, d_col)
+        if isinstance(self.layer, nn.Linear):
+            inp = input.reshape(-1, input.shape[-1])
+        elif isinstance(self.layer, _ConvNd):
+            unfold = nn.Unfold(
+                self.layer.kernel_size,
+                dilation=self.layer.dilation,
+                padding=self.layer.padding,
+                stride=self.layer.stride,
+            )
+            # (N, C * prod(kernel_size), L) -> (N*L, C * prod(kernel_size))
+            inp = unfold(input).transpose(1, 2).flatten(0, 1)
+        else:
+            raise TypeError("GPTQ.update() currently supports nn.Linear and ConvNd layers only.")
+
+        inp = inp.float()
+        num_new_samples = inp.shape[0]
+
+        # Streaming Hessian update:
+        # H_new = (num_old / num_total) * H_old + (2 / num_total) * X_new^T X_new
+        beta = self.num_samples / (self.num_samples + num_new_samples)
+        alpha = 2.0 / (self.num_samples + num_new_samples)
+        self.H.addmm_(inp.T, inp, beta=beta, alpha=alpha)
+
+        self.num_samples += num_new_samples
+
+    @torch.no_grad()
+    def reset(self) -> None:
+        """
+        Reset Hessian and calibration counters. Keeps bound layer metadata.
+        """
+        self.H = None
+        self.num_samples = 0
+        self.issue_zero_samples = False
+        self.issue_nan_hessian = False
+        self.issue_non_invertible = False
+
+        if self.layer is not None:
+            self._init_from_layer(self.layer)
+
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
+    # ------------------------------------------------------------------ #
+    # Hessian prep + weight prep (MoE-Quant style, simplified)
+    # ------------------------------------------------------------------ #
+    @torch.no_grad()
+    def quantization_pre_step(self) -> None:
+        """
+        Hessian regularization and weight reshaping before GPTQ.
+
+        - Ensures H is valid SPD (handles zero-sample / NaN cases).
+        - Builds a working weight in transposed (C, R) layout for the solver,
+          using a compute-friendly dtype (never fp8).
+        """
+        if self.layer is None:
+            raise RuntimeError("GPTQ.quantization_pre_step() requires a bound layer.")
+
+        if self.d_col is None or self.d_row is None:
+            self._init_from_layer(self.layer)
+
+        # 1) Hessian preparation
+        if self.H is None:
+            # No calibration data: fall back to identity Hessian
+            self.H = torch.eye(self.d_col, device=self.W_device, dtype=torch.float32)
+            self.issue_zero_samples = True
+
+        # Replace H by identity if NaNs are present
+        if torch.isnan(self.H).any().item():
+            self.H = torch.eye(self.d_col, device=self.W_device, dtype=torch.float32)
+            self.issue_nan_hessian = True
+
+        # Pruned channels: diag == 0
+        diag = torch.diag(self.H)
+        pruned_ids = (diag == 0)
+        if pruned_ids.any():
+            self.H[pruned_ids, pruned_ids] = 1.0
+
+        # 2) Weight preparation
+        # Decide compute dtype: match layer weight unless it's fp8, then use fp16.
+        param = self.layer.weight.detach()
+        param_dtype = param.dtype
+        float8_e4m3 = getattr(torch, "float8_e4m3fn", None)
+        float8_e5m2 = getattr(torch, "float8_e5m2", None)
+
+        compute_dtype = param_dtype
+        if param_dtype in (float8_e4m3, float8_e5m2):
+            compute_dtype = torch.float16
+
+        if compute_dtype != param_dtype:
+            W_param = param.to(dtype=compute_dtype)
+        else:
+            W_param = param
+
+        if isinstance(self.layer, _ConvNd):
+            # Flatten kernel dims; use metadata d_row/d_col from _init_from_layer
+            W_flat = W_param.reshape(self.d_row, -1)
+        else:
+            # Linear: (out_features, in_features)
+            W_flat = W_param.reshape(self.d_row, self.d_col)
+
+        # Zero out pruned columns in the working weight
+        W_flat[:, pruned_ids] = 0.0
+
+        # Store working weight in transposed (C, R) layout to feed solver directly
+        W_t = W_flat.transpose(0, 1).contiguous()  # (C, R) = (d_col, d_row)
+
+        # Keep only the transposed working copy to avoid extra [R, C] buffers
+        self.W = W_t
+        self.d_col, self.d_row = W_t.shape
+        self.W_device = W_t.device
+        self.W_dtype = W_t.dtype
+        self.W_shape = W_t.shape
+
+        # Drop intermediates ASAP
+        del W_flat
+        del W_param
+
+    # ------------------------------------------------------------------ #
+    # Hessian inverse (actually: Cholesky(H^{-1})) using low-hanging fruit
+    # ------------------------------------------------------------------ #
+    @torch.no_grad()
+    def _get_hessian_inverse_cholesky(self) -> torch.Tensor:
+        """
+        Compute the Cholesky factor of H^{-1} using:
+
+            H = 2 X^T X + λ I
+            H = L L^T (Cholesky)
+            H^{-1} = L^{-T} L^{-1} = U^T U, with U = L^{-T}
+
+        Returns
+        -------
+        H_inv_cho: (d_col, d_col) upper-triangular tensor such that
+                   H^{-1} = H_inv_cho^T @ H_inv_cho
+
+        This is what the 4Bit-Forge solver expects as `hessian_inv`.
+
+        Very important: we cast the final result to a compute dtype derived
+        from `self.W.dtype`, but we never cast to fp8 (which is unsupported
+        for many linear algebra ops).
+        """
+        if self.H is None:
+            raise RuntimeError("Hessian is None; call update() or quantization_pre_step() first.")
+        if self.W is None:
+            raise RuntimeError("Working weight W is None; call quantization_pre_step() first.")
+
+        H = self.H  # [C, C], fp32
+        w = self.W  # [C, R] working weight in transposed layout
+
+        if w.ndim != 2:
+            raise RuntimeError("Working weight W must be 2D (C, R).")
+
+        C = self.d_col
+        if H.shape != (C, C):
+            raise RuntimeError(f"Hessian shape {H.shape} does not match (d_col, d_col)=({C}, {C}).")
+
+        # Identify "dead" input channels: rows in W (dim=0) that are all zeros
+        zero_cols = torch.nonzero(w.eq(0).all(dim=1), as_tuple=False).view(-1)
+
+        # Regularize Hessian (MoE-Quant style)
+        if zero_cols.numel() > 0:
+            H[zero_cols, :] = 0.0
+            H[:, zero_cols] = 0.0
+            H[zero_cols, zero_cols] = 1.0
+
+        # Damping on the diagonal
+        diag_H = H.diagonal()
+        damp = self.rel_damp * diag_H.mean()
+        diag_H.add_(damp)
+
+        # Invert via Cholesky + triangular solve (no explicit dense H^{-1})
+        try:
+            H = torch.linalg.cholesky(H, upper=False, out=H)  # H = L @ L.T
+            I = torch.eye(C, device=H.device, dtype=H.dtype)
+            # Solve L^T U = I -> U = (L^T)^-1 (upper-triangular)
+            torch.linalg.solve_triangular(H.T, I, upper=True, out=H)
+            H_inv_cho = H
+            del H, I
+        except Exception:
+            # Fallback to identity on failure
+            self.issue_non_invertible = True
+            H_inv_cho = torch.eye(C, device=H.device, dtype=torch.float32)
+
+        # Normalize rows by diagonal (as in MoE-Quant) so solver can skip per-step division
+        diag_u = H_inv_cho.diagonal()
+        diag_u = torch.where(diag_u == 0, torch.ones_like(diag_u), diag_u)
+        H_inv_cho = H_inv_cho / diag_u.unsqueeze(-1)
+
+        # Match dtype of working weight to avoid large extra f32 copies,
+        # but never cast to fp8 (unsupported for many ops).
+        target_dtype = self.W.dtype if self.W is not None else H_inv_cho.dtype
+
+        float8_e4m3 = getattr(torch, "float8_e4m3fn", None)
+        float8_e5m2 = getattr(torch, "float8_e5m2", None)
+        if target_dtype in (float8_e4m3, float8_e5m2):
+            target_dtype = torch.float16
+
+        if not target_dtype.is_floating_point:
+            target_dtype = H_inv_cho.dtype
+
+        if H_inv_cho.dtype != target_dtype:
+            H_inv_cho = H_inv_cho.to(dtype=target_dtype)
+
+        # Drop Hessian reference to free the big [C, C] buffer as soon as possible
+        self.H = None
+
+        return H_inv_cho
+
+    # ------------------------------------------------------------------ #
+    # High-level GPTQ layer quantization using 4Bit-Forge solver
+    # ------------------------------------------------------------------ #
+    @torch.no_grad()
+    def _quantize_layer(self, bits: int) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """
+        Internal: Quantize the bound layer's weight using GPTQ.
+
+        Returns
+        -------
+        qweight_t: (d_col, d_row) uint8, transposed quantized weights
+        qmeta:     (d_col, num_groups, 4) uint8
+        maxq:      scalar tensor
+        """
+        if self.layer is None:
+            raise RuntimeError("GPTQ._quantize_layer() requires a bound layer.")
+        if self.W is None:
+            raise RuntimeError("Working weight W is None; call quantization_pre_step() first.")
+        if self.d_row is None or self.d_col is None:
+            self._init_from_layer(self.layer)
+
+        # Working weight is already in (C, R) layout from quantization_pre_step
+        W_t = self.W  # (C, R)
+        C, R = W_t.shape
+
+        # Determine group size along R dimension
+        group_size = self.group_size or R
+
+        # Build quantization grid -> qmeta4
+        device = W_t.device
+        impl = "cuda" if device.type == "cuda" else "cuda"  # CUDA kernels by default
+
+        qmeta, maxq, pad = self.build_quant_grid(
+            weight=W_t,
+            group_size=group_size,
+            bits=bits,
+            symmetric=self.sym,
+            mode=self.quantization_scale,
+            impl=impl,
+        )
+
+        # Compute H^{-1} Cholesky factor (dtype-matched to working weight / compute dtype)
+        H_inv_cho = self._get_hessian_inverse_cholesky()
+
+        # Solve GPTQ using 4Bit-Forge solver
+        qweight_t = self.solver(
+            weight=W_t,
+            hessian_inv=H_inv_cho,
+            qmeta=qmeta,
+            maxq=maxq,
+            group_size=group_size,
+            bits=bits,
+        )
+
+        return qweight_t, qmeta, maxq
+
+    @torch.no_grad()
+    def quantize(self, bits: int) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """
+        Full GPTQ pipeline for a bound layer:
+
+        1) `quantization_pre_step()` to prep H and working weight.
+        2) `_get_hessian_inverse_cholesky()` to get chol(H^{-1}).
+        3) `build_quant_grid()` to get qmeta4.
+        4) `solver()` to run GPTQ and return quantized weights.
+
+        Returns
+        -------
+        qweight: (out_features, in_features) uint8
+        qmeta:   (in_features, num_groups, 4) uint8
+        maxq:    scalar tensor (2**bits - 1)
+        """
+        self.quantization_pre_step()
+        qweight_t, qmeta, maxq = self._quantize_layer(bits)
+
+        # We no longer need the working weight after quantization completes
+        self.W = None
+
+        # Convert back to (out_features, in_features)
+        qweight = qweight_t.transpose(0, 1).contiguous()
+        return qweight, qmeta, maxq
+
+    # ================================================================== #
+    #                       Existing 4Bit-Forge API                      #
+    #          (build_quant_grid + solver + qmeta helpers)               #
+    # ================================================================== #
 
     @torch.no_grad()
     def build_quant_grid(
         self,
-        weight: torch.Tensor,      # (C, R)
+        weight: torch.Tensor,      # (C, R) transposed weight matrix
         group_size: int,
         bits: int,
         symmetric: bool = False,
@@ -44,8 +455,7 @@ class GPTQ:
         bits: bit-width (e.g. 4, 8).
         symmetric: if True, symmetric quant with fixed mid qzero.
         mode: "absmax" (range-based only) or "mse" (range + MSE shrink search).
-        quant_max_shrink: min shrink factor in MSE grid (same semantics as MoE-Quant).
-                          Search is over p in [1.0, quant_max_shrink].
+        quant_max_shrink: min shrink factor in MSE grid.
         quant_n_grid: number of shrink candidates.
         quant_norm: L^p norm for the MSE loss (e.g. 2.4).
 
@@ -88,7 +498,7 @@ class GPTQ:
 
         # Reshape into groups: (C, num_groups, group_size) -> (C*num_groups, group_size)
         W_groups = W_pad.view(C, num_groups, group_size)
-        x_groups = W_groups.reshape(-1, group_size)  # [G_total, group_size], G_total = C * num_groups
+        x_groups = W_groups.reshape(-1, group_size)  # [G_total, group_size]
 
         # Unified device-dispatch for CPU / CUDA
         qmeta_flat, maxq = self._build_quant_grid_groups(
@@ -110,10 +520,10 @@ class GPTQ:
     @torch.no_grad()
     def solver(
         self,
-        weight: torch.Tensor,       # (C, R), transposed weight, modified in-place
-        hessian_inv: torch.Tensor,  # (C, C), inverse Hessian
-        qmeta: torch.Tensor,        # (C, G, 4) uint8, packed groupwise meta
-        maxq: torch.Tensor,         # scalar tensor (kept for API; we infer from bits)
+        weight: torch.Tensor,        # (C, R), transposed weight, modified in-place
+        hessian_inv: torch.Tensor,   # (C, C), Cholesky factor of H^{-1} (upper)
+        qmeta: torch.Tensor,         # (C, G, 4) uint8, packed groupwise meta
+        maxq: torch.Tensor | None,   # scalar tensor (kept for API; we infer from bits)
         group_size: int,
         bits: int,
     ) -> torch.Tensor:
@@ -121,27 +531,24 @@ class GPTQ:
         GPTQ solver (groupwise, qmeta4-based).
 
         CUDA fast-path (gptq_solver) + Python reference CPU fallback.
-
-        Returns
-        -------
-        qweight: (C, R) uint8 quantized codes.
         """
-        # ----------------------------------------------------------------------
-        # 1. CUDA Fast Path
-        # ----------------------------------------------------------------------
+        # ------------------------------------------------------------------
+        # 1. CUDA Fast Path: kernel interprets hessian_inv as Cholesky(H^{-1})
+        # ------------------------------------------------------------------
         if weight.device.type == "cuda":
+            # NOTE: hessian_inv is already dtype-matched to weight by caller
             return cuda_kernels.gptq_solver(
                 weight,
-                hessian_inv,
+                hessian_inv,   # Cholesky(H^{-1})
                 qmeta,
                 group_size,
                 bits,
-                32,  # block_size=0 -> let kernel infer from SMEM limits
+                32,  # block_size (can be tuned; 32 here matches tests and default)
             )
 
-        # ----------------------------------------------------------------------
-        # 2. CPU Reference Implementation (Matches Kernel Math)
-        # ----------------------------------------------------------------------
+        # ------------------------------------------------------------------
+        # 2. CPU Reference Implementation
+        # ------------------------------------------------------------------
         assert weight.ndim == 2
         C, R = weight.shape
         assert hessian_inv.shape == (C, C)
@@ -162,97 +569,125 @@ class GPTQ:
             if maxq is not None:
                 diff = abs(float(maxq.item()) - maxq_val)
                 if diff > 1e-3:
-                    # could warn/log here if desired
                     pass
         except Exception:
-            # If maxq isn't a proper scalar tensor, just ignore it
             pass
 
-        # Work in float32 for solver; keep original dtype for final copy-out
+        # Work in float32 internally; keep original dtype for final weight update
         W = weight.to(torch.float32).contiguous()
-        Hinv = hessian_inv.to(torch.float32).contiguous()
+        Hcho = hessian_inv.to(torch.float32).contiguous()
 
-        # Output codes
         qweight = torch.empty_like(weight, dtype=torch.uint8, device=device)
 
         INV256 = 1.0 / 256.0
+        block_size = 32
 
-        for j in range(C):
-            # --------------------------------------------------------------
-            # A. Decode qmeta for row j  -> scales, inv_scales, qzeros
-            # --------------------------------------------------------------
-            row_meta = qmeta[j].to(torch.int32)  # (G, 4)
+        for block_start in range(0, C, block_size):
+            block_end = min(block_start + block_size, C)
+            B = block_end - block_start
 
-            # bytes 0,1 = int16 log2_q88 (little endian)
-            lo = row_meta[:, 0]
-            hi = row_meta[:, 1]
-            log2_q88 = lo | (hi << 8)
+            # 1) Quantize this block and accumulate delta = W_old - W_quant
+            delta_block = torch.zeros(B, R, dtype=torch.float32, device=device)
 
-            # sign-extend 16-bit -> 32-bit
-            log2_q88 = torch.where(log2_q88 >= 32768, log2_q88 - 65536, log2_q88)
+            for row_offset, j in enumerate(range(block_start, block_end)):
+                # Decode qmeta row j: (G, 4) -> per-group scales/inv_scales/qzeros
+                row_meta = qmeta[j].to(torch.int32)  # (G, 4)
 
-            log2_scale = log2_q88.float() * INV256
-            scales     = torch.exp2(log2_scale)        # (G,)
-            inv_scales = torch.exp2(-log2_scale)       # (G,)
+                lo = row_meta[:, 0]
+                hi = row_meta[:, 1]
+                log2_q88 = lo | (hi << 8)
 
-            qzeros_u8 = row_meta[:, 2]
-            flags     = row_meta[:, 3]
+                # sign-extend from int16
+                log2_q88 = torch.where(log2_q88 >= 32768, log2_q88 - 65536, log2_q88)
 
-            # symmetric override: if flags & 1: qzero = (maxq + 1)/2
-            is_sym   = (flags & 1) != 0
-            sym_qzero = (maxq_val + 1.0) * 0.5
-            qzeros    = torch.where(
-                is_sym,
-                sym_qzero,
-                qzeros_u8.float(),
-            )  # (G,)
+                log2_scale = log2_q88.float() * INV256
+                scales = torch.exp2(log2_scale)        # (G,)
+                inv_scales = torch.exp2(-log2_scale)   # (G,)
 
-            # --------------------------------------------------------------
-            # B. Quantize row j, accumulate error, propagate via Hinv
-            # --------------------------------------------------------------
-            if j + 1 < C:
-                h_tail = Hinv[j, j + 1 :]   # (C - j - 1,)
-            else:
-                h_tail = None
+                qzeros_u8 = row_meta[:, 2]
+                flags = row_meta[:, 3]
 
-            for g in range(num_groups):
-                start = g * group_size
-                if start >= R:
-                    break
-                end = min(start + group_size, R)
+                is_sym = (flags & 1) != 0
+                sym_q0 = (maxq_val + 1.0) * 0.5
+                qzeros = torch.where(
+                    is_sym,
+                    sym_q0,
+                    qzeros_u8.float(),
+                )  # (G,)
 
-                s      = scales[g]
-                inv_s  = inv_scales[g]
-                q0     = qzeros[g]
+                for g in range(num_groups):
+                    start = g * group_size
+                    if start >= R:
+                        break
+                    end = min(start + group_size, R)
+                    if start >= end:
+                        continue
 
-                x = W[j, start:end]        # (group_len,)
+                    s = scales[g]
+                    inv_s = inv_scales[g]
+                    q0 = qzeros[g]
 
-                # 1. Quantize: q = clamp(round(x * inv_s + q0))
-                biased = x * inv_s + q0
-                q = torch.round(biased)
-                q.clamp_(0.0, maxq_val)
+                    # x_old
+                    x = W[j, start:end].clone()
 
-                # 2. Dequantize: y = (q - q0) * s
-                y = (q - q0) * s
+                    # q = clamp(round(x * inv_s + q0))
+                    biased = x * inv_s + q0
+                    q = torch.round(biased).clamp_(0.0, maxq_val)
 
-                # 3. Error: e = y - x
-                e = y - x
+                    # y = (q - q0) * s
+                    y = (q - q0) * s
 
-                # Write into working buffer + codes
-                W[j, start:end]          = y
-                qweight[j, start:end]    = q.to(torch.uint8)
+                    # CUDA delta: x_old - y
+                    delta = x - y
 
-                # 4. Propagate error to future rows: W[k] += Hinv[j, k] * e
-                if h_tail is not None:
-                    W[j + 1 :, start:end] += h_tail.unsqueeze(1) * e.unsqueeze(0)
+                    # write back
+                    W[j, start:end] = y
+                    qweight[j, start:end] = q.to(torch.uint8)
+                    delta_block[row_offset, start:end] = delta
+
+            # No tail rows -> done with this final block
+            if block_end >= C:
+                continue
+
+            # 2) TRSM solve on H_block^T (lower-triangular) to get E_J
+            H_block = Hcho[block_start:block_end, block_start:block_end]  # [B, B], upper-tri
+            A_lower = H_block.t().contiguous()                            # [B, B], lower-tri
+
+            Delta_J = delta_block                    # [B, R]
+            Delta_T = Delta_J.t().contiguous()       # [R, B]
+            E_T = torch.empty_like(Delta_T)          # [R, B]
+
+            # Forward substitution: A_lower * x = b per row of Delta_T
+            for r in range(R):
+                b = Delta_T[r]  # (B,)
+                x_vec = torch.empty(B, dtype=torch.float32, device=device)
+                for i in range(B):
+                    if i == 0:
+                        s = 0.0
+                    else:
+                        s = torch.dot(A_lower[i, :i], x_vec[:i])
+                    diag = A_lower[i, i]
+                    x_vec[i] = (b[i] - s) / diag
+                E_T[r] = x_vec
+
+            E_J = E_T.t().contiguous()  # [B, R]
+
+            # 3) Tail update: W_tail -= H_cross^T @ E_J
+            H_cross = Hcho[block_start:block_end, block_end:C]  # [B, C_tail]
+            if H_cross.numel() > 0:
+                W_tail = W[block_end:C, :].to(torch.float32)    # [C_tail, R]
+                # H_cross^T: [C_tail, B], E_J: [B, R]
+                W_tail = W_tail - H_cross.t().mm(E_J)
+                W[block_end:C, :] = W_tail
 
         # After all updates, copy solver buffer back to original dtype
         weight.copy_(W.to(w_dtype))
 
         return qweight
 
-    # ---------- unified CPU / GPU quant-grid builder ----------
-
+    # ------------------------------------------------------------------ #
+    # Unified CPU / GPU quant-grid builder for grouped scales/qzeros
+    # ------------------------------------------------------------------ #
     @torch.no_grad()
     def _build_quant_grid_groups(
         self,
@@ -371,9 +806,9 @@ class GPTQ:
         qmeta_bytes = self._encode_qmeta_groups(scale, qzero)
         return qmeta_bytes, maxq
 
-
-    # ---------- qmeta encode/decode helpers ----------
-
+    # ------------------------------------------------------------------ #
+    # qmeta encode/decode helpers
+    # ------------------------------------------------------------------ #
     @torch.no_grad()
     def _encode_qmeta_groups(
         self,
