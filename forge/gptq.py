@@ -309,8 +309,15 @@ class GPTQ:
         diag_H.add_(damp)
 
         try:
-            H_inv_cho = torch.linalg.cholesky(torch.linalg.inv(H), upper=True)
-            del H
+            # 1) Cholesky in-place-ish: H := L (lower)
+            torch.linalg.cholesky(H, upper=False, out=H)
+
+            # 2) Solve L^T U = I, writing U back into H
+            I = torch.eye(C, device=H.device, dtype=H.dtype)
+            torch.linalg.solve_triangular(H.T, I, upper=True, out=H)
+
+            H_inv_cho = H  # this is your U
+            del H, I
         except Exception:
             self.issue_non_invertible = True
             H_inv_cho = torch.eye(C, device=H.device, dtype=torch.float32)
