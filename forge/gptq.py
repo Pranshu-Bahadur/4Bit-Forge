@@ -263,7 +263,7 @@ class GPTQ:
         Compute the Cholesky factor of H^{-1} using:
 
             H = 2 X^T X + λ I
-            H = L L^T (Cholesky)
+            H = L L^T  (Cholesky)
             H^{-1} = L^{-T} L^{-1} = U^T U, with U = L^{-T}
 
         Returns
@@ -273,22 +273,24 @@ class GPTQ:
 
         This is what the 4Bit-Forge solver expects as `hessian_inv`.
 
-        Very important: we cast the final result to a compute dtype derived
-        from `self.W.dtype`, but we never cast to fp8 (which is unsupported
-        for many linear algebra ops).
+        NOTE: We avoid any aliasing between inputs/outputs in the triangular
+        solve, so this matches the naive
+            H_reg -> H_reg^{-1} -> chol(H_reg^{-1})
+        path numerically (up to fp32 noise).
         """
         if self.H is None:
             raise RuntimeError("Hessian is None; call update() or quantization_pre_step() first.")
         if self.W is None:
             raise RuntimeError("Working weight W is None; call quantization_pre_step() first.")
+        if self.d_col is None:
+            raise RuntimeError("d_col is None; layer metadata not initialized.")
 
+        C = self.d_col
         H = self.H  # [C, C], fp32
         w = self.W  # [C, R] working weight in transposed layout
 
         if w.ndim != 2:
             raise RuntimeError("Working weight W must be 2D (C, R).")
-
-        C = self.d_col
         if H.shape != (C, C):
             raise RuntimeError(f"Hessian shape {H.shape} does not match (d_col, d_col)=({C}, {C}).")
 
@@ -306,16 +308,10 @@ class GPTQ:
         damp = self.rel_damp * diag_H.mean()
         diag_H.add_(damp)
 
-        # Invert via Cholesky + triangular solve (no explicit dense H^{-1})
         try:
-            H = torch.linalg.cholesky(H, upper=False, out=H)  # H = L @ L.T
-            I = torch.eye(C, device=H.device, dtype=H.dtype)
-            # Solve L^T U = I -> U = (L^T)^-1 (upper-triangular)
-            torch.linalg.solve_triangular(H.T, I, upper=True, out=H)
-            H_inv_cho = H
-            del H, I
+            H_inv_cho = torch.linalg.cholesky(torch.linalg.inv(H), upper=True)
+            del H
         except Exception:
-            # Fallback to identity on failure
             self.issue_non_invertible = True
             H_inv_cho = torch.eye(C, device=H.device, dtype=torch.float32)
 
@@ -324,25 +320,16 @@ class GPTQ:
         diag_u = torch.where(diag_u == 0, torch.ones_like(diag_u), diag_u)
         H_inv_cho = H_inv_cho / diag_u.unsqueeze(-1)
 
-        # Match dtype of working weight to avoid large extra f32 copies,
-        # but never cast to fp8 (unsupported for many ops).
-        target_dtype = self.W.dtype if self.W is not None else H_inv_cho.dtype
+        # Match dtype of working weight to avoid large extra f32 copies
+        w_dtype = self.W.dtype if self.W is not None else H_inv_cho.dtype
+        if H_inv_cho.dtype != w_dtype:
+            H_inv_cho = H_inv_cho.to(dtype=w_dtype)
 
-        float8_e4m3 = getattr(torch, "float8_e4m3fn", None)
-        float8_e5m2 = getattr(torch, "float8_e5m2", None)
-        if target_dtype in (float8_e4m3, float8_e5m2):
-            target_dtype = torch.float16
-
-        if not target_dtype.is_floating_point:
-            target_dtype = H_inv_cho.dtype
-
-        if H_inv_cho.dtype != target_dtype:
-            H_inv_cho = H_inv_cho.to(dtype=target_dtype)
-
-        # Drop Hessian reference to free the big [C, C] buffer as soon as possible
+        # Drop Hessian reference to free the big [C, C] buffer ASAP
         self.H = None
 
         return H_inv_cho
+
 
     # ------------------------------------------------------------------ #
     # High-level GPTQ layer quantization using 4Bit-Forge solver

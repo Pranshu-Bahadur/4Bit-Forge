@@ -422,6 +422,92 @@ def test_build_quant_grid_supports_fp8_e4m3(impl, mode):
     assert maxq.item() == 2**4 - 1
 
 
+# ---------- tests for Hessian inverse / Cholesky path ----------
+
+
+def _naive_hessian_inverse_cholesky(H_init: torch.Tensor,
+                                    W: torch.Tensor,
+                                    rel_damp: float) -> torch.Tensor:
+    """
+    Reference implementation of the path:
+
+        H_init
+          -> (zero-cols regularization + damping)
+          -> H_reg^{-1}
+          -> chol(H_reg^{-1}) (upper)
+
+    Matching GPTQ._get_hessian_inverse_cholesky's regularization logic.
+    """
+    H = H_init.clone()
+    C = H.shape[0]
+
+    # Identify dead input channels (rows in W that are all-zero)
+    zero_cols = torch.nonzero(W.eq(0).all(dim=1), as_tuple=False).view(-1)
+    if zero_cols.numel() > 0:
+        H[zero_cols, :] = 0.0
+        H[:, zero_cols] = 0.0
+        H[zero_cols, zero_cols] = 1.0
+
+    # Damping
+    diag_H = H.diagonal()
+    damp = rel_damp * diag_H.mean()
+    diag_H.add_(damp)
+
+    # Invert and take Cholesky
+    Hinv = torch.inverse(H)
+    Hinv_cho = torch.linalg.cholesky(Hinv, upper=True)  # [C, C]
+
+    # Row-normalize as in GPTQ._get_hessian_inverse_cholesky
+    diag_u = Hinv_cho.diagonal()
+    diag_u = torch.where(diag_u == 0, torch.ones_like(diag_u), diag_u)
+    Hinv_cho = Hinv_cho / diag_u.unsqueeze(-1)
+
+    return Hinv_cho
+
+
+@pytest.mark.parametrize("rel_damp", [1e-3, 1e-2])
+@pytest.mark.parametrize("C", [8, 16])
+def test_hessian_inverse_cholesky_matches_naive(rel_damp, C):
+    """
+    Compare GPTQ._get_hessian_inverse_cholesky against a naive path:
+
+        H_init -> H_reg^{-1} -> chol(H_reg^{-1})
+
+    under the *same* regularization and damping as the GPTQ implementation.
+    """
+    torch.manual_seed(0)
+    R = 2 * C + 3
+
+    # Random working weight (C, R) with some explicit dead rows to exercise logic
+    W = torch.randn(C, R, dtype=torch.float32)
+    if C > 0:
+        W[0].zero_()   # guaranteed dead channel
+
+    # SPD-ish Hessian
+    X = torch.randn(C, C, dtype=torch.float32)
+    H_init = X @ X.T + 1e-3 * torch.eye(C, dtype=torch.float32)
+
+    # Naive reference
+    Hinv_cho_ref = _naive_hessian_inverse_cholesky(H_init, W, rel_damp)
+
+    # GPTQ path
+    gptq = GPTQ(rel_damp=rel_damp)
+    gptq.H = H_init.clone()
+    gptq.W = W.clone()
+    gptq.d_col = C
+
+    Hinv_cho_gptq = gptq._get_hessian_inverse_cholesky()
+
+    # Should be numerically very close
+    assert Hinv_cho_gptq.shape == Hinv_cho_ref.shape
+    assert torch.allclose(Hinv_cho_gptq, Hinv_cho_ref, rtol=1e-5, atol=1e-6)
+
+    # Also check that the implied H^{-1} matrices match
+    Hinv_ref = Hinv_cho_ref.T @ Hinv_cho_ref
+    Hinv_gptq = Hinv_cho_gptq.T @ Hinv_cho_gptq
+    assert torch.allclose(Hinv_gptq, Hinv_ref, rtol=1e-5, atol=1e-6)
+
+
 # ---------- tests for solver ----------
 
 
