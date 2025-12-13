@@ -1,19 +1,4 @@
 // solver_babai.cu
-//
-// Butterfly-blocked Babai quantization using A = Chol(H)^T (upper-triangular).
-// Matches your conventions:
-//   - W: [C, R] mutated in-place to dequantized values
-//   - qweight: [C, R] uint8 codes
-//   - qmeta: per-(row, group) scale/qzero/flags (same packed format)
-// Key structure (butterfly / message passing):
-//   - Process blocks J from right-to-left.
-//   - Inside a block: run Babai back-to-front (sequential in i, parallel in r).
-//   - After block is quantized: push one message to the prefix via GEMM:
-//         Y_prefix -= A_prefix,J @ Q_J
-//
-// NOTE: This implementation maintains Y = A @ W0 as a float32 buffer and updates it
-//       to avoid requiring F = Chol(H^{-1}) and to stay faithful to Babai with A.
-
 #include <torch/extension.h>
 #include <ATen/cuda/CUDAContext.h>
 #include <c10/cuda/CUDAStream.h>
@@ -21,6 +6,7 @@
 
 #include <cstdint>
 #include <cmath>
+#include <algorithm>
 
 #include <c10/util/Half.h>
 #include <c10/util/BFloat16.h>
@@ -35,12 +21,10 @@
 
 namespace {
 
-// --- Data Structures --------------------------------------------------------
-
 struct QMetaPacked {
     int16_t  log2_scale_fp;  // Q8.8 fixed-point log2(scale)
-    uint8_t  qzero;          // zero-point (0..255)
-    uint8_t  flags;          // bitfield; bit0 = symmetric
+    uint8_t  qzero;
+    uint8_t  flags;          // bit0 = symmetric
 };
 static_assert(sizeof(QMetaPacked) == 4, "QMetaPacked must be 4 bytes.");
 
@@ -48,81 +32,12 @@ __device__ __forceinline__ uint32_t qmeta_to_u32(const QMetaPacked& m) {
     return *reinterpret_cast<const uint32_t*>(&m);
 }
 
-// --- Vectorized load/store helpers -----------------------------------------
-
-template <typename T>
-__device__ __forceinline__ void load_4(const T* src, float* dst) {
-    if constexpr (sizeof(T) == 4) {
-        float4 v = *reinterpret_cast<const float4*>(src);
-        dst[0] = v.x; dst[1] = v.y; dst[2] = v.z; dst[3] = v.w;
-    }
-    else if constexpr (sizeof(T) == 2) {
-        int2 v = *reinterpret_cast<const int2*>(src);
-        const T* vals = reinterpret_cast<const T*>(&v);
-        dst[0] = static_cast<float>(vals[0]);
-        dst[1] = static_cast<float>(vals[1]);
-        dst[2] = static_cast<float>(vals[2]);
-        dst[3] = static_cast<float>(vals[3]);
-    }
-    else if constexpr (sizeof(T) == 1) {
-        int v = *reinterpret_cast<const int*>(src);
-        const T* vals = reinterpret_cast<const T*>(&v);
-        dst[0] = static_cast<float>(vals[0]);
-        dst[1] = static_cast<float>(vals[1]);
-        dst[2] = static_cast<float>(vals[2]);
-        dst[3] = static_cast<float>(vals[3]);
-    }
-}
-
-template <>
-__device__ __forceinline__ void load_4<float>(const float* src, float* dst) {
-    float4 v = *reinterpret_cast<const float4*>(src);
-    dst[0] = v.x; dst[1] = v.y; dst[2] = v.z; dst[3] = v.w;
-}
-
-template <typename T>
-__device__ __forceinline__ void store_4(T* dst, const float* src) {
-    if constexpr (sizeof(T) == 4) {
-        float4 v;
-        v.x = src[0]; v.y = src[1]; v.z = src[2]; v.w = src[3];
-        *reinterpret_cast<float4*>(dst) = v;
-    }
-    else if constexpr (sizeof(T) == 2) {
-        int2 v;
-        T* vals = reinterpret_cast<T*>(&v);
-        vals[0] = static_cast<T>(src[0]);
-        vals[1] = static_cast<T>(src[1]);
-        vals[2] = static_cast<T>(src[2]);
-        vals[3] = static_cast<T>(src[3]);
-        *reinterpret_cast<int2*>(dst) = v;
-    }
-    else if constexpr (sizeof(T) == 1) {
-        int v;
-        T* vals = reinterpret_cast<T*>(&v);
-        vals[0] = static_cast<T>(src[0]);
-        vals[1] = static_cast<T>(src[1]);
-        vals[2] = static_cast<T>(src[2]);
-        vals[3] = static_cast<T>(src[3]);
-        *reinterpret_cast<int*>(dst) = v;
-    }
-}
-
-template <>
-__device__ __forceinline__ void store_4<float>(float* dst, const float* src) {
-    float4 v;
-    v.x = src[0]; v.y = src[1]; v.z = src[2]; v.w = src[3];
-    *reinterpret_cast<float4*>(dst) = v;
-}
-
-// --- QMeta decoding ---------------------------------------------------------
-
 __device__ __forceinline__ void decode_qmeta(
     uint32_t packed,
     float&   scale,
     float&   inv_scale,
     float&   qzero_f,
-    float&   maxq_g,
-    uint8_t  global_bits
+    uint8_t  bits
 ) {
     int16_t log2_q88 = static_cast<int16_t>(packed & 0xFFFFu);
     uint8_t qzero_u8 = static_cast<uint8_t>((packed >> 16) & 0xFFu);
@@ -133,382 +48,477 @@ __device__ __forceinline__ void decode_qmeta(
     scale     = exp2f(log2_scale);
     inv_scale = exp2f(-log2_scale);
 
-    int maxq_i = (1 << global_bits) - 1;
-    maxq_g = static_cast<float>(maxq_i);
-
     if (flags & 0x01) {
-        // symmetric: center zero point
-        constexpr float HALF = 0.5f;
-        qzero_u8 = static_cast<uint8_t>((maxq_g + 1.0f) * HALF);
+        int maxq_i = (1 << bits) - 1;
+        qzero_u8 = static_cast<uint8_t>((static_cast<float>(maxq_i) + 1.0f) * 0.5f);
     }
     qzero_f = static_cast<float>(qzero_u8);
 }
 
-// --- Quant primitives -------------------------------------------------------
-
 __device__ __forceinline__ void quantize_scalar(
     float x, float inv_s, float s, float q0, int maxq_i,
-    uint8_t& q_out, float& deq_out
+    float& err_out, uint8_t& q_out, float& deq_out
 ) {
     float biased = x * inv_s + q0;
     int q = __float2int_rn(biased);
 
-    if (q < 0) q = 0;
-    else if (q > maxq_i) q = maxq_i;
+    q = (q < 0) ? 0 : q;
+    q = (q > maxq_i) ? maxq_i : q;
 
     deq_out = __fmaf_rn(static_cast<float>(q), s, -q0 * s);
+    err_out = x - deq_out;
     q_out   = static_cast<uint8_t>(q);
 }
 
-__device__ __forceinline__ void quantize_process_4(
-    const float* x_vals,
-    float inv_s, float s, float q0, int maxq_i,
-    uint32_t& q_packed, float* deq_vals
-) {
-    uint8_t q_b[4];
-    #pragma unroll
-    for (int i = 0; i < 4; ++i) {
-        quantize_scalar(x_vals[i], inv_s, s, q0, maxq_i, q_b[i], deq_vals[i]);
-    }
-    q_packed =  (uint32_t)q_b[0]
-              | ((uint32_t)q_b[1] << 8)
-              | ((uint32_t)q_b[2] << 16)
-              | ((uint32_t)q_b[3] << 24);
+// --- dtype helpers ----------------------------------------------------------
+
+template <typename T>
+__device__ __forceinline__ float to_f32(T x) { return static_cast<float>(x); }
+
+template <>
+__device__ __forceinline__ float to_f32<c10::Float8_e4m3fn>(c10::Float8_e4m3fn x) {
+    return static_cast<float>(x);
 }
 
-// ----------------------------------------------------------------------------
-// Kernel: Babai inside one block J=[block_start, block_start+B)
-//
-// - Maintains and updates Y[J,:] in-place for intra-block dependencies.
-// - Writes dequantized Q into W rows and also into Q_block (float).
-// - Writes Z codes into qweight.
-//
-// A is full [C,C] float, but we only use A[J,J] (upper-tri) here.
-// ----------------------------------------------------------------------------
+template <typename T>
+__device__ __forceinline__ T from_f32(float x) { return static_cast<T>(x); }
 
-template <typename scalar_t, int MAX_B, bool VECTORIZED>
-__global__ void babai_quant_block_kernel(
-    scalar_t* __restrict__ W,              // [C, R] (write deq)
-    uint8_t*  __restrict__ qweight,        // [C, R] (write codes)
-    const QMetaPacked* __restrict__ qmeta, // [C*G]
-    const float* __restrict__ A,           // [C, C] float (upper-tri)
-    float* __restrict__ Y,                 // [C, R] float (updated in-place)
-    float* __restrict__ Q_block,           // [MAX_B, R] float (write deq block)
+template <>
+__device__ __forceinline__ c10::Float8_e4m3fn from_f32<c10::Float8_e4m3fn>(float x) {
+    return static_cast<c10::Float8_e4m3fn>(x);
+}
+
+// -----------------------------------------------------------------------------
+// Scratch fill kernels for addmm_ path
+// -----------------------------------------------------------------------------
+
+template <typename scalar_t>
+__global__ void fill_A_scaled_kernel(
+    scalar_t* __restrict__ A_tmp,     // [C, block_size] row-major
+    const float* __restrict__ A,      // [C, C] float
+    const float* __restrict__ invD,   // [C] float
+    int C, int block_size,
+    int block_start, int B
+) {
+    int k = blockIdx.x * blockDim.x + threadIdx.x; // 0..B-1
+    int i = blockIdx.y * blockDim.y + threadIdx.y; // 0..block_start-1
+    if (k >= B || i >= block_start) return;
+
+    float a = A[i * C + (block_start + k)];
+    float s = a * invD[i];
+    A_tmp[i * block_size + k] = from_f32<scalar_t>(s);
+}
+
+template <typename scalar_t>
+__global__ void cast_E_kernel(
+    scalar_t* __restrict__ E_out,     // [block_size, R]
+    const float* __restrict__ E_in,   // [B, R]
+    int R, int B
+) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    int total = B * R;
+    if (idx >= total) return;
+    int k = idx / R;
+    int r = idx - k * R;
+    E_out[k * R + r] = from_f32<scalar_t>(E_in[k * R + r]);
+}
+
+// -----------------------------------------------------------------------------
+// Kernel 1: Babai quantize block (back-to-front) + intra-block propagation.
+//
+// - Builds S_sh(i,t) = (A(i,t)/A(i,i)) = A(i,t) * invD(i) in shared.
+// - Triangle hygiene: only load needed upper entries (t > i); others set to 0.
+// - Warp decode optimization uses ACTIVE mask and broadcasts from an active lane.
+// -----------------------------------------------------------------------------
+
+template <typename scalar_t, int MAX_B>
+__global__ void babai_quant_block_kernel_fast(
+    scalar_t* __restrict__ W,                   // [C, R]
+    uint8_t*  __restrict__ qweight,             // [C, R]
+    const QMetaPacked* __restrict__ qmeta,      // [C * G]
+    const float* __restrict__ A,                // [C, C] float (upper-tri expected)
+    const float* __restrict__ invD_all,         // [C] float
+    float* __restrict__ Eblk,                   // [B, R] float
     int C, int R, int G,
     int block_start, int B,
     int group_size,
     uint8_t bits
 ) {
-    __shared__ float A_sh[MAX_B * MAX_B];
+    __shared__ float S_sh[MAX_B * MAX_B];
 
-    const int tid = threadIdx.x;
+    // Build row-scaled block in shared: S(i,t) = A(i,t)*invD(i), only for t>i
+    for (int idx = threadIdx.x; idx < B * B; idx += blockDim.x) {
+        int i = idx / B;
+        int t = idx - i * B;
 
-    // Load A_block = A[block_start:block_start+B, block_start:block_start+B] into shared.
-    for (int idx = tid; idx < B * B; idx += blockDim.x) {
-        int r = idx / B;
-        int c = idx - r * B;
-        int gr = block_start + r;
-        int gc = block_start + c;
-        A_sh[r * MAX_B + c] = A[gr * C + gc];
+        float v = 0.0f;
+        if (t > i) {
+            float invd = invD_all[block_start + i];
+            float a    = A[(block_start + i) * C + (block_start + t)];
+            v = a * invd;
+        }
+        S_sh[i * MAX_B + t] = v;
     }
     __syncthreads();
 
-    // Process local rows i = B-1..0 (back-to-front).
-    if (VECTORIZED) {
-        const int R_vec = R / 4;
-        const int group_size_vec = group_size / 4;
+    int r = blockIdx.x * blockDim.x + threadIdx.x;
 
-        for (int i = B - 1; i >= 0; --i) {
-            const int j = block_start + i;
-            const float diag = A_sh[i * MAX_B + i];
-            const float inv_diag = 1.0f / diag;
+    // --- Correctness: derive active mask AFTER sync; do not use full mask on edge tile.
+    const unsigned full = 0xFFFFFFFFu;
+    unsigned mask = __ballot_sync(full, r < R);
+    if (mask == 0) return; // whole warp out-of-range (uniform)
 
-            auto* Q_row_vec = reinterpret_cast<uint32_t*>(qweight + j * R);
-            auto* W_row     = W + j * R;
-            float* Y_row    = Y + j * R;
-            float* QB_row   = Q_block + i * R;
+    int lane = threadIdx.x & 31;
+    if ((mask & (1u << lane)) == 0) return; // inactive lane exits safely
 
-            // Quantize ω = Y[j,:] / A[j,j]
-            for (int col_v = tid; col_v < R_vec; col_v += blockDim.x) {
-                const int g = col_v / group_size_vec;
-                const QMetaPacked m = qmeta[j * G + g];
+    // pick an active source lane for broadcasts
+    int src = __ffs(mask) - 1;
 
-                float s, inv_s, q0, maxq_g;
-                decode_qmeta(qmeta_to_u32(m), s, inv_s, q0, maxq_g, bits);
+    // Load this column across the block into registers
+    float x[MAX_B];
+    #pragma unroll
+    for (int i = 0; i < MAX_B; ++i) x[i] = 0.0f;
 
-                float omega[4];
-                load_4(Y_row + col_v * 4, omega);
-                #pragma unroll
-                for (int t = 0; t < 4; ++t) omega[t] *= inv_diag;
+    for (int i = 0; i < B; ++i) {
+        int row = block_start + i;
+        x[i] = to_f32(W[row * R + r]);
+    }
 
-                float deq[4];
-                uint32_t q_packed;
-                quantize_process_4(omega, inv_s, s, q0, static_cast<int>(maxq_g), q_packed, deq);
+    const int maxq_i = (1 << bits) - 1;
 
-                // Store outputs
-                Q_row_vec[col_v] = q_packed;
-                store_4(W_row + col_v * 4, deq);   // write deq into W (cast)
-                store_4(QB_row + col_v * 4, deq);  // keep float deq for prefix message
+    // Back-to-front
+    for (int t = B - 1; t >= 0; --t) {
+        int row = block_start + t;
 
-                // Intra-block update: for k = 0..i-1, Y[k,:] -= A[k,i] * Q_i
-                #pragma unroll
-                for (int k = 0; k < MAX_B; ++k) {
-                    if (k >= i) break;
-                    const float a_ki = A_sh[k * MAX_B + i];
-                    float* Yk = Y + (block_start + k) * R + col_v * 4;
+        int g  = r / group_size;
+        int g0 = __shfl_sync(mask, g, src);
+        int same = __all_sync(mask, g == g0);
 
-                    float yk[4];
-                    load_4(Yk, yk);
-                    #pragma unroll
-                    for (int t = 0; t < 4; ++t) yk[t] -= a_ki * deq[t];
-                    store_4(Yk, yk);
-                }
+        float s = 0.f, inv_s = 0.f, q0 = 0.f;
+        if (same) {
+            if (lane == src) {
+                uint32_t packed = qmeta_to_u32(qmeta[row * G + g0]);
+                decode_qmeta(packed, s, inv_s, q0, bits);
             }
+            s     = __shfl_sync(mask, s, src);
+            inv_s = __shfl_sync(mask, inv_s, src);
+            q0    = __shfl_sync(mask, q0, src);
+        } else {
+            uint32_t packed = qmeta_to_u32(qmeta[row * G + g]);
+            decode_qmeta(packed, s, inv_s, q0, bits);
+        }
 
-            __syncthreads(); // ensure all columns updated before next i uses Y[i-1,:]
+        float err, deq;
+        uint8_t qb;
+        quantize_scalar(x[t], inv_s, s, q0, maxq_i, err, qb, deq);
+
+        qweight[row * R + r] = qb;
+        W[row * R + r]       = from_f32<scalar_t>(deq);
+        Eblk[t * R + r]      = err;
+
+        // Propagate to earlier rows i < t
+        #pragma unroll
+        for (int i = 0; i < MAX_B; ++i) {
+            if (i < t) {
+                float alpha = S_sh[i * MAX_B + t]; // already 0 for t<=i
+                x[i] = __fmaf_rn(alpha, err, x[i]);
+            }
+        }
+    }
+}
+
+// -----------------------------------------------------------------------------
+// Kernel 2: Prefix update for FP8 (custom), float accumulate.
+// W[i,r] += sum_k (A[i, block_start+k] * invD[i]) * Eblk[k,r]
+// -----------------------------------------------------------------------------
+
+template <int MAX_B, int TILE_R, int TILE_I>
+__global__ void babai_update_left_fp8_kernel(
+    c10::Float8_e4m3fn* __restrict__ W,     // [C, R]
+    const float* __restrict__ A,            // [C, C]
+    const float* __restrict__ invD_all,     // [C]
+    const float* __restrict__ Eblk,         // [B, R]
+    int C, int R,
+    int block_start, int B
+) {
+    __shared__ float E_sh[MAX_B * TILE_R];   // [B][TILE_R]
+    __shared__ float S_sh[TILE_I * MAX_B];   // [TILE_I][B]
+
+    int r0 = blockIdx.x * TILE_R;
+    int i0 = blockIdx.y * TILE_I;
+
+    int tx = threadIdx.x; // 0..TILE_R-1
+    int ty = threadIdx.y; // 0..TILE_I-1
+
+    // load E tile
+    for (int k = ty; k < B; k += TILE_I) {
+        int r = r0 + tx;
+        E_sh[k * TILE_R + tx] = (r < R) ? Eblk[k * R + r] : 0.f;
+    }
+
+    int i = i0 + ty;
+    if (i < block_start) {
+        float invd = invD_all[i];
+        for (int k = tx; k < B; k += TILE_R) {
+            float a = A[i * C + (block_start + k)];
+            S_sh[ty * MAX_B + k] = a * invd;
         }
     } else {
-        for (int i = B - 1; i >= 0; --i) {
-            const int j = block_start + i;
-            const float diag = A_sh[i * MAX_B + i];
-            const float inv_diag = 1.0f / diag;
-
-            auto* W_row   = W + j * R;
-            auto* Q_row   = qweight + j * R;
-            float* Y_row  = Y + j * R;
-            float* QB_row = Q_block + i * R;
-
-            for (int col = tid; col < R; col += blockDim.x) {
-                const int g = col / group_size;
-                const QMetaPacked m = qmeta[j * G + g];
-
-                float s, inv_s, q0, maxq_g;
-                decode_qmeta(qmeta_to_u32(m), s, inv_s, q0, maxq_g, bits);
-
-                float omega = Y_row[col] * inv_diag;
-
-                uint8_t q_byte;
-                float deq;
-                quantize_scalar(omega, inv_s, s, q0, static_cast<int>(maxq_g), q_byte, deq);
-
-                Q_row[col]   = q_byte;
-                W_row[col]   = static_cast<scalar_t>(deq);
-                QB_row[col]  = deq;
-
-                // Intra-block update
-                for (int k = 0; k < i; ++k) {
-                    const float a_ki = A_sh[k * MAX_B + i];
-                    Y[(block_start + k) * R + col] -= a_ki * deq;
-                }
-            }
-
-            __syncthreads();
+        for (int k = tx; k < B; k += TILE_R) {
+            S_sh[ty * MAX_B + k] = 0.f;
         }
+    }
+
+    __syncthreads();
+
+    int r = r0 + tx;
+    if (i < block_start && r < R) {
+        float acc = 0.f;
+        #pragma unroll
+        for (int k = 0; k < MAX_B; ++k) {
+            if (k < B) {
+                acc = __fmaf_rn(S_sh[ty * MAX_B + k], E_sh[k * TILE_R + tx], acc);
+            }
+        }
+        float w = static_cast<float>(W[i * R + r]);
+        w += acc;
+        W[i * R + r] = static_cast<c10::Float8_e4m3fn>(w);
     }
 }
 
 } // namespace
 
-// ----------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
 // Host wrapper
-// ----------------------------------------------------------------------------
-
+// -----------------------------------------------------------------------------
 torch::Tensor babai_solver_cuda(
-    torch::Tensor weight,        // [C, R]
-    torch::Tensor A_chol_t,      // [C, C] = Chol(H)^T (upper-tri)
-    torch::Tensor qmeta_bytes,   // [C, G, 4] or [C*G, 4]
+    torch::Tensor weight,      // [C, R]
+    torch::Tensor A,           // [C, C] upper-tri = chol(H)^T
+    torch::Tensor qmeta_bytes, // [C, G, 4] or [C*G, 4]
     int64_t group_size,
     int64_t bits,
     int64_t block_size
 ) {
     TORCH_CHECK(weight.is_cuda(), "weight must be CUDA");
-    TORCH_CHECK(A_chol_t.is_cuda(), "A_chol_t must be CUDA");
-    TORCH_CHECK(weight.dim() == 2, "weight must be [C, R]");
-    TORCH_CHECK(A_chol_t.dim() == 2, "A_chol_t must be [C, C]");
-    TORCH_CHECK(A_chol_t.size(0) == weight.size(0) && A_chol_t.size(1) == weight.size(0),
-                "A_chol_t must match CxC");
+    TORCH_CHECK(A.is_cuda(),      "A must be CUDA");
+    TORCH_CHECK(qmeta_bytes.is_cuda(), "qmeta_bytes must be CUDA");
 
-    weight     = weight.contiguous();
-    A_chol_t   = A_chol_t.contiguous();
+    weight      = weight.contiguous();
+    A           = A.contiguous();
     qmeta_bytes = qmeta_bytes.contiguous();
 
     const int64_t C = weight.size(0);
     const int64_t R = weight.size(1);
 
+    TORCH_CHECK(weight.dim() == 2, "weight must be [C, R]");
+    TORCH_CHECK(A.dim() == 2 && A.size(0) == C && A.size(1) == C, "A must be [C, C]");
+
     // Determine G
     int64_t G;
     if (qmeta_bytes.dim() == 3) {
+        TORCH_CHECK(qmeta_bytes.size(0) == C, "qmeta_bytes[0] must be C");
+        TORCH_CHECK(qmeta_bytes.size(2) == 4, "qmeta_bytes[...,4] expected");
         G = qmeta_bytes.size(1);
     } else {
+        TORCH_CHECK(qmeta_bytes.dim() == 2 && qmeta_bytes.size(1) == 4,
+                    "qmeta_bytes must be [C,G,4] or [C*G,4]");
+        TORCH_CHECK(qmeta_bytes.size(0) % C == 0, "qmeta_bytes[0] must be multiple of C");
         G = qmeta_bytes.size(0) / C;
     }
-    TORCH_CHECK(G > 0, "Invalid G derived from qmeta_bytes");
 
-    // Clamp block size
-    constexpr int MAX_BLOCK_SIZE = 32;
-    if (block_size <= 0 || block_size > MAX_BLOCK_SIZE) block_size = MAX_BLOCK_SIZE;
+    constexpr int MAX_B = 32;
+    if (block_size <= 0 || block_size > MAX_B) block_size = MAX_B;
     if (block_size > C) block_size = C;
 
-    // Flatten qmeta
-    auto qmeta_flat = (qmeta_bytes.dim() == 3) ? qmeta_bytes.view({C * G, 4}) : qmeta_bytes;
+    auto qweight = torch::empty({C, R},
+        torch::TensorOptions().dtype(torch::kUInt8).device(weight.device()));
 
-    // Output codes
-    auto qweight = torch::empty({C, R}, torch::TensorOptions().dtype(torch::kUInt8).device(weight.device()));
+    // Eblk (float) reusable
+    auto Eblk = torch::empty({block_size, R},
+        torch::TensorOptions().dtype(at::kFloat).device(weight.device()));
 
-    // Work buffers:
-    //   A_f: float32 view of A
-    //   Y:   float32 Babai residual state Y = A * W0
-    auto A_f = A_chol_t.to(torch::kFloat).contiguous();
-    auto W0f = weight.to(torch::kFloat); // uses current weight as "original"
-    auto Y   = torch::matmul(A_f, W0f).contiguous(); // [C, R] float32
+    auto qmeta_flat =
+        (qmeta_bytes.dim() == 3) ? qmeta_bytes.view({C * G, 4}) : qmeta_bytes;
 
-    // Float buffer for current block Q_J (dequant values), used for prefix message update
-    auto Q_block = torch::empty({block_size, R}, torch::TensorOptions().dtype(torch::kFloat).device(weight.device()));
+    // Cast A to float once for reads
+    auto A_f = (A.scalar_type() == at::ScalarType::Float) ? A : A.to(torch::kFloat);
+    A_f = A_f.contiguous();
+
+    // invD_all[i] = 1 / A[i,i]
+    auto invD_all = A_f.diagonal(0, 0, 1).reciprocal().contiguous();
 
     auto stream = at::cuda::getCurrentCUDAStream();
+    auto st = weight.scalar_type();
 
-    const bool use_vectorized = (R % 4 == 0) && (group_size % 4 == 0);
-    constexpr int WARPS_PER_BLOCK = 8;
-    const int threads = WARPS_PER_BLOCK * 32;
+    // Scratch for addmm_ path (reused, no per-iter allocs)
+    torch::Tensor A_tmp, E_tmp;
+    if (st == at::ScalarType::Half || st == at::ScalarType::BFloat16 || st == at::ScalarType::Float) {
+        A_tmp = torch::empty({C, block_size}, torch::TensorOptions().dtype(st).device(weight.device()));
+        if (st != at::ScalarType::Float) {
+            E_tmp = torch::empty({block_size, R}, torch::TensorOptions().dtype(st).device(weight.device()));
+        }
+    }
 
-    // Process blocks from right to left (default Babai order)
+    constexpr int THREADS_Q = 128;
+
+    // fp8 prefix update tiling
+    constexpr int TILE_R = 64;
+    constexpr int TILE_I = 4;
+    dim3 fp8_block(TILE_R, TILE_I);
+
+    // Right-to-left blocks
     for (int64_t block_end = C; block_end > 0; block_end -= block_size) {
-        int64_t block_start = std::max<int64_t>(0, block_end - block_size);
-        int64_t B_long      = block_end - block_start;
-        int     B           = static_cast<int>(B_long);
+        const int64_t block_start = std::max<int64_t>(0, block_end - block_size);
+        const int64_t B_long      = block_end - block_start;
+        const int     B           = static_cast<int>(B_long);
 
-        // Quantize this block + intra-block updates on Y
-        AT_DISPATCH_SWITCH(weight.scalar_type(), "babai_quant_block",
-            AT_DISPATCH_CASE(at::ScalarType::Float, [&] {
-                if (use_vectorized) {
-                    babai_quant_block_kernel<float, MAX_BLOCK_SIZE, true><<<1, threads, 0, stream>>>(
-                        weight.data_ptr<float>(),
-                        qweight.data_ptr<uint8_t>(),
-                        reinterpret_cast<const QMetaPacked*>(qmeta_flat.data_ptr<uint8_t>()),
-                        A_f.data_ptr<float>(),
-                        Y.data_ptr<float>(),
-                        Q_block.data_ptr<float>(),
-                        (int)C, (int)R, (int)G,
-                        (int)block_start, B,
-                        (int)group_size,
-                        (uint8_t)bits
-                    );
-                } else {
-                    babai_quant_block_kernel<float, MAX_BLOCK_SIZE, false><<<1, threads, 0, stream>>>(
-                        weight.data_ptr<float>(),
-                        qweight.data_ptr<uint8_t>(),
-                        reinterpret_cast<const QMetaPacked*>(qmeta_flat.data_ptr<uint8_t>()),
-                        A_f.data_ptr<float>(),
-                        Y.data_ptr<float>(),
-                        Q_block.data_ptr<float>(),
-                        (int)C, (int)R, (int)G,
-                        (int)block_start, B,
-                        (int)group_size,
-                        (uint8_t)bits
-                    );
-                }
-            })
-            AT_DISPATCH_CASE(at::ScalarType::Half, [&] {
-                if (use_vectorized) {
-                    babai_quant_block_kernel<at::Half, MAX_BLOCK_SIZE, true><<<1, threads, 0, stream>>>(
-                        weight.data_ptr<at::Half>(),
-                        qweight.data_ptr<uint8_t>(),
-                        reinterpret_cast<const QMetaPacked*>(qmeta_flat.data_ptr<uint8_t>()),
-                        A_f.data_ptr<float>(),
-                        Y.data_ptr<float>(),
-                        Q_block.data_ptr<float>(),
-                        (int)C, (int)R, (int)G,
-                        (int)block_start, B,
-                        (int)group_size,
-                        (uint8_t)bits
-                    );
-                } else {
-                    babai_quant_block_kernel<at::Half, MAX_BLOCK_SIZE, false><<<1, threads, 0, stream>>>(
-                        weight.data_ptr<at::Half>(),
-                        qweight.data_ptr<uint8_t>(),
-                        reinterpret_cast<const QMetaPacked*>(qmeta_flat.data_ptr<uint8_t>()),
-                        A_f.data_ptr<float>(),
-                        Y.data_ptr<float>(),
-                        Q_block.data_ptr<float>(),
-                        (int)C, (int)R, (int)G,
-                        (int)block_start, B,
-                        (int)group_size,
-                        (uint8_t)bits
-                    );
-                }
-            })
-            AT_DISPATCH_CASE(at::ScalarType::BFloat16, [&] {
-                if (use_vectorized) {
-                    babai_quant_block_kernel<at::BFloat16, MAX_BLOCK_SIZE, true><<<1, threads, 0, stream>>>(
-                        weight.data_ptr<at::BFloat16>(),
-                        qweight.data_ptr<uint8_t>(),
-                        reinterpret_cast<const QMetaPacked*>(qmeta_flat.data_ptr<uint8_t>()),
-                        A_f.data_ptr<float>(),
-                        Y.data_ptr<float>(),
-                        Q_block.data_ptr<float>(),
-                        (int)C, (int)R, (int)G,
-                        (int)block_start, B,
-                        (int)group_size,
-                        (uint8_t)bits
-                    );
-                } else {
-                    babai_quant_block_kernel<at::BFloat16, MAX_BLOCK_SIZE, false><<<1, threads, 0, stream>>>(
-                        weight.data_ptr<at::BFloat16>(),
-                        qweight.data_ptr<uint8_t>(),
-                        reinterpret_cast<const QMetaPacked*>(qmeta_flat.data_ptr<uint8_t>()),
-                        A_f.data_ptr<float>(),
-                        Y.data_ptr<float>(),
-                        Q_block.data_ptr<float>(),
-                        (int)C, (int)R, (int)G,
-                        (int)block_start, B,
-                        (int)group_size,
-                        (uint8_t)bits
-                    );
-                }
-            })
-            AT_DISPATCH_CASE(at::ScalarType::Float8_e4m3fn, [&] {
-                if (use_vectorized) {
-                    babai_quant_block_kernel<c10::Float8_e4m3fn, MAX_BLOCK_SIZE, true><<<1, threads, 0, stream>>>(
-                        weight.data_ptr<c10::Float8_e4m3fn>(),
-                        qweight.data_ptr<uint8_t>(),
-                        reinterpret_cast<const QMetaPacked*>(qmeta_flat.data_ptr<uint8_t>()),
-                        A_f.data_ptr<float>(),
-                        Y.data_ptr<float>(),
-                        Q_block.data_ptr<float>(),
-                        (int)C, (int)R, (int)G,
-                        (int)block_start, B,
-                        (int)group_size,
-                        (uint8_t)bits
-                    );
-                } else {
-                    babai_quant_block_kernel<c10::Float8_e4m3fn, MAX_BLOCK_SIZE, false><<<1, threads, 0, stream>>>(
-                        weight.data_ptr<c10::Float8_e4m3fn>(),
-                        qweight.data_ptr<uint8_t>(),
-                        reinterpret_cast<const QMetaPacked*>(qmeta_flat.data_ptr<uint8_t>()),
-                        A_f.data_ptr<float>(),
-                        Y.data_ptr<float>(),
-                        Q_block.data_ptr<float>(),
-                        (int)C, (int)R, (int)G,
-                        (int)block_start, B,
-                        (int)group_size,
-                        (uint8_t)bits
-                    );
-                }
-            })
-        );
+        auto Eblk_view = Eblk.narrow(0, 0, B_long); // [B, R]
+
+        // 1) Quantize block + intra-block propagation
+        const int grid_q = (static_cast<int>(R) + THREADS_Q - 1) / THREADS_Q;
+
+        if (st == at::ScalarType::Float) {
+            babai_quant_block_kernel_fast<float, MAX_B><<<grid_q, THREADS_Q, 0, stream>>>(
+                weight.data_ptr<float>(),
+                qweight.data_ptr<uint8_t>(),
+                reinterpret_cast<const QMetaPacked*>(qmeta_flat.data_ptr<uint8_t>()),
+                A_f.data_ptr<float>(),
+                invD_all.data_ptr<float>(),
+                Eblk_view.data_ptr<float>(),
+                (int)C, (int)R, (int)G,
+                (int)block_start, B,
+                (int)group_size,
+                (uint8_t)bits
+            );
+        } else if (st == at::ScalarType::Half) {
+            babai_quant_block_kernel_fast<at::Half, MAX_B><<<grid_q, THREADS_Q, 0, stream>>>(
+                weight.data_ptr<at::Half>(),
+                qweight.data_ptr<uint8_t>(),
+                reinterpret_cast<const QMetaPacked*>(qmeta_flat.data_ptr<uint8_t>()),
+                A_f.data_ptr<float>(),
+                invD_all.data_ptr<float>(),
+                Eblk_view.data_ptr<float>(),
+                (int)C, (int)R, (int)G,
+                (int)block_start, B,
+                (int)group_size,
+                (uint8_t)bits
+            );
+        } else if (st == at::ScalarType::BFloat16) {
+            babai_quant_block_kernel_fast<at::BFloat16, MAX_B><<<grid_q, THREADS_Q, 0, stream>>>(
+                weight.data_ptr<at::BFloat16>(),
+                qweight.data_ptr<uint8_t>(),
+                reinterpret_cast<const QMetaPacked*>(qmeta_flat.data_ptr<uint8_t>()),
+                A_f.data_ptr<float>(),
+                invD_all.data_ptr<float>(),
+                Eblk_view.data_ptr<float>(),
+                (int)C, (int)R, (int)G,
+                (int)block_start, B,
+                (int)group_size,
+                (uint8_t)bits
+            );
+        } else if (st == at::ScalarType::Float8_e4m3fn) {
+            babai_quant_block_kernel_fast<c10::Float8_e4m3fn, MAX_B><<<grid_q, THREADS_Q, 0, stream>>>(
+                weight.data_ptr<c10::Float8_e4m3fn>(),
+                qweight.data_ptr<uint8_t>(),
+                reinterpret_cast<const QMetaPacked*>(qmeta_flat.data_ptr<uint8_t>()),
+                A_f.data_ptr<float>(),
+                invD_all.data_ptr<float>(),
+                Eblk_view.data_ptr<float>(),
+                (int)C, (int)R, (int)G,
+                (int)block_start, B,
+                (int)group_size,
+                (uint8_t)bits
+            );
+        } else {
+            TORCH_CHECK(false, "Unsupported dtype for babai_solver_cuda");
+        }
         CUDA_CHECK(cudaGetLastError());
 
-        // Butterfly message: push block's quantized contribution to the prefix
+        // 2) Prefix update (rows [0, block_start))
         if (block_start > 0) {
-            // Y_prefix -= A_prefixJ @ Q_J
-            auto Y_prefix = Y.narrow(0, 0, block_start);
-            auto A_prefixJ = A_f.narrow(0, 0, block_start)
-                               .narrow(1, block_start, B_long)
-                               .contiguous(); // [block_start, B]
-            auto Q_J = Q_block.narrow(0, 0, B_long); // [B, R]
+            if (st == at::ScalarType::Float8_e4m3fn) {
+                int grid_x = (static_cast<int>(R) + TILE_R - 1) / TILE_R;
+                int grid_y = (static_cast<int>(block_start) + TILE_I - 1) / TILE_I;
+                dim3 fp8_grid(grid_x, grid_y);
 
-            // Y_prefix = 1.0 * Y_prefix + (-1.0) * (A_prefixJ @ Q_J)
-            Y_prefix.addmm_(A_prefixJ, Q_J, -1.0f, 1.0f);
+                babai_update_left_fp8_kernel<MAX_B, TILE_R, TILE_I><<<fp8_grid, fp8_block, 0, stream>>>(
+                    weight.data_ptr<c10::Float8_e4m3fn>(),
+                    A_f.data_ptr<float>(),
+                    invD_all.data_ptr<float>(),
+                    Eblk_view.data_ptr<float>(),
+                    (int)C, (int)R,
+                    (int)block_start, B
+                );
+                CUDA_CHECK(cudaGetLastError());
+            } else {
+                // Fill A_tmp slice and E_tmp (if needed), then cuBLAS addmm_
+                const int tx = 16, ty = 16;
+                dim3 blk(tx, ty);
+                dim3 grd((B + tx - 1) / tx, ((int)block_start + ty - 1) / ty);
+
+                if (st == at::ScalarType::Float) {
+                    fill_A_scaled_kernel<float><<<grd, blk, 0, stream>>>(
+                        A_tmp.data_ptr<float>(),
+                        A_f.data_ptr<float>(),
+                        invD_all.data_ptr<float>(),
+                        (int)C, (int)block_size,
+                        (int)block_start, B
+                    );
+                    CUDA_CHECK(cudaGetLastError());
+
+                    auto W_left = weight.narrow(0, 0, block_start);
+                    auto A_view = A_tmp.narrow(0, 0, block_start).narrow(1, 0, B_long);
+                    W_left.addmm_(A_view, Eblk_view, /*beta=*/1.0, /*alpha=*/1.0);
+                } else if (st == at::ScalarType::Half) {
+                    fill_A_scaled_kernel<at::Half><<<grd, blk, 0, stream>>>(
+                        A_tmp.data_ptr<at::Half>(),
+                        A_f.data_ptr<float>(),
+                        invD_all.data_ptr<float>(),
+                        (int)C, (int)block_size,
+                        (int)block_start, B
+                    );
+                    CUDA_CHECK(cudaGetLastError());
+
+                    int threads = 256;
+                    int blocks  = (B * (int)R + threads - 1) / threads;
+                    cast_E_kernel<at::Half><<<blocks, threads, 0, stream>>>(
+                        E_tmp.data_ptr<at::Half>(),
+                        Eblk_view.data_ptr<float>(),
+                        (int)R, B
+                    );
+                    CUDA_CHECK(cudaGetLastError());
+
+                    auto W_left = weight.narrow(0, 0, block_start);
+                    auto A_view = A_tmp.narrow(0, 0, block_start).narrow(1, 0, B_long);
+                    auto E_view = E_tmp.narrow(0, 0, B_long);
+                    W_left.addmm_(A_view, E_view, /*beta=*/1.0, /*alpha=*/1.0);
+                } else if (st == at::ScalarType::BFloat16) {
+                    fill_A_scaled_kernel<at::BFloat16><<<grd, blk, 0, stream>>>(
+                        A_tmp.data_ptr<at::BFloat16>(),
+                        A_f.data_ptr<float>(),
+                        invD_all.data_ptr<float>(),
+                        (int)C, (int)block_size,
+                        (int)block_start, B
+                    );
+                    CUDA_CHECK(cudaGetLastError());
+
+                    int threads = 256;
+                    int blocks  = (B * (int)R + threads - 1) / threads;
+                    cast_E_kernel<at::BFloat16><<<blocks, threads, 0, stream>>>(
+                        E_tmp.data_ptr<at::BFloat16>(),
+                        Eblk_view.data_ptr<float>(),
+                        (int)R, B
+                    );
+                    CUDA_CHECK(cudaGetLastError());
+
+                    auto W_left = weight.narrow(0, 0, block_start);
+                    auto A_view = A_tmp.narrow(0, 0, block_start).narrow(1, 0, B_long);
+                    auto E_view = E_tmp.narrow(0, 0, B_long);
+                    W_left.addmm_(A_view, E_view, /*beta=*/1.0, /*alpha=*/1.0);
+                } else {
+                    TORCH_CHECK(false, "Unexpected dtype in addmm_ path");
+                }
+            }
         }
     }
 

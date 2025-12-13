@@ -295,8 +295,7 @@ class GPTQ:
         try:
             if self.algorithm == "babai":
                 # A = Chol(H)^T (upper-tri), used by solver_babai.cu
-                A = torch.linalg.cholesky(H, upper=False).T
-                out = A
+                out = torch.linalg.cholesky(H, upper=False).T
             else:
                 # out = Chol(H^{-1}) (upper-tri) used by GPTQ solver
                 L = torch.linalg.cholesky(H, upper=False)
@@ -305,13 +304,15 @@ class GPTQ:
                 del L, H_inv
 
                 # Keep your existing MoE-Quant style row-normalization ONLY for GPTQ path
-                #diag_u = out.diagonal()
-                #diag_u = torch.where(diag_u == 0, torch.ones_like(diag_u), diag_u)
-                #out = out / diag_u.unsqueeze(-1)
+                
 
         except Exception:
             self.issue_non_invertible = True
             out = torch.eye(C, device=H.device, dtype=torch.float32)
+
+        #diag_u = out.diagonal()
+        #diag_u = torch.where(diag_u == 0, torch.ones_like(diag_u), diag_u)
+        #out = out / diag_u.unsqueeze(-1)
 
         # Match dtype to working weight (keeps memory sane)
         w_dtype = self.W.dtype if self.W is not None else out.dtype
