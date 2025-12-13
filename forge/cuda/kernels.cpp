@@ -75,5 +75,5 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
         "babai_solver",
         &babai_solver_cuda,
         "Butterfly Block Babai"
-    )
+    );
 }
