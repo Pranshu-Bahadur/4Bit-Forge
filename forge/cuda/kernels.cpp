@@ -42,6 +42,15 @@ torch::Tensor gptq_solver_cuda(
     int64_t block_size   // if <= 0, infer
 );
 
+torch::Tensor babai_solver_cuda(
+    torch::Tensor weight,        // [C, R]
+    torch::Tensor A_chol_t,      // [C, C] = Chol(H)^T (upper-tri)
+    torch::Tensor qmeta_bytes,   // [C, G, 4] or [C*G, 4]
+    int64_t group_size,
+    int64_t bits,
+    int64_t block_size
+);
+
 
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
@@ -61,4 +70,10 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
         &gptq_solver_cuda,
         "GPTQ Solver"
     );
+
+    m.def(
+        "babai_solver",
+        &babai_solver_cuda,
+        "Butterfly Block Babai"
+    )
 }

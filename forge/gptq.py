@@ -45,12 +45,19 @@ class GPTQ:
         sym: bool = False,
         rel_damp: float = 1e-2,
         quantization_scale: str = "absmax",
+        algorithm : str = "babai",
     ):
         # Optional device hint (mostly for stateless usage)
         if device is None or device == "":
             self.device = None
         else:
             self.device = torch.device(device)
+        
+        # inside __init__(...)
+        self.algorithm = str(algorithm).lower()
+        if self.algorithm not in ("gptq", "babai"):
+            raise ValueError(f"Unknown algorithm={algorithm}. Expected 'gptq' or 'babai'.")
+
 
         # Optional bound layer (MoE-Quant style)
         self.layer: nn.Module | None = layer
@@ -268,50 +275,53 @@ class GPTQ:
 
         C = self.d_col
         H = self.H  # [C, C], fp32
-        w = self.W  # [C, R] working weight in transposed layout
+        w = self.W  # [C, R]
 
-        if w.ndim != 2:
-            raise RuntimeError("Working weight W must be 2D (C, R).")
         if H.shape != (C, C):
-            raise RuntimeError(f"Hessian shape {H.shape} does not match (d_col, d_col)=({C}, {C}).")
+            raise RuntimeError(f"Hessian shape {H.shape} does not match (C,C)=({C},{C}).")
 
-        # Identify "dead" input channels: rows in W (dim=0) that are all zeros
+        # Dead channels handling (same as before)
         zero_cols = torch.nonzero(w.eq(0).all(dim=1), as_tuple=False).view(-1)
-
-        # Regularize Hessian (MoE-Quant style)
         if zero_cols.numel() > 0:
             H[zero_cols, :] = 0.0
             H[:, zero_cols] = 0.0
             H[zero_cols, zero_cols] = 1.0
 
-        # Damping on the diagonal
+        # Damping
         diag_H = H.diagonal()
         damp = self.rel_damp * diag_H.mean()
         diag_H.add_(damp)
 
         try:
-            L = torch.linalg.cholesky(H, upper=False)  # H = L L^T
-            H_inv = torch.cholesky_inverse(L, upper=False)  # H^{-1} = L^{-T} L^{-1}
-            H_inv_cho = torch.linalg.cholesky(H_inv, upper=True)  # chol(H^{-1})
-            del H, L, H_inv  # Explicit del to free ASAP
+            if self.algorithm == "babai":
+                # A = Chol(H)^T (upper-tri), used by solver_babai.cu
+                A = torch.linalg.cholesky(H, upper=False).T
+                out = A
+            else:
+                # out = Chol(H^{-1}) (upper-tri) used by GPTQ solver
+                L = torch.linalg.cholesky(H, upper=False)
+                H_inv = torch.cholesky_inverse(L, upper=False)
+                out = torch.linalg.cholesky(H_inv, upper=True)
+                del L, H_inv
+
+                # Keep your existing MoE-Quant style row-normalization ONLY for GPTQ path
+                #diag_u = out.diagonal()
+                #diag_u = torch.where(diag_u == 0, torch.ones_like(diag_u), diag_u)
+                #out = out / diag_u.unsqueeze(-1)
+
         except Exception:
             self.issue_non_invertible = True
-            H_inv_cho = torch.eye(C, device=H.device, dtype=torch.float32)
+            out = torch.eye(C, device=H.device, dtype=torch.float32)
 
-        # Normalize rows by diagonal (as in MoE-Quant) so solver can skip per-step division
-        diag_u = H_inv_cho.diagonal()
-        diag_u = torch.where(diag_u == 0, torch.ones_like(diag_u), diag_u)
-        H_inv_cho = H_inv_cho / diag_u.unsqueeze(-1)
+        # Match dtype to working weight (keeps memory sane)
+        w_dtype = self.W.dtype if self.W is not None else out.dtype
+        if out.dtype != w_dtype:
+            out = out.to(dtype=w_dtype)
 
-        # Match dtype of working weight to avoid large extra f32 copies
-        w_dtype = self.W.dtype if self.W is not None else H_inv_cho.dtype
-        if H_inv_cho.dtype != w_dtype:
-            H_inv_cho = H_inv_cho.to(dtype=w_dtype)
-
-        # Drop Hessian reference to free the big [C, C] buffer ASAP
+        # free Hessian
         self.H = None
+        return out
 
-        return H_inv_cho
 
 
     # ------------------------------------------------------------------ #
@@ -491,7 +501,7 @@ class GPTQ:
     def solver(
         self,
         weight: torch.Tensor,        # (C, R), transposed weight, modified in-place
-        hessian_inv: torch.Tensor,   # (C, C), Cholesky factor of H^{-1} (upper)
+        hessian_inv: torch.Tensor,   # (C, C), GPTQ: Chol(H^{-1}); Babai: A = Chol(H)^T
         qmeta: torch.Tensor,         # (C, G, 4) uint8, packed groupwise meta
         maxq: torch.Tensor | None,   # scalar tensor (kept for API; we infer from bits)
         group_size: int,
@@ -502,19 +512,29 @@ class GPTQ:
 
         CUDA fast-path (gptq_solver) + Python reference CPU fallback.
         """
-        # ------------------------------------------------------------------
-        # 1. CUDA Fast Path: kernel interprets hessian_inv as Cholesky(H^{-1})
-        # ------------------------------------------------------------------
+        # CUDA only for Babai
         if weight.device.type == "cuda":
-            # NOTE: hessian_inv is already dtype-matched to weight by caller
-            return cuda_kernels.gptq_solver(
-                weight,
-                hessian_inv,   # Cholesky(H^{-1})
-                qmeta,
-                group_size,
-                bits,
-                32,  # block_size (can be tuned; 32 here matches tests and default)
-            )
+            if self.algorithm == "babai":
+                return cuda_kernels.babai_solver(
+                    weight,
+                    hessian_inv,  # A = Chol(H)^T
+                    qmeta,
+                    group_size,
+                    bits,
+                    32,  # block_size (<=32)
+                )
+            else:
+                return cuda_kernels.gptq_solver(
+                    weight,
+                    hessian_inv,  # Chol(H^{-1})
+                    qmeta,
+                    group_size,
+                    bits,
+                    32,
+                )
+
+        if self.algorithm == "babai":
+            raise RuntimeError("Babai solver is CUDA-only (no CPU reference path).")
 
         # ------------------------------------------------------------------
         # 2. CPU Reference Implementation
