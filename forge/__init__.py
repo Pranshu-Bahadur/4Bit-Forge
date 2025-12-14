@@ -9,6 +9,8 @@ from transformers import AutoModelForCausalLM, DeepseekV3ForCausalLM
 from transformers.models.deepseek_v3.modeling_deepseek_v3 import DeepseekV3MoE, DeepseekV3MLP
 from safetensors.torch import save_file
 
+from .gptq import GPTQ
+
 
 @torch.no_grad()
 def gptq_quantize(
@@ -139,7 +141,7 @@ def _quantize_deepseek_model(
                 hidden_states = hidden_states.view(-1, hidden_states.shape[-1]) # Flattening tokens
                 
                 # Quantizing experts
-                experts_out = _quantize_deepseek_experts(
+                experts_out, experts_index = _quantize_deepseek_routed_experts(
                     model,
                     layer_idx,
                     hidden_states,
@@ -150,6 +152,8 @@ def _quantize_deepseek_model(
                     backend_layout,
                     output_checkpoint_dir
                 )
+
+                # Updating model index
 
                 hidden_states += experts_out.view(orig_shape)
                 
@@ -164,7 +168,7 @@ def _quantize_deepseek_model(
 
     
 @torch.no_grad()
-def _quantize_deepseek_experts(
+def _quantize_deepseek_routed_experts(
     model: DeepseekV3ForCausalLM,
     layer_idx: int,
     hidden_states: torch.Tensor,
@@ -175,11 +179,15 @@ def _quantize_deepseek_experts(
     backend_layout: str,
     output_checkpoint_dir: str,
 ):
-    """Quantizes and stores experts while returning their new output."""
-    # TODO
-    ...
+    """Quantizes and stores experts while returning their new output (post quantization)."""
+    # for gate, up, down _proj (in model.model.layers.n.experts.e) --> weight_packed, weight_scale, weight_shape
+    # weight_packed: int32 (D_in, D_out // (orig_bits / (32 * new_bits)))
+    # weight_scale: bf16 (D_in, D_out // group_size)
+    # weight_shape: int64 (2) the original weight shape [D_in, D_out]
 
-    """
+    # TODO: Keep track in which files the experts are stored
+    experts_index = ...
+
     final_hidden_states = torch.zeros_like(hidden_states)
     expert_mask = torch.nn.functional.one_hot(topk_indices, num_classes=model.model.layers[layer_idx].mlp.num_experts)
     expert_mask = expert_mask.permute(2, 1, 0)
@@ -191,11 +199,47 @@ def _quantize_deepseek_experts(
             continue
         top_k_pos, token_idx = torch.where(expert_mask[expert_idx])
         current_state = hidden_states[token_idx]
-        gate, up = nn.functional.linear(current_state, model.model.layers[layer_idx].mlp.gate_up_proj[expert_idx]).chunk(2, dim=-1)
+
+        # Quantizing gate and up projection matrix
+        gptq_gate_up = GPTQ(
+            device=model.device,
+            layer=model.model.layers[layer_idx].mlp.gate_up_proj[expert_idx],
+            group_size=group_size,
+            sym=True
+        )
+        gptq_gate_up.H = 2 * current_state.flatten(1, -1).T @ current_state.flatten(1, -1)
+        qweight, qmeta, maxq = gptq_gate_up.quantize(bits=bits)
+
+        # Storing quantized weights and metadata (TODO)
+        ...
+
+        # Computing activation with quantized weights (TODO)
+        gate_up = ...
+        
+        # Updating activations
+        gate, up = gate_up.chunk(2, dim=-1)
         current_hidden_states = model.model.layers[layer_idx].mlp.act_fn(gate) * up
-        current_hidden_states = nn.functional.linear(current_hidden_states, model.model.layers[layer_idx].mlp.down_proj[expert_idx])
+        
+        # Quantizing down projection matrix
+        # current_hidden_states = nn.functional.linear(current_hidden_states, model.model.layers[layer_idx].mlp.down_proj[expert_idx])
+
+        gptq_down = GPTQ(
+            device=model.device,
+            layer=model.model.layers[layer_idx].mlp.down_proj[expert_idx],
+            group_size=group_size,
+            sym=True
+        )
+        gptq_down.H = 2 * current_hidden_states.flatten(1, -1).T @ current_hidden_states.flatten(1, -1)
+        qweight, qmeta, maxq = gptq_down.quantize(bits=bits)
+
+        # Storing quantized weights and metadata (TODO)
+        ...
+
+        # Computing activation with quantized weights (TODO)
+        current_hidden_states = ...
+
+        # Accumulating this expert's contribution
         current_hidden_states = current_hidden_states * topk_weights[token_idx, top_k_pos, None]
         final_hidden_states.index_add_(0, token_idx, current_hidden_states.to(final_hidden_states.dtype))
 
-    return final_hidden_states
-    """
+    return final_hidden_states, experts_index
