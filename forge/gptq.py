@@ -1,7 +1,7 @@
 # forge/gptq.py
 from __future__ import annotations
 
-from typing import Optional, Tuple, Literal
+from typing import Optional, Tuple, Literal, Dict, Any
 from enum import Enum
 
 import os
@@ -23,7 +23,7 @@ class QuantizationOrder(Enum):
     DEFAULT = "default"
     ACTIVATION = "activation"
 
-
+# Dist (DP & TP Support)
 def _dist_available_and_initialized() -> bool:
     return dist is not None and dist.is_available() and dist.is_initialized()
 
@@ -36,15 +36,23 @@ def _is_main_process(is_distributed: bool) -> bool:
     return dist.get_rank() == 0
 
 
-def _all_reduce_avg_(x: torch.Tensor) -> None:
-    # MoE-Quant uses AVG; not all torch builds expose ReduceOp.AVG, so do SUM/world_size.
+def _all_reduce_avg_(x: torch.Tensor, group=None) -> None:
     if not _dist_available_and_initialized():
         return
-    world = dist.get_world_size()
+    world = dist.get_world_size(group=group)
     if world <= 1:
         return
-    dist.all_reduce(x, op=dist.ReduceOp.SUM)
+    dist.all_reduce(x, op=dist.ReduceOp.SUM, group=group)
     x.div_(float(world))
+
+def _all_reduce_sum_(x: torch.Tensor, group=None) -> None:
+    if not _dist_available_and_initialized():
+        return
+    world = dist.get_world_size(group=group)
+    if world <= 1:
+        return
+    dist.all_reduce(x, op=dist.ReduceOp.SUM, group=group)
+    return x
 
 
 def _is_float8(dtype: torch.dtype) -> bool:
@@ -121,12 +129,12 @@ class GPTQ:
         self,
         device: str | torch.device | None = None,
         layer: nn.Module | None = None,
-        group_size: int | None = None,
+        group_size: int | None = 128,
         sym: bool = False,
         rel_damp: float = 1e-2,
         block_size: int = 32,
         quantization_order: str = "default",
-        quantization_scale: str = "absmax",
+        quantization_scale: str = "mse",
         is_distributed: bool = False,
         tied_gptq_handle: Optional["GPTQ"] = None,
         algorithm: str = "babai",
@@ -168,9 +176,15 @@ class GPTQ:
         if tied_gptq_handle is not None:
             tied_gptq_handle.num_tied_handles += 1
 
+        #TieHandle Owner Fields
+        self._hessian_prepared = False
+        self._h_factor_fp32 = None
+        self._perm = None
+        self._hfactor_cache = None
+
         # Hessian & calibration state
         self.H: torch.Tensor | None = None
-        self.num_samples: int = 0
+        self.num_samples: torch.Tensor = torch.Tensor(0)
 
         # Working weight (transposed (C,R)) during quant
         self.W: torch.Tensor | None = None
@@ -193,7 +207,7 @@ class GPTQ:
 
         # torch.compile (internal)
         _maybe_set_dynamo_suppress_errors(torch_compile_suppress_errors)
-        self._tc_enabled = bool(torch_compile) or (os.getenv("FORGE_GPTQ_COMPILE", "0") == "1")
+        self._tc_enabled = False #TODO remove torch.compile #bool(torch_compile) or (os.getenv("FORGE_GPTQ_COMPILE", "0") == "1")
         self._tc_mode = os.getenv("FORGE_GPTQ_COMPILE_MODE", torch_compile_mode)
         self._tc_fullgraph = bool(torch_compile_fullgraph)
         self._tc_dynamic = bool(torch_compile_dynamic)
@@ -241,6 +255,10 @@ class GPTQ:
     @property
     def tokens_collected(self) -> int:
         return int(self.num_samples)
+    
+    def _owner(self) -> "GPTQ":
+        return self.tied_gptq_handle or self
+
 
     # ------------------------------------------------------------------ #
     # Internal compiled kernel (optional)
@@ -311,13 +329,13 @@ class GPTQ:
             return
 
         # MoE-Quant style EMA update
-        total = float(self.num_samples + n_new)
-        beta = float(self.num_samples) / total
+        total = float(self.num_samples.item() + n_new)
+        beta = float(self.num_samples.item()) / total
         alpha = 2.0 / total
 
         if self._tc_enabled and input.device.type == "cuda":
             addmm_fn = self._get_compiled_addmm_()
-            addmm_fn(self.H, inp2d, beta, alpha)
+            self.H = addmm_fn(self.H, inp2d, beta, alpha).clone()
         else:
             self.H.addmm_(inp2d.transpose(0, 1), inp2d, beta=beta, alpha=alpha)
 
@@ -371,6 +389,71 @@ class GPTQ:
     # ------------------------------------------------------------------ #
     # Hessian prep + weight prep (MoE-Quant style, but 4BF layout)
     # ------------------------------------------------------------------ #
+
+    @torch.no_grad()
+    def _prepare_hessian_once(self, *, group=None):
+        assert self.tied_gptq_handle is None
+        if getattr(self, "_hessian_prepared", False):
+            return
+
+        # 0) zero-sample / missing Hessian -> identity
+        if self.H is None or (self.num_samples is not None and int(self.num_samples.item()) == 0):
+            C = self.d_col if self.d_col is not None else (self.H.shape[0] if self.H is not None else None)
+            if C is None:
+                raise RuntimeError("Cannot infer Hessian size (d_col unset and H is None).")
+            dev = self.W_device if self.W_device is not None else self.layer.weight.device
+            self.H = torch.eye(C, device=dev, dtype=torch.float32)
+            self._pruned_ids = None
+            self.issue_zero_samples = True
+            self._h_perm = None
+            self._hessian_prepared = True
+            return
+
+        # 1) distributed combine (weighted)
+        if self.is_distributed and _dist_available_and_initialized():
+            # ensure scalar tensor
+            n = self.num_samples
+            if not torch.is_tensor(n):
+                raise RuntimeError("num_samples must be a tensor if distributed combine is enabled.")
+            n_fp = n.to(device=self.H.device, dtype=self.H.dtype)  # fp32 scalar
+
+            Hw = self.H * n_fp
+            dist.all_reduce(Hw, op=dist.ReduceOp.SUM, group=group)
+            dist.all_reduce(n_fp, op=dist.ReduceOp.SUM, group=group)
+
+            n_den = n_fp.clamp_min(1.0)
+            self.H = Hw / n_den
+            self.num_samples = n_fp.to(dtype=n.dtype)
+
+        # 2) NaN/Inf guard
+        if not torch.isfinite(self.H).all().item():
+            C = self.H.shape[0]
+            self.H = torch.eye(C, device=self.H.device, dtype=self.H.dtype)
+            self._pruned_ids = None
+            self.issue_nan_hessian = True
+            self._h_perm = None
+            self._hessian_prepared = True
+            return
+
+        # 3) prune ids once
+        diag = self.H.diagonal()
+        pruned = (diag == 0)
+        self._pruned_ids = pruned
+        if pruned.any():
+            self.H[pruned, pruned] = 1.0  # minimal SPD salvage; full row/col zeroing happens later in factor step
+
+        # 4) optional perm cache (if you decide to)
+        if self.quantization_order == QuantizationOrder.ACTIVATION:
+            self._h_perm = torch.argsort(self.H.diagonal(), descending=True)
+        else:
+            self._h_perm = None
+
+        self._hessian_prepared = True
+
+    
+
+
+
     @torch.no_grad()
     def quantization_pre_step(self) -> None:
         """
@@ -383,49 +466,39 @@ class GPTQ:
 
         if self.d_col is None or self.d_row is None:
             self._init_from_layer(self.layer)
+        
+
 
         # 1) Hessian preparation
-        reduce_if_needed = True
+        owner = self._owner()
+            # tied handle: ensure owner is prepared
 
-        # mirror tied handle Hessian if needed
-        if self.H is None and self.tied_gptq_handle is not None and self.tied_gptq_handle.H is not None:
-            self.H = self.tied_gptq_handle.H
-            self.num_samples = self.tied_gptq_handle.num_samples
+        owner._prepare_hessian_once() #TODO pass in group if needed later
+        owner._get_hessian_factor_cached(owner._hfactor_cache['perm'], 
+                                             rel_damp=owner.rel_damp, 
+                                             algorithm=owner.algorithm,
+                                             out_dtype=self.W_dtype)
+        # mirror shared state/views
+        self.H = owner.H
+        self.num_samples = owner.num_samples
+        self._pruned_ids = owner._pruned_ids
+
+        
 
         if self.H is None:
             # no samples => identity fallback
             dev = self.W_device if self.W_device is not None else (self.layer.weight.device)
             self.H = torch.eye(self.d_col, device=dev, dtype=torch.float32)
             self.issue_zero_samples = True
-            reduce_if_needed = False
         else:
-            if self.num_samples == 0:
+            if self.num_samples.item() == 0:
                 self.issue_zero_samples = True
-
-        if self.is_distributed and reduce_if_needed and _dist_available_and_initialized():
-            _all_reduce_avg_(self.H)
-
-        # NaN guard
-        if torch.isnan(self.H).any().item():
-            dev = self.H.device
-            self.H = torch.eye(self.d_col, device=dev, dtype=torch.float32)
-            self.issue_nan_hessian = True
-
-        diag = torch.diag(self.H)
-        pruned_ids = (diag == 0)
-        if pruned_ids.any():
-            self.H[pruned_ids, pruned_ids] = 1.0
-
-        # Cache for later (avoid scanning W for all-zero rows)
-        self._pruned_ids = pruned_ids
+            
 
         # 2) Weight preparation
         param = self.layer.weight.detach()
 
-        # fp8 guard (your float8 error path)
         compute_dtype = param.dtype
-        if _is_float8(param.dtype):
-            compute_dtype = torch.float16
 
         if isinstance(self.layer, _ConvNd):
             # (out, in*k*k) view, then transpose -> (C, R)
@@ -440,17 +513,138 @@ class GPTQ:
         else:
             W_t = w_t_view.contiguous()
 
-        if pruned_ids.any():
-            W_t[pruned_ids, :] = 0.0
+        if self._pruned_ids is not None and self._pruned_ids.any():
+            W_t[self._pruned_ids, :] = 0.0
 
         self.W = W_t
         self.d_col, self.d_row = int(W_t.shape[0]), int(W_t.shape[1])
         self.W_device = W_t.device
         self.W_dtype = W_t.dtype
 
+
     # ------------------------------------------------------------------ #
     # Hessian factor for solver (optimized)
     # ------------------------------------------------------------------ #
+    def _compute_hessian_factor_fp32(
+            self,
+            *,
+            perm: Optional[torch.Tensor],
+            rel_damp: float,
+            algorithm: str,
+        ) -> torch.Tensor:
+            """
+            Computes the Hessian factor in FP32 on a working copy (never mutates self.H).
+            Returns:
+            - algorithm=="gptq": U = chol(H^{-1}) upper
+            - algorithm=="babai": A = chol(H) upper
+            """
+            if self.H is None:
+                raise RuntimeError("Hessian is None; call update() first.")
+            C = self.d_col
+
+            # Work on a detached fp32 clone so we don't trash shared H
+            H_work = self.H.detach().to(dtype=torch.float32).clone()
+
+            # Apply prune mask (in the ORIGINAL basis)
+            pruned = self._pruned_ids
+            if pruned is not None and pruned.any():
+                H_work[pruned, :] = 0.0
+                H_work[:, pruned] = 0.0
+                H_work[pruned, pruned] = 1.0
+
+            # Damping (on working copy)
+            if rel_damp and rel_damp > 0:
+                damp = float(rel_damp) * H_work.diagonal().mean()
+                H_work.diagonal().add_(damp)
+
+            # Apply permutation (still working copy)
+            if perm is not None:
+                H_work = H_work.index_select(0, perm).index_select(1, perm)
+
+            # Factorize (destructive on H_work)
+            try:
+                if algorithm == "babai":
+                    # A = chol(H) upper: H = A^T A
+                    torch.linalg.cholesky(H_work, upper=True, out=H_work)
+                else:
+                    # U = chol(H^{-1}) upper: H^{-1} = U^T U
+                    torch.linalg.cholesky(H_work, upper=False, out=H_work)      # L
+                    torch.cholesky_inverse(H_work, upper=False, out=H_work)     # H^{-1}
+                    torch.linalg.cholesky(H_work, upper=True, out=H_work)       # U
+            except Exception:
+                self.issue_non_invertible = True
+                H_work = torch.eye(C, device=H_work.device, dtype=torch.float32)
+
+            # Row-normalize by diagonal
+            d = H_work.diagonal().clone()
+            d = torch.where(d == 0, torch.ones_like(d), d)
+            H_work.div_(d.unsqueeze(-1))
+
+            return H_work
+    
+
+    def _get_hessian_factor_cached(
+            self,
+            perm: Optional[torch.Tensor] = None,
+            *,
+            rel_damp: Optional[float] = None,
+            algorithm: Optional[str] = None,
+            out_dtype: Optional[torch.dtype] = None,
+        ) -> torch.Tensor:
+            """
+            Owner caches fp32 factor once; tied handles reuse it.
+            If out_dtype is provided, returns a casted view for solver bandwidth.
+            """
+            owner = self._owner()
+
+            if owner.H is None:
+                raise RuntimeError("Owner Hessian is None; call update() / quantization_pre_step() first.")
+
+            rel_damp = owner.rel_damp if rel_damp is None else float(rel_damp)
+            algorithm = owner.algorithm if algorithm is None else algorithm
+
+            # Treat identity perm as None
+            if perm is not None:
+                C = owner.d_col
+                if perm.numel() == C and torch.equal(perm, torch.arange(C, device=perm.device)):
+                    perm = None
+
+            # Cache container
+            cache: Optional[Dict[str, Any]] = getattr(owner, "_hfactor_cache", None)
+
+            def _perm_equal(a: Optional[torch.Tensor], b: Optional[torch.Tensor]) -> bool:
+                if a is None and b is None:
+                    return True
+                if (a is None) != (b is None):
+                    return False
+                return torch.equal(a, b)  # O(C), cheap vs factorization
+
+            cache_key: Tuple[str, float] = (algorithm, rel_damp)
+
+            if cache is not None:
+                if cache.get("key") == cache_key and _perm_equal(cache.get("perm"), perm):
+                    factor_fp32 = cache["factor_fp32"]
+                    if out_dtype is not None and factor_fp32.dtype != out_dtype:
+                        return factor_fp32.to(dtype=out_dtype)
+                    return factor_fp32
+
+            # Compute once on owner
+            factor_fp32 = owner._compute_hessian_factor_fp32(
+                perm=perm, rel_damp=rel_damp, algorithm=algorithm
+            )
+
+            owner._hfactor_cache = {
+                "key": cache_key,
+                "perm": (perm.clone() if perm is not None else None),
+                "factor_fp32": factor_fp32,
+            }
+
+            if out_dtype is not None and factor_fp32.dtype != out_dtype:
+                return factor_fp32.to(dtype=out_dtype)
+            return factor_fp32
+    
+
+    # Depreceated
     @torch.no_grad()
     def _get_hessian_factor(self) -> torch.Tensor:
         """
@@ -643,7 +837,7 @@ class GPTQ:
         group_size: int,
         bits: int,
         symmetric: bool = False,
-        mode: str = "absmax",      # "absmax" or "mse"
+        mode: str = "mse",      # "absmax" or "mse"
         quant_max_shrink: float = 0.2,
         quant_n_grid: int = 100,
         quant_norm: float = 2.4,

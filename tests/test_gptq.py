@@ -432,7 +432,7 @@ def _naive_hessian_inverse_cholesky(H_init: torch.Tensor,
                                    W: torch.Tensor,
                                    rel_damp: float) -> torch.Tensor:
     """
-    Reference implementation matching GPTQ._get_hessian_inverse_cholesky
+    Reference implementation matching GPTQ._get_hessian_factor
     AFTER your change: NO normalization.
 
         H_init
@@ -482,7 +482,7 @@ def test_hessian_inverse_cholesky_matches_naive(rel_damp, C):
     gptq.W = W.clone()
     gptq.d_col = C
 
-    Hinv_cho_gptq = gptq._get_hessian_inverse_cholesky()
+    Hinv_cho_gptq = gptq._get_hessian_factor()
 
     assert Hinv_cho_gptq.shape == Hinv_cho_ref.shape
     assert torch.allclose(Hinv_cho_gptq, Hinv_cho_ref, rtol=1e-5, atol=1e-5)
@@ -508,7 +508,7 @@ def test_hessian_inverse_cholesky_ill_conditioned(rel_damp, C):
     gptq.W = W.clone()
     gptq.d_col = C
 
-    Hinv_cho = gptq._get_hessian_inverse_cholesky()
+    Hinv_cho = gptq._get_hessian_factor()
     Hinv_recon = Hinv_cho.T @ Hinv_cho
 
     # SPD check (stable real eigs)
