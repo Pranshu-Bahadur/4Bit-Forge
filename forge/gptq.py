@@ -142,7 +142,7 @@ class GPTQ:
         torch_compile: bool = False,
         torch_compile_mode: str = "reduce-overhead",
         torch_compile_fullgraph: bool = False,
-        torch_compile_dynamic: bool = True,
+        torch_compile_dynamic: bool = False,
         torch_compile_suppress_errors: bool = True,
     ):
         # Optional device hint (stateless usage)
@@ -759,7 +759,7 @@ class GPTQ:
         )
 
         # ------------------- Hessian factor -------------------
-        h_factor = self._get_hessian_factor()
+        h_factor = self._get_hessian_factor_cached()
 
         # ------------------- Solve -------------------
         qweight_t = self.solver(
