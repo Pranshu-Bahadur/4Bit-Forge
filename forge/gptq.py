@@ -184,7 +184,7 @@ class GPTQ:
 
         # Hessian & calibration state
         self.H: torch.Tensor | None = None
-        self.num_samples: torch.Tensor = torch.Tensor(0)
+        self.num_samples: torch.Tensor = torch.zeros((), device=self.device, dtype=torch.long)
 
         # Working weight (transposed (C,R)) during quant
         self.W: torch.Tensor | None = None
@@ -329,9 +329,11 @@ class GPTQ:
             return
 
         # MoE-Quant style EMA update
-        total = float(self.num_samples + n_new)
-        beta = float(self.num_samples) / total
+        ns = int(self.num_samples.item())          # scalar python int
+        total = float(ns + n_new)
+        beta = float(ns) / total
         alpha = 2.0 / total
+
 
         if self._tc_enabled and input.device.type == "cuda":
             addmm_fn = self._get_compiled_addmm_()
