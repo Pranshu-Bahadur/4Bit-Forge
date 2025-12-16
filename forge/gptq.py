@@ -476,7 +476,7 @@ class GPTQ:
             # tied handle: ensure owner is prepared
 
         owner._prepare_hessian_once() #TODO pass in group if needed later
-        owner._get_hessian_factor_cached(owner._hfactor_cache['perm'], 
+        owner._get_hessian_factor_cached(owner._h_perm, 
                                              rel_damp=owner.rel_damp, 
                                              algorithm=owner.algorithm,
                                              out_dtype=self.W_dtype)
@@ -493,7 +493,7 @@ class GPTQ:
             self.H = torch.eye(self.d_col, device=dev, dtype=torch.float32)
             self.issue_zero_samples = True
         else:
-            if self.num_samples.item() == 0:
+            if self.num_samples == 0:
                 self.issue_zero_samples = True
             
 
