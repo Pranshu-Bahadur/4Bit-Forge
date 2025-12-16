@@ -329,8 +329,8 @@ class GPTQ:
             return
 
         # MoE-Quant style EMA update
-        total = float(self.num_samples.item() + n_new)
-        beta = float(self.num_samples.item()) / total
+        total = float(self.num_samples + n_new)
+        beta = float(self.num_samples) / total
         alpha = 2.0 / total
 
         if self._tc_enabled and input.device.type == "cuda":
