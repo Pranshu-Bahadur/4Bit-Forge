@@ -476,10 +476,7 @@ class GPTQ:
             # tied handle: ensure owner is prepared
 
         owner._prepare_hessian_once() #TODO pass in group if needed later
-        owner._get_hessian_factor_cached(owner._h_perm, 
-                                             rel_damp=owner.rel_damp, 
-                                             algorithm=owner.algorithm,
-                                             out_dtype=self.W_dtype)
+        
         # mirror shared state/views
         self.H = owner.H
         self.num_samples = owner.num_samples
@@ -495,6 +492,11 @@ class GPTQ:
         else:
             if self.num_samples == 0:
                 self.issue_zero_samples = True
+            
+        self._h_factor = owner._get_hessian_factor_cached(owner._h_perm, 
+                                             rel_damp=owner.rel_damp, 
+                                             algorithm=owner.algorithm,
+                                             out_dtype=self.W_dtype)
             
 
         # 2) Weight preparation
@@ -758,9 +760,7 @@ class GPTQ:
             impl="cuda",
         )
 
-        # ------------------- Hessian factor -------------------
-        h_factor = self._get_hessian_factor_cached()
-
+        h_factor = self._h_factor
         # ------------------- Solve -------------------
         qweight_t = self.solver(
             weight=W_t,
