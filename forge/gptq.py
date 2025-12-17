@@ -254,7 +254,7 @@ class GPTQ:
 
     @property
     def tokens_collected(self) -> int:
-        return int(self.num_samples)
+        return int(self.num_samples.item())
     
     def _owner(self) -> "GPTQ":
         return self.tied_gptq_handle or self
@@ -367,18 +367,18 @@ class GPTQ:
             if owner.num_tied_handles <= 0:
                 owner.num_tied_handles = 0
                 owner.H = None
-                owner.num_samples = 0
+                owner.num_samples = torch.zeros((), device=owner.device, dtype=torch.long)
                 owner._owner_reset_pending = False
             # tied handle clears its own view
             self.H = None
-            self.num_samples = 0
+            self.num_samples = torch.zeros((), device=self.device, dtype=torch.long)
         else:
             if self.num_tied_handles > 0:
                 self._owner_reset_pending = True
                 # keep H/num_samples (shared) until last tied handle is done
             else:
                 self.H = None
-                self.num_samples = 0
+                self.num_samples = torch.zeros((), device=self.device, dtype=torch.long)
                 self._owner_reset_pending = False
 
         self.issue_zero_samples = False
@@ -490,13 +490,13 @@ class GPTQ:
             self.H = torch.eye(self.d_col, device=dev, dtype=torch.float32)
             self.issue_zero_samples = True
         else:
-            if self.num_samples == 0:
+            if self.num_samples.item() == 0:
                 self.issue_zero_samples = True
             
         self._h_factor = owner._get_hessian_factor_cached(owner._h_perm, 
                                              rel_damp=owner.rel_damp, 
                                              algorithm=owner.algorithm,
-                                             out_dtype=self.W_dtype)
+                                             out_dtype=self.layer.weight.dtype)
             
 
         # 2) Weight preparation
