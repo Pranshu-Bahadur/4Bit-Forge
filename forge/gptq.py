@@ -574,9 +574,8 @@ class GPTQ:
                     torch.linalg.cholesky(H_work, upper=True, out=H_work)
                 else:
                     # U = chol(H^{-1}) upper: H^{-1} = U^T U
-                    torch.linalg.cholesky(H_work, upper=False, out=H_work)      # L
-                    torch.cholesky_inverse(H_work, upper=False, out=H_work)     # H^{-1}
-                    torch.linalg.cholesky(H_work, upper=True, out=H_work)       # U
+                    torch.linalg.inv(H_work, out=H_work)      # L in-place
+                    torch.linalg.cholesky(H_work, upper=True, out=H_work)       # U in-place
             except Exception:
                 self.issue_non_invertible = True
                 H_work = torch.eye(C, device=H_work.device, dtype=torch.float32)
