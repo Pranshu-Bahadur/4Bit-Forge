@@ -498,7 +498,7 @@ class GPTQ:
         self._h_factor = owner._get_hessian_factor_cached(owner._h_perm, 
                                              rel_damp=owner.rel_damp, 
                                              algorithm=owner.algorithm,
-                                             out_dtype=self.layer.weight.dtype)
+                                             out_dtype=None) #self.layer.weight.dtype
             
 
         # 2) Weight preparation
