@@ -38,19 +38,19 @@ def _is_main_process(is_distributed: bool) -> bool:
 
 def _all_reduce_avg_(x: torch.Tensor, group=None) -> None:
     if not _dist_available_and_initialized():
-        return
+        return x
     world = dist.get_world_size(group=group)
     if world <= 1:
-        return
+        return x
     dist.all_reduce(x, op=dist.ReduceOp.SUM, group=group)
     x.div_(float(world))
 
-def _all_reduce_sum_(x: torch.Tensor, group=None) -> None:
+def _all_reduce_sum_(x: torch.Tensor, group=None) -> torch.Tensor: # Fix type hint
     if not _dist_available_and_initialized():
-        return
+        return x  # <--- MUST RETURN x
     world = dist.get_world_size(group=group)
     if world <= 1:
-        return
+        return x  # <--- MUST RETURN x
     dist.all_reduce(x, op=dist.ReduceOp.SUM, group=group)
     return x
 
@@ -134,16 +134,16 @@ class GPTQ:
         rel_damp: float = 1e-2,
         block_size: int = 32,
         quantization_order: str = "default",
-        quantization_scale: str = "mse",
+        quantization_scale: str = "absmax",
         is_distributed: bool = False,
         tied_gptq_handle: Optional["GPTQ"] = None,
         algorithm: str = "babai",
         # Optional internal torch.compile (OFF by default; caller can enable)
         torch_compile: bool = False,
-        torch_compile_mode: str = "reduce-overhead",
+        torch_compile_mode: str | None = None,
         torch_compile_fullgraph: bool = False,
         torch_compile_dynamic: bool = False,
-        torch_compile_suppress_errors: bool = True,
+        torch_compile_suppress_errors: bool = False,
     ):
         # Optional device hint (stateless usage)
         if device is None or device == "":
@@ -420,8 +420,10 @@ class GPTQ:
             n_fp = n.to(device=self.H.device, dtype=self.H.dtype)  # fp32 scalar
 
             Hw = self.H * n_fp
-            dist.all_reduce(Hw, op=dist.ReduceOp.SUM, group=group)
-            dist.all_reduce(n_fp, op=dist.ReduceOp.SUM, group=group)
+            #dist.all_reduce(Hw, op=dist.ReduceOp.SUM, group=group)
+            #dist.all_reduce(n_fp, op=dist.ReduceOp.SUM, group=group)
+            Hw = _all_reduce_sum_(Hw, group)
+            n_fp = _all_reduce_sum_(n_fp, group)
 
             n_den = n_fp.clamp_min(1.0)
             self.H = Hw / n_den
@@ -669,7 +671,7 @@ class GPTQ:
         H = self.H
 
         # Only owner applies masking + damping (MoE-Quant behavior)
-        if self.tied_gptq_handle is None:
+        if self._owner() is self:
             pruned = self._pruned_ids
             if pruned is not None and pruned.any():
                 H[pruned, :] = 0.0
@@ -689,8 +691,7 @@ class GPTQ:
                 torch.linalg.cholesky(H_work, upper=True, out=H_work)
             else:
                 # U = chol(H^{-1}) upper: H^{-1} = U^T U
-                torch.linalg.cholesky(H_work, upper=False, out=H_work)      # L in-place
-                torch.cholesky_inverse(H_work, upper=False, out=H_work)     # H^{-1} in-place
+                torch.linalg.inv(H_work, out=H_work)      # L in-place
                 torch.linalg.cholesky(H_work, upper=True, out=H_work)       # U in-place
         except Exception:
             self.issue_non_invertible = True
@@ -744,11 +745,9 @@ class GPTQ:
             W_t = W_t.index_select(0, perm)
             self.W = W_t
 
-            # permute Hessian only if not reusing from tied handle (owner-only)
-            if self.tied_gptq_handle is None:
-                self.H = self.H.index_select(0, perm).index_select(1, perm)
-                if self._pruned_ids is not None:
-                    self._pruned_ids = self._pruned_ids.index_select(0, perm)
+            #if self._owner() is self:
+            #    if self._pruned_ids is not None:
+            #        self._pruned_ids = self._pruned_ids.index_select(0, perm)
 
         # ------------------- Build qmeta4 grid -------------------
         qmeta, maxq, _pad = self.build_quant_grid(
