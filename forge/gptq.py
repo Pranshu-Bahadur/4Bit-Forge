@@ -951,7 +951,7 @@ class GPTQ:
                     self.block_size,
                 )
             return cuda_kernels.gptq_solver(
-                weight,
+                weight.float(),
                 hessian_inv,
                 qmeta,
                 group_size,
