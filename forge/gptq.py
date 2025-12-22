@@ -533,79 +533,53 @@ class GPTQ:
     # Hessian factor for solver (optimized)
     # ------------------------------------------------------------------ #
     @torch.no_grad()
-    def _compute_hessian_factor_fp32(
-        self,
-        *,
-        perm: Optional[torch.Tensor],
-        rel_damp: float,
-        algorithm: str,
-    ) -> torch.Tensor:
-        """
-        Computes the Hessian factor in FP32 on a working copy (never mutates self.H).
-        Uses in-place operations to avoid OOM on large layers (e.g. LLaMA MLP).
-        """
+    def _compute_hessian_factor_fp32(self, *, perm, rel_damp: float, algorithm: str) -> torch.Tensor:
         if self.H is None:
             raise RuntimeError("Hessian is None; call update() first.")
+        if self.W is None:
+            raise RuntimeError("W is None; call quantization_pre_step() first.")
 
-        # Create a clone for working - this is the ONLY major allocation we want
         H_work = self.H.clone()
 
-        # Apply prune mask (in the ORIGINAL basis)
-        zero_cols = torch.nonzero(self.W.eq(0).all(dim=0))
-        
-        # Fast masking
-        if zero_cols.numel() > 0:
-            H_work.index_fill_(0, zero_cols.squeeze(), 0.0)
-            H_work.index_fill_(1, zero_cols.squeeze(), 0.0)
-            # (Alternative simple masking if the stride trick is too risky for your taste):
+        # dead INPUT dims (self.W is (C,R))
+        dead = self.W.eq(0).all(dim=1)  # (C,)
+        zero_idx = dead.nonzero(as_tuple=False).flatten()
+        if zero_idx.numel() > 0:
+            H_work.index_fill_(0, zero_idx, 0.0)
+            H_work.index_fill_(1, zero_idx, 0.0)
+
         diag = H_work.diagonal()
         mask_zeros = (diag == 0)
-        
         if mask_zeros.any():
-            # Force identity on singular indices so Cholesky succeeds
-            # We only touch the diagonal; the rest of the row/col is already 0.0
-            H_work.diagonal()[mask_zeros] = 1.0
+            diag[mask_zeros] = 1.0
 
-        damp = float(rel_damp) * H_work.diagonal().mean()
-        H_work.diagonal().add_(damp)
+        damp = float(rel_damp) * diag.mean()
+        diag.add_(damp)
 
-        # Apply permutation (still working copy)
-        if perm is not None and self.quantization_order == QuantizationOrder.ACTIVATION:
-            # We cannot do this in-place easily, so we accept one re-allocation here
+        if perm is not None:
             H_work = H_work.index_select(0, perm).index_select(1, perm)
 
-        # Factorize (Destructive / In-place to save VRAM)
         try:
-            if self.algorithm == "babai":
-                # A = chol(H) upper: H = A^T A
-                torch.linalg.cholesky(H_work, upper=True, out=H_work)
+            if algorithm == "babai":
+                torch.linalg.cholesky(H_work, upper=True, out=H_work)  # A where H = A^T A
             else:
-                # GPTQ path: U = chol(H^{-1}) upper
-                # 1. L = chol(H) lower (in-place)
-                torch.linalg.cholesky(H_work, upper=False, out=H_work)
-                
-                # 2. H^{-1} = chol_inv(L) (in-place)
-                # Note: cholesky_inverse expects a lower triangular factor if upper=False
-                torch.cholesky_inverse(H_work, upper=False, out=H_work)
-                
-                # 3. U = chol(H^{-1}) upper (in-place)
-                torch.linalg.cholesky(H_work, upper=True, out=H_work)
-                
+                torch.linalg.cholesky(H_work, upper=False, out=H_work)     # L
+                torch.cholesky_inverse(H_work, upper=False, out=H_work)    # H^{-1}
+                torch.linalg.cholesky(H_work, upper=True, out=H_work)      # U where H^{-1}=U^T U
         except RuntimeError as e:
-            # Fallback for non-SPD matrices
-            print('we good?')
             self.issue_non_invertible = True
-            H_work.zero_().diagonal().fill_(1.0)
+            # print(f"[HESSIAN] factorization failed: {e}")  # enable during bring-up
+            H_work.zero_()
+            H_work.diagonal().fill_(1.0)
 
-        # Row-normalize by diagonal
-        if self.algorithm == "gptq":
-            d = H_work.diagonal() # View, no copy
-            # Avoid div-by-zero without extra allocation
+        if algorithm == "gptq":
+            d = H_work.diagonal()
             scale = d.clone()
             scale[scale == 0] = 1.0
             H_work.div_(scale.unsqueeze(-1))
 
         return H_work
+
     
 
     def _get_hessian_factor_cached(
