@@ -439,11 +439,13 @@ class GPTQ:
             return
 
         # 3) prune ids once
+        '''
         diag = self.H.diagonal()
         pruned = (diag == 0)
         self._pruned_ids = pruned
         if pruned.any():
             self.H[pruned, pruned] = 1.0  # minimal SPD salvage; full row/col zeroing happens later in factor step
+        '''
 
         # 4) optional perm cache (if you decide to)
         if self.quantization_order == QuantizationOrder.ACTIVATION:
