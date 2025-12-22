@@ -550,17 +550,17 @@ class GPTQ:
             # Work on a detached fp32 clone so we don't trash shared H
             H_work = self.H.detach().to(dtype=torch.float32).clone()
 
-            # Apply prune mask (in the ORIGINAL basis)
-            pruned = self._pruned_ids
-            if pruned is not None and pruned.any():
-                H_work[pruned, :] = 0.0
-                H_work[:, pruned] = 0.0
-                H_work[pruned, pruned] = 1.0
+            #https://github.com/IST-DASLab/MoE-Quant/blob/5a3b298cfb5c475a9b6584d48b43fcebc4ddfb2f/src/gptq.py#L221
 
-            # Damping (on working copy)
-            if rel_damp and rel_damp > 0:
-                damp = float(rel_damp) * H_work.diagonal().mean()
-                H_work.diagonal().add_(damp)
+            # Apply prune mask (in the ORIGINAL basis)
+            zero_cols = torch.nonzero(self.W.eq(0).all(dim=0))
+
+            H_work[zero_cols, :] = 0.0
+            H_work[:, zero_cols] = 0.0
+            H_work[zero_cols, zero_cols] = 1.0
+
+            damp = float(rel_damp) * H_work.diagonal().mean()
+            H_work[range(self.d_col), range(self.d_col)] += damp
 
             # Apply permutation (still working copy)
             if perm is not None and self.quantization_order == QuantizationOrder.ACTIVATION:
@@ -568,7 +568,7 @@ class GPTQ:
 
             # Factorize (destructive on H_work)
             try:
-                if algorithm == "babai":
+                if self.algorithm == "babai":
                     # A = chol(H) upper: H = A^T A
                     H_work = torch.linalg.cholesky(H_work, upper=True)
                 else:
@@ -579,7 +579,7 @@ class GPTQ:
                 H_work = torch.eye(H_work.shape[0], device=H_work.device, dtype=torch.float32)
 
             # Row-normalize by diagonal
-            if algorithm == "gptq":
+            if self.algorithm == "gptq":
                 d = H_work.diagonal().clone()
                 d = torch.where(d == 0, torch.ones_like(d), d)
                 H_work.div_(d.unsqueeze(-1))
