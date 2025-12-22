@@ -346,6 +346,7 @@ std::tuple<torch::Tensor, torch::Tensor> build_group_meta_packed_cuda(
     int64_t bit_width,
     bool symmetric
 ) {
+    //@TODO fix this kernel...have set safe threads=32
     TORCH_CHECK(x_groups.is_cuda(), "x_groups must be CUDA");
     TORCH_CHECK(x_groups.dim() == 2, "x_groups must be [G, group_size]");
 
@@ -365,14 +366,17 @@ std::tuple<torch::Tensor, torch::Tensor> build_group_meta_packed_cuda(
     using QMetaLocal = QMetaPacked;
     auto* qmeta_ptr = reinterpret_cast<QMetaLocal*>(qmeta_tensor.data_ptr<uint8_t>());
 
-    int threads = std::min<int64_t>(256, group_size);
-    threads = align_to_warp(threads);
+    //int threads = std::min<int64_t>(256, group_size);
+    //threads = align_to_warp(threads);
+    int threads = 32;
     if (threads < 32) threads = 32;
     const int blocks = static_cast<int>(G);
 
     // SMEM for Meta Builder (optional block reduce if threads > 32)
     const int warps_per_block = threads / 32;
-    const size_t smem_bytes = 2 * static_cast<size_t>(warps_per_block) * sizeof(float);
+    const size_t smem_bytes = 0;
+
+    //const size_t smem_bytes = 2 * static_cast<size_t>(warps_per_block) * sizeof(float);
 
     auto stream = at::cuda::getCurrentCUDAStream();
 
@@ -399,6 +403,8 @@ std::tuple<torch::Tensor, torch::Tensor> build_group_meta_packed_cuda(
 
     float maxq_val = float((1 << bit_width) - 1);
     auto maxq = torch::full({}, maxq_val, x_groups.options().dtype(torch::kFloat32));
+
+    //auto maxq = torch::full({}, maxq_val, x_groups.options().dtype(torch::kFloat32));
 
     return std::make_tuple(qmeta_tensor, maxq);
 }
