@@ -602,8 +602,6 @@ class GPTQ:
             """
             owner = self._owner()
 
-            if owner.H is None:
-                raise RuntimeError("Owner Hessian is None; call update() / quantization_pre_step() first.")
 
             rel_damp = owner.rel_damp if rel_damp is None else float(rel_damp)
             algorithm = owner.algorithm if algorithm is None else algorithm
@@ -615,7 +613,7 @@ class GPTQ:
                     perm = None
 
             # Cache container
-            cache: Optional[Dict[str, Any]] = getattr(owner, "_hfactor_cache", None)
+            cache = getattr(owner, "_hfactor_cache", None)
 
             def _perm_equal(a: Optional[torch.Tensor], b: Optional[torch.Tensor]) -> bool:
                 if a is None and b is None:
@@ -639,7 +637,7 @@ class GPTQ:
 
             owner._hfactor_cache = {
                 "perm": (perm.clone() if perm is not None else None),
-                "factor_fp32": factor_fp32.clone(),
+                "factor_fp32": factor_fp32,
             }
 
             if out_dtype is not None and factor_fp32.dtype != out_dtype:
