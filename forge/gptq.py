@@ -558,10 +558,13 @@ class GPTQ:
             H_work.index_fill_(0, zero_cols.squeeze(), 0.0)
             H_work.index_fill_(1, zero_cols.squeeze(), 0.0)
             # (Alternative simple masking if the stride trick is too risky for your taste):
-        diag = self.H.diagonal()
-        dead_inputs = (diag == 0)
-        # Force these to identity so Cholesky ignores them
-        H_work.diagonal()[dead_inputs] = 1.0
+        diag = H_work.diagonal()
+        mask_zeros = (diag == 0)
+        
+        if mask_zeros.any():
+            # Force identity on singular indices so Cholesky succeeds
+            # We only touch the diagonal; the rest of the row/col is already 0.0
+            H_work.diagonal()[mask_zeros] = 1.0
 
         damp = float(rel_damp) * H_work.diagonal().mean()
         H_work.diagonal().add_(damp)
