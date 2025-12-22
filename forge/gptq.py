@@ -715,26 +715,28 @@ class GPTQ:
         if group_size % 32 != 0:
             raise ValueError(f"group_size must be a multiple of 32, got {group_size}")
 
-        # ------------------- Permutation (MoE-Quant) -------------------
-        if self.quantization_order == QuantizationOrder.ACTIVATION:
-            # H is fp32; diag is fp32; argsort cost is small relative to quant.
-            perm = torch.argsort(self.H.diagonal(), descending=True)
-        else:
+        # ------------------- Permutation (Robust) -------------------
+        # FIX: Use the EXACT permutation cached by the owner during Hessian Factorization.
+        # Do not re-calculate argsort() here, or you risk alignment bugs.
+        perm = self._owner()._h_perm
+        
+        # Handle "Default" order (perm is None)
+        if perm is None:
             perm = torch.arange(C, device=W_t.device)
+            is_identity_perm = True
+        else:
+            # Check if cached perm is effectively identity (rare but possible)
+            # (We skip this check usually for speed, but here is the logic)
+            is_identity_perm = False 
 
-        is_identity_perm = torch.equal(perm, torch.arange(C, device=perm.device))
         if is_identity_perm:
             perm_inv = None
         else:
             perm_inv = torch.argsort(perm)
 
-            # permute weight rows (input dims)
+            # Permute weight rows (input dims) to match H_inv layout
             W_t = W_t.index_select(0, perm)
             self.W = W_t
-
-            #if self._owner() is self:
-            #    if self._pruned_ids is not None:
-            #        self._pruned_ids = self._pruned_ids.index_select(0, perm)
 
         # ------------------- Build qmeta4 grid -------------------
         qmeta, maxq, _pad = self.build_quant_grid(
@@ -747,6 +749,7 @@ class GPTQ:
         )
 
         h_factor = self._h_factor
+        
         # ------------------- Solve -------------------
         qweight_t = self.solver(
             weight=W_t,
@@ -758,6 +761,7 @@ class GPTQ:
         )
 
         # ------------------- Unpermute outputs -------------------
+        # We must return weights in the ORIGINAL order for the linear layer
         if not is_identity_perm:
             qweight_t = qweight_t.index_select(0, perm_inv)
             qmeta = qmeta.index_select(0, perm_inv)
