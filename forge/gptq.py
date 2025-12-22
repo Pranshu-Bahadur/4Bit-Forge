@@ -428,8 +428,8 @@ class GPTQ:
             self.H = Hw / n_den
             self.num_samples = n_fp.to(dtype=n.dtype)
 
-        # 2) NaN/Inf guard
-        if not torch.isfinite(self.H).all().item():
+        # 2) NaN guard
+        if torch.isnan(self.H).any().item():
             C = self.H.shape[0]
             self.H = torch.eye(C, device=self.H.device, dtype=self.H.dtype)
             self._pruned_ids = None
@@ -439,13 +439,11 @@ class GPTQ:
             return
 
         # 3) prune ids once
-        '''
         diag = self.H.diagonal()
         pruned = (diag == 0)
         self._pruned_ids = pruned
         if pruned.any():
             self.H[pruned, pruned] = 1.0  # minimal SPD salvage; full row/col zeroing happens later in factor step
-        '''
 
         # 4) optional perm cache (if you decide to)
         if self.quantization_order == QuantizationOrder.ACTIVATION:
@@ -532,6 +530,7 @@ class GPTQ:
     # ------------------------------------------------------------------ #
     # Hessian factor for solver (optimized)
     # ------------------------------------------------------------------ #
+    @torch.no_grad()
     def _compute_hessian_factor_fp32(
             self,
             *,
@@ -627,7 +626,6 @@ class GPTQ:
             cache_key: Tuple[str, float] = (algorithm, rel_damp)
 
             if cache is not None:
-                if cache.get("key") == cache_key and _perm_equal(cache.get("perm"), perm):
                     factor_fp32 = cache["factor_fp32"]
                     if out_dtype is not None and factor_fp32.dtype != out_dtype:
                         return factor_fp32.to(dtype=out_dtype)
@@ -639,9 +637,8 @@ class GPTQ:
             )
 
             owner._hfactor_cache = {
-                "key": cache_key,
                 "perm": (perm.clone() if perm is not None else None),
-                "factor_fp32": factor_fp32,
+                "factor_fp32": factor_fp32.clone(),
             }
 
             if out_dtype is not None and factor_fp32.dtype != out_dtype:
@@ -802,7 +799,7 @@ class GPTQ:
             raise ValueError(f"group_size must be a multiple of 32, got {group_size}")
         num_groups = (R + group_size - 1) // group_size
 
-        main = _is_main_process(self.is_distributed)
+        main = _is_main_process(self.is_distributed) or not self.is_distributed
 
         if main:
             qweight_t, qmeta, maxq = self._quantize_layer(bits_i)
