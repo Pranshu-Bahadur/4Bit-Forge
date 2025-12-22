@@ -568,7 +568,7 @@ class GPTQ:
                 torch.linalg.cholesky(H_work, upper=True, out=H_work)      # U where H^{-1}=U^T U
         except RuntimeError as e:
             self.issue_non_invertible = True
-            # print(f"[HESSIAN] factorization failed: {e}")  # enable during bring-up
+            print(f"[HESSIAN] factorization failed: {e}")  # enable during bring-up
             H_work.zero_()
             H_work.diagonal().fill_(1.0)
 
