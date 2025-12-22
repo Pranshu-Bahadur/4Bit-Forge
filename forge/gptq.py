@@ -495,8 +495,8 @@ class GPTQ:
                 self.issue_zero_samples = True
             
         self._h_factor = owner._get_hessian_factor_cached(owner._h_perm, 
-                                             rel_damp=owner.rel_damp, 
-                                             algorithm=owner.algorithm,
+                                             rel_damp=self.rel_damp, 
+                                             algorithm=self.algorithm,
                                              out_dtype=None) #self.layer.weight.dtype
             
 
@@ -570,7 +570,7 @@ class GPTQ:
             try:
                 if algorithm == "babai":
                     # A = chol(H) upper: H = A^T A
-                    torch.linalg.cholesky(H_work, upper=True, out=H_work)
+                    H_work = torch.linalg.cholesky(H_work, upper=True)
                 else:
                     # U = chol(H^{-1}) upper: H^{-1} = U^T U
                     H_work = torch.linalg.cholesky(torch.cholesky_inverse(torch.linalg.cholesky(H_work)) , upper=True)      # U in-place
