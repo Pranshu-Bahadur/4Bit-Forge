@@ -582,9 +582,10 @@ class GPTQ:
                 H_work = torch.eye(C, device=H_work.device, dtype=torch.float32)
 
             # Row-normalize by diagonal
-            d = H_work.diagonal().clone()
-            d = torch.where(d == 0, torch.ones_like(d), d)
-            H_work.div_(d.unsqueeze(-1))
+            if algorithm == "gptq":
+                d = H_work.diagonal().clone()
+                d = torch.where(d == 0, torch.ones_like(d), d)
+                H_work.div_(d.unsqueeze(-1))
 
             return H_work
     
