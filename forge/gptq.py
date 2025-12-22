@@ -335,11 +335,8 @@ class GPTQ:
         alpha = 2.0 / total
 
 
-        if self._tc_enabled and input.device.type == "cuda":
-            addmm_fn = self._get_compiled_addmm_()
-            self.H = addmm_fn(self.H, inp2d, beta, alpha).clone()
-        else:
-            self.H.addmm_(inp2d.transpose(0, 1), inp2d, beta=beta, alpha=alpha)
+        
+        self.H.addmm_(inp2d.transpose(0, 1), inp2d, beta=beta, alpha=alpha)
 
         self.num_samples += n_new
 
@@ -566,7 +563,7 @@ class GPTQ:
                 H_work.diagonal().add_(damp)
 
             # Apply permutation (still working copy)
-            if perm is not None:
+            if perm is not None and self.quantization_order == QuantizationOrder.ACTIVATION:
                 H_work = H_work.index_select(0, perm).index_select(1, perm)
 
             # Factorize (destructive on H_work)
