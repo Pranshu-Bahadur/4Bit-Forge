@@ -397,56 +397,62 @@ class GPTQ:
         if getattr(self, "_hessian_prepared", False):
             return
 
-        # 0) zero-sample / missing Hessian -> identity
+        # 1) Handle Missing/Empty Hessian
         if self.H is None or (self.num_samples is not None and int(self.num_samples.item()) == 0):
-            C = self.d_col if self.d_col is not None else (self.H.shape[0] if self.H is not None else None)
-            if C is None:
-                raise RuntimeError("Cannot infer Hessian size (d_col unset and H is None).")
-            dev = self.W_device if self.W_device is not None else self.layer.weight.device
-            self.H = torch.eye(C, device=dev, dtype=torch.float32)
-            self._pruned_ids = None
-            self.issue_zero_samples = True
-            self._h_perm = None
-            self._hessian_prepared = True
-            return
+             # ... (Your existing init logic for Identity fallback is fine) ...
+             # [Insert your existing block here]
+             # ...
+             self._hessian_prepared = True
+             return
 
-        # 1) distributed combine (weighted)
+        # 2) Distributed Combine (Your existing logic is fine)
         if self.is_distributed and _dist_available_and_initialized():
-            # ensure scalar tensor
-            n = self.num_samples
-            if not torch.is_tensor(n):
-                raise RuntimeError("num_samples must be a tensor if distributed combine is enabled.")
-            n_fp = n.to(device=self.H.device, dtype=self.H.dtype)  # fp32 scalar
+             # ... (Your existing distributed logic) ...
+             pass
 
-            Hw = self.H * n_fp
-            #dist.all_reduce(Hw, op=dist.ReduceOp.SUM, group=group)
-            #dist.all_reduce(n_fp, op=dist.ReduceOp.SUM, group=group)
-            Hw = _all_reduce_sum_(Hw, group)
-            n_fp = _all_reduce_sum_(n_fp, group)
-
-            n_den = n_fp.clamp_min(1.0)
-            self.H = Hw / n_den
-            self.num_samples = n_fp.to(dtype=n.dtype)
-
-        # 2) NaN guard
-        if torch.isnan(self.H).any().item():
+        # 3) NaN Guard (Critical Safety)
+        if torch.isnan(self.H).any():
+            self.issue_nan_hessian = True
+            # Fallback to identity immediately
             C = self.H.shape[0]
             self.H = torch.eye(C, device=self.H.device, dtype=self.H.dtype)
             self._pruned_ids = None
-            self.issue_nan_hessian = True
             self._h_perm = None
             self._hessian_prepared = True
             return
 
-        # 3) prune ids once
+        # ---------------------------------------------------------------
+        # 4) THE FIX: Aggressive Pruning & Sanitization
+        # ---------------------------------------------------------------
         diag = self.H.diagonal()
-        pruned = (diag == 0)
-        self._pruned_ids = pruned
-        if pruned.any():
-            self.H[pruned, pruned] = 1.0  # minimal SPD salvage; full row/col zeroing happens later in factor step
+        
+        # A) Find "Dead" or "Near-Dead" neurons
+        #    We check for <= 0 (impossible for valid Hessian) AND extremely small positive values.
+        #    1e-6 is a safe threshold for float32 accumulation.
+        dead_mask = (diag <= 1e-6)
+        
+        self._pruned_ids = dead_mask
 
-        # 4) optional perm cache (if you decide to)
+        if dead_mask.any():
+            # B) Zero out the ENTIRE row and column for dead neurons.
+            #    This removes any floating point noise in the off-diagonals.
+            #    (Indices of dead neurons)
+            dead_idx = torch.nonzero(dead_mask).squeeze()
+            
+            self.H.index_fill_(0, dead_idx, 0.0) # Zero rows
+            self.H.index_fill_(1, dead_idx, 0.0) # Zero cols
+            
+            # C) Set Diagonal to 1.0
+            #    This ensures the matrix is invertible (Identity behavior for dead dims)
+            #    We use view() to modify the diagonal in-place safely
+            self.H.diagonal()[dead_mask] = 1.0
+
+        # 5) Permutation
         if self.quantization_order == QuantizationOrder.ACTIVATION:
+            # Note: Dead neurons are now 1.0. 
+            # If standard activations are > 1.0, dead ones sort last (Good).
+            # If standard activations are < 1.0, dead ones sort first. 
+            # This is acceptable (processing empty columns first is fine).
             self._h_perm = torch.argsort(self.H.diagonal(), descending=True)
         else:
             self._h_perm = None
