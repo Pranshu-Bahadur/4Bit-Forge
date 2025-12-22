@@ -545,7 +545,6 @@ class GPTQ:
             """
             if self.H is None:
                 raise RuntimeError("Hessian is None; call update() first.")
-            C = self.d_col
 
             # Work on a detached fp32 clone so we don't trash shared H
             H_work = self.H.detach().to(dtype=torch.float32).clone()
@@ -576,7 +575,7 @@ class GPTQ:
                     H_work = torch.linalg.cholesky(torch.cholesky_inverse(torch.linalg.cholesky(H_work)) , upper=True)      # U in-place
             except Exception:
                 self.issue_non_invertible = True
-                H_work = torch.eye(C, device=H_work.device, dtype=torch.float32)
+                H_work = torch.eye(H_work.shape[0], device=H_work.device, dtype=torch.float32)
 
             # Row-normalize by diagonal
             if algorithm == "gptq":
