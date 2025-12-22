@@ -494,10 +494,7 @@ class GPTQ:
             if self.num_samples.item() == 0:
                 self.issue_zero_samples = True
             
-        self._h_factor = owner._get_hessian_factor_cached(owner._h_perm, 
-                                             rel_damp=self.rel_damp, 
-                                             algorithm=self.algorithm,
-                                             out_dtype=None) #self.layer.weight.dtype
+        
             
 
         # 2) Weight preparation
@@ -525,6 +522,11 @@ class GPTQ:
         self.d_col, self.d_row = int(W_t.shape[0]), int(W_t.shape[1])
         self.W_device = W_t.device
         self.W_dtype = W_t.dtype
+        
+        self._h_factor = owner._get_hessian_factor_cached(owner._h_perm, 
+                                             rel_damp=self.rel_damp, 
+                                             algorithm=self.algorithm,
+                                             out_dtype=None) #self.layer.weight.dtype
 
 
     # ------------------------------------------------------------------ #
@@ -576,7 +578,7 @@ class GPTQ:
                     H_work = torch.linalg.cholesky(torch.cholesky_inverse(torch.linalg.cholesky(H_work)) , upper=True)      # U in-place
             except Exception:
                 self.issue_non_invertible = True
-                H_work = torch.eye(H_work.shape[0], device=H_work.device, dtype=torch.float32)
+                H_work = torch.eye(self.d_col, device=H_work.device, dtype=torch.float32)
 
             # Row-normalize by diagonal
             if self.algorithm == "gptq":
