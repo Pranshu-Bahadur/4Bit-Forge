@@ -437,33 +437,9 @@ class GPTQ:
             self._hessian_prepared = True
             return
 
-        # ---------------------------------------------------------------
-        # 4) THE FIX: Aggressive Pruning & Sanitization
-        # ---------------------------------------------------------------
-        diag = self.H.diagonal()
         
-        # A) Find "Dead" or "Near-Dead" neurons
-        #    We check for <= 0 (impossible for valid Hessian) AND extremely small positive values.
-        #    1e-6 is a safe threshold for float32 accumulation.
-        dead_mask = (diag == 0)
-        
-        self._pruned_ids = dead_mask
 
-        if dead_mask.any():
-            # B) Zero out the ENTIRE row and column for dead neurons.
-            #    This removes any floating point noise in the off-diagonals.
-            #    (Indices of dead neurons)
-            dead_idx = torch.nonzero(dead_mask).squeeze()
-            
-            self.H.index_fill_(0, dead_idx, 0.0) # Zero rows
-            self.H.index_fill_(1, dead_idx, 0.0) # Zero cols
-            
-            # C) Set Diagonal to 1.0
-            #    This ensures the matrix is invertible (Identity behavior for dead dims)
-            #    We use view() to modify the diagonal in-place safely
-            self.H.diagonal()[dead_mask] = 1.0
-
-        # 5) Permutation
+        # 4) Permutation
         if self.quantization_order == QuantizationOrder.ACTIVATION:
             # Note: Dead neurons are now 1.0. 
             # If standard activations are > 1.0, dead ones sort last (Good).
