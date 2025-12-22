@@ -522,7 +522,7 @@ class GPTQ:
         self.d_col, self.d_row = int(W_t.shape[0]), int(W_t.shape[1])
         self.W_device = W_t.device
         self.W_dtype = W_t.dtype
-        
+
         self._h_factor = owner._get_hessian_factor_cached(owner._h_perm, 
                                              rel_damp=self.rel_damp, 
                                              algorithm=self.algorithm,
@@ -549,8 +549,7 @@ class GPTQ:
             if self.H is None:
                 raise RuntimeError("Hessian is None; call update() first.")
 
-            # Work on a detached fp32 clone so we don't trash shared H
-            H_work = self.H.detach().to(dtype=torch.float32).clone()
+            H_work = self.H
 
             #https://github.com/IST-DASLab/MoE-Quant/blob/5a3b298cfb5c475a9b6584d48b43fcebc4ddfb2f/src/gptq.py#L221
 
