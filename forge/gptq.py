@@ -842,6 +842,9 @@ class GPTQ:
         Build groupwise quantization metadata in packed qmeta4 format.
 
         qmeta: (C, G, 4) uint8, where G = ceil(R / group_size)
+
+        NOTE: Tail-group padding uses wrap-around of real tail values (not zeros),
+        so tail qmeta is not biased by artificial zeros when R % group_size != 0.
         """
         if weight.ndim != 2:
             raise ValueError("build_quant_grid expects weight to be 2D (C, R).")
@@ -853,10 +856,8 @@ class GPTQ:
         if group_size % 32 != 0:
             raise ValueError(f"group_size must be a multiple of 32, got {group_size}")
 
-        # Keep original dtype on CUDA, fp32 on CPU.
-        W = weight #if device.type == "cuda" else weight.to(torch.float32)
+        W = weight
         if not W.is_contiguous():
-            # Pre-solver path already makes W contiguous; this is just a safety net.
             W = W.contiguous()
 
         num_groups = (R + group_size - 1) // group_size
@@ -897,10 +898,20 @@ class GPTQ:
                 qmeta_parts.append(qmeta_full)
 
             tail_len = R - full_R
-            x_tail = torch.zeros((C, group_size), device=device, dtype=W.dtype)
-            if tail_len > 0:
-                x_tail[:, :tail_len].copy_(W[:, full_R:R])
-            x_tail = x_tail.view(-1, group_size)
+            if tail_len <= 0:
+                raise RuntimeError("pad != 0 but tail_len <= 0; unexpected state.")
+
+            # --- Key fix: pad tail by wrapping real tail values, NOT zeros ---
+            tail = W[:, full_R:R]  # (C, tail_len)
+            if tail_len < group_size:
+                rep = group_size - tail_len
+                # wrap indices: 0..rep-1 mapped into 0..tail_len-1
+                idx = torch.arange(rep, device=device) % tail_len
+                pad_vals = tail.index_select(1, idx)  # (C, rep)
+                x_tail = torch.cat([tail, pad_vals], dim=1)  # (C, group_size)
+            else:
+                x_tail = tail  # already full group_size (rare)
+            x_tail = x_tail.reshape(-1, group_size)
 
             qmeta_tail, maxq2 = self._build_quant_grid_groups(
                 x_groups=x_tail,
@@ -921,6 +932,7 @@ class GPTQ:
 
         qmeta = qmeta_flat.view(C, num_groups, 4)
         return qmeta, maxq, pad
+
 
     @torch.no_grad()
     def solver(
