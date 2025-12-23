@@ -405,7 +405,7 @@ class GPTQ:
             if C is None:
                 raise RuntimeError("Cannot infer Hessian size (d_col unset and H is None).")
             dev = self.W_device if self.W_device is not None else self.layer.weight.device
-            print(self.H, self.num_samples, self._owner() is self)
+            print(self.H, self.num_samples, self._owner() is self, self.layer)
             self.H = torch.eye(C, device=dev, dtype=torch.float32)
             self._pruned_ids = None
             self.issue_zero_samples = True
