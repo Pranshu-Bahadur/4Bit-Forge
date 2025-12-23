@@ -395,7 +395,7 @@ class GPTQ:
     @torch.no_grad()
     def _prepare_hessian_once(self, *, group=None):
         assert not self.tied_gptq_handle
-        print(self.H, self.num_samples, self._owner() is self)
+        #print(self.H, self.num_samples, self._owner() is self)
 
         # 0) zero-sample / missing Hessian -> identity
         if self.H is None or (self.num_samples is not None and int(self.num_samples.item()) == 0):
