@@ -305,8 +305,7 @@ class GPTQ:
             return
 
         # Create H on the same device as inputs (caller controls where update() runs)
-        if self.H is None:
-            self.H = torch.zeros((self.d_col, self.d_col), device=input.device, dtype=torch.float32)
+        
 
         if isinstance(self.layer, nn.Linear):
             # input: (..., C) -> (N, C)
@@ -321,8 +320,11 @@ class GPTQ:
             raise TypeError("GPTQ.update() supports nn.Linear and ConvNd layers only.")
 
         # Important: cast AFTER any caller-side token subsampling/capping to minimize conversion cost.
-        if inp2d.dtype != torch.float32:
-            inp2d = inp2d.float()
+        if self.H is None:
+            self.H = torch.zeros((self.d_col, self.d_col), device=input.device, dtype=inp2d.dtype)
+            self.act_dtype = inp2d.dtype
+        #if inp2d.dtype != torch.float32:
+        #    inp2d = inp2d.float()
 
         n_new = int(inp2d.shape[0])
         if n_new <= 0:
@@ -401,7 +403,7 @@ class GPTQ:
             if C is None:
                 raise RuntimeError("Cannot infer Hessian size (d_col unset and H is None).")
             dev = self.W_device if self.W_device is not None else self.layer.weight.device
-            self.H = torch.eye(C, device=dev, dtype=torch.float32)
+            self.H = torch.eye(C, device=dev, dtype=self.act_dtype)
             self._pruned_ids = None
             self.issue_zero_samples = True
             self._h_perm = None
@@ -486,7 +488,7 @@ class GPTQ:
         if self.H is None:
             # no samples => identity fallback
             dev = self.W_device if self.W_device is not None else (self.layer.weight.device)
-            self.H = torch.eye(self.d_col, device=dev, dtype=torch.float32)
+            self.H = torch.eye(self.d_col, device=dev, dtype=self.act_dtype)
             self.issue_zero_samples = True
         else:
             if self.num_samples.item() == 0:
@@ -684,7 +686,7 @@ class GPTQ:
                 torch.linalg.cholesky(H_work, upper=True, out=H_work)       # U in-place
         except Exception:
             self.issue_non_invertible = True
-            H_work = torch.eye(C, device=H.device, dtype=torch.float32)
+            H_work = torch.eye(C, device=H.device, dtype=self.act_dtype)
 
         # Row-normalize by diagonal (in-place, with diag clone to avoid aliasing)
         d = H_work.diagonal().clone()
