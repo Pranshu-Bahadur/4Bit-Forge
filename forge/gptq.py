@@ -320,16 +320,13 @@ class GPTQ:
 
         # Important: cast AFTER any caller-side token subsampling/capping to minimize conversion cost.
         if self.H is None:
-            print('init H')
-            self.H = torch.zeros((input.shape[-1], input.shape[-1]), device=input.device, dtype=torch.float32)
+            self.H = torch.zeros((self.d_col, self.d_col), device=input.device, dtype=torch.float32)
 
         if input.dtype != torch.float32:
             input = input.float()
 
         n_new = int(input.shape[0])
-        if n_new <= 0:
-            print(f'0 new samples; curr sample count {self.num_samples.item()}')
-            return
+        
 
         # MoE-Quant style EMA updat
         ns = int(self.num_samples.item())          # scalar python int
@@ -487,7 +484,7 @@ class GPTQ:
         
 
         if self.H is None:
-            print(self._owner().H, self.H)
+            print('still None...')
             # no samples => identity fallback
             dev = self.W_device if self.W_device is not None else (self.layer.weight.device)
             self.H = torch.eye(self.d_col, device=dev, dtype=torch.float32)
