@@ -340,7 +340,7 @@ class GPTQ:
         
         self.H.addmm_(inp2d.transpose(0, 1), inp2d, beta=beta, alpha=alpha)
 
-        self.num_samples += n_new
+        self.num_samples.add_(n_new)
 
     @torch.no_grad()
     def reset(self) -> None:
