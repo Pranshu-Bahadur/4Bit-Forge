@@ -184,7 +184,7 @@ class GPTQ:
 
         # Hessian & calibration state
         self.H: torch.Tensor | None = None
-        self.num_samples: torch.Tensor = torch.zeros((), device=self.device, dtype=torch.long)
+        self.num_samples: torch.Tensor = torch.zeros((), device=self.layer.device, dtype=torch.long)
 
         # Working weight (transposed (C,R)) during quant
         self.W: torch.Tensor | None = None
