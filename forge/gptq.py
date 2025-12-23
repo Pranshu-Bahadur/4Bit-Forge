@@ -522,9 +522,10 @@ class GPTQ:
         self.W_device = W_t.device
         self.W_dtype = W_t.dtype
 
-        self._h_factor = self._compute_hessian_factor_fp32(self._h_perm, 
+        self._h_factor = self._get_hessian_factor_cached(self._owner()._h_perm, 
                                              rel_damp=self.rel_damp, 
-                                             algorithm=self.algorithm) #self.layer.weight.dtype
+                                             algorithm=self.algorithm,
+                                             out_dtype=None) #self.layer.weight.dtype
 
 
     # ------------------------------------------------------------------ #
@@ -537,7 +538,7 @@ class GPTQ:
         if self.W is None:
             raise RuntimeError("W is None; call quantization_pre_step() first.")
 
-        H_work = self.H.clone()
+        H_work = self.H#.clone()
 
         if perm is not None and not self.tied_gptq_handle:
             H_work = H_work.index_select(0, perm).index_select(1, perm)
