@@ -471,7 +471,7 @@ torch::Tensor babai_solver_cuda(
             } else { // BFloat16
                 babai_update_left_kernel_wdtype<__nv_bfloat16, MAX_B, TILE_R, TILE_I><<<upd_grid, upd_block, 0, stream>>>(
                     reinterpret_cast<__nv_bfloat16*>(weight.data_ptr<at::BFloat16>()),
-                    reinterpret_cast<__nv_bfloat16*>(A_data_ptr<at::BFloat16>()),
+                    reinterpret_cast<__nv_bfloat16*>(A.data_ptr<at::BFloat16>()),
                     reinterpret_cast<__nv_bfloat16*>(invD_all.data_ptr<at::BFloat16>()),
                     reinterpret_cast<__nv_bfloat16*>(Eblk_view.data_ptr<at::BFloat16>()),
                     (int)C, (int)R,
