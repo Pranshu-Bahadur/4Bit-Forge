@@ -136,7 +136,7 @@ class GPTQ:
         quantization_order: str = "default",
         quantization_scale: str = "absmax",
         is_distributed: bool = False,
-        tied_gptq_handle: Optional["GPTQ"] = None,
+        tied_gptq_handle: GPTQ | None = None,
         algorithm: str = "babai",
         # Optional internal torch.compile (OFF by default; caller can enable)
         torch_compile: bool = False,
@@ -170,9 +170,9 @@ class GPTQ:
         self.is_distributed = bool(is_distributed)
 
         # tied handle (MoE-Quant semantics)
-        self.tied_gptq_handle: GPTQ | None = tied_gptq_handle
-        self.num_tied_handles: int = 0
-        self._owner_reset_pending: bool = False
+        self.tied_gptq_handle = tied_gptq_handle
+        self.num_tied_handles = 0
+        self._owner_reset_pending = True
         if tied_gptq_handle is not None:
             tied_gptq_handle.num_tied_handles += 1
 
@@ -183,8 +183,8 @@ class GPTQ:
         self._hfactor_cache = None
 
         # Hessian & calibration state
-        self.H: torch.Tensor | None = None
-        self.num_samples: torch.Tensor = torch.zeros((), device=self.layer.weight.device, dtype=torch.long)
+        self.H = None
+        self.num_samples = torch.zeros((), device=self.layer.weight.device, dtype=torch.long)
 
         # Working weight (transposed (C,R)) during quant
         self.W: torch.Tensor | None = None
@@ -293,41 +293,39 @@ class GPTQ:
         If tied_gptq_handle is set, we delegate accumulation to the tied handle
         (saves duplicate X^T X work when users call update() on multiple handles).
         """
-        if self.layer is None:
-            raise RuntimeError("GPTQ.update() requires a bound layer (pass layer=... in __init__).")
-        if self.d_col is None:
-            self._init_from_layer(self.layer)
 
         if self.tied_gptq_handle is not None:
             self._owner().update(input)
             # mirror pointers/counters (keeps tokens_collected sensible)
-            #self.H = self._owner().H
+            self.H = self._owner().H
             self.num_samples = self._owner().num_samples
             print('tied', self.num_samples)
             return
 
         # Create H on the same device as inputs (caller controls where update() runs)
         
-
+        #https://github.com/IST-DASLab/MoE-Quant/blob/5a3b298cfb5c475a9b6584d48b43fcebc4ddfb2f/src/gptq.py#L85C9-L96C56
         if isinstance(self.layer, nn.Linear):
-            # input: (..., C) -> (N, C)
-            inp2d = input.reshape(-1, input.shape[-1])
-        elif isinstance(self.layer, _ConvNd):
-            if self._unfold is None:
-                self._init_from_layer(self.layer)
-            # (N, C*k*k, L) -> (N*L, C*k*k)
-            u = self._unfold(input)  # (N, K, L)
-            inp2d = u.transpose(1, 2).reshape(-1, u.shape[1])
+            input = input.reshape(-1, input.shape[-1])
         else:
-            raise TypeError("GPTQ.update() supports nn.Linear and ConvNd layers only.")
+            unfold = nn.Unfold(
+                self.layer.kernel_size,
+                dilation=self.layer.dilation,
+                padding=self.layer.padding,
+                stride=self.layer.stride,
+            )
+            # output size (batch_size, channels * \prod kernel_size, num_patches)
+            input = unfold(input)
+            input = input.transpose(1, 2).flatten(0, 1)
 
         # Important: cast AFTER any caller-side token subsampling/capping to minimize conversion cost.
         if self.H is None:
-            self.H = torch.zeros((self.d_col, self.d_col), device=input.device, dtype=torch.float32)
-        if inp2d.dtype != torch.float32:
-            inp2d = inp2d.float()
+            self.H = torch.zeros((input.shape[-1], input.shape[-1]), device=input.device, dtype=torch.float32)
 
-        n_new = int(inp2d.shape[0])
+        if input.dtype != torch.float32:
+            input = input.float()
+
+        n_new = int(input.shape[0])
         if n_new <= 0:
             print(f'0 new samples; curr sample count {self.num_samples.item()}')
             return
@@ -340,10 +338,10 @@ class GPTQ:
 
 
         
-        self.H.addmm_(inp2d.transpose(0, 1), inp2d, beta=beta, alpha=alpha)
+        self.H.addmm_(input.transpose(0, 1), input, beta=beta, alpha=alpha)
 
         self.num_samples += n_new
-        print('owner', self.num_samples)
+        #print('owner', self.num_samples)
 
     @torch.no_grad()
     def reset(self) -> None:
