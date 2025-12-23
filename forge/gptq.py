@@ -257,7 +257,9 @@ class GPTQ:
         return int(self.num_samples.item())
     
     def _owner(self) -> "GPTQ":
-        return self.tied_gptq_handle or self
+        if self.tied_gptq_handle is not None:
+            return self.tied_gptq_handle
+        return self
 
 
     # ------------------------------------------------------------------ #
