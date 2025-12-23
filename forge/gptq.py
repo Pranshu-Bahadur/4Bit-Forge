@@ -319,7 +319,7 @@ class GPTQ:
             input = input.transpose(1, 2).flatten(0, 1)
 
         # Important: cast AFTER any caller-side token subsampling/capping to minimize conversion cost.
-        if self.H is None:
+        if not self.H:
             self.H = torch.zeros((input.shape[-1], input.shape[-1]), device=input.device, dtype=torch.float32)
 
         if input.dtype != torch.float32:
@@ -397,6 +397,7 @@ class GPTQ:
     @torch.no_grad()
     def _prepare_hessian_once(self, *, group=None):
         assert not self.tied_gptq_handle
+        print(self.H, self.num_samples, self._owner() is self)
 
         # 0) zero-sample / missing Hessian -> identity
         if self.H is None or (self.num_samples is not None and int(self.num_samples.item()) == 0):
@@ -477,11 +478,10 @@ class GPTQ:
         
         if not self.tied_gptq_handle:
             self._prepare_hessian_once()
-        
-        # mirror shared state/views
-        self.H = self._owner().H
-        self.num_samples = self._owner().num_samples
-        self._pruned_ids = self._owner()._pruned_ids
+        else:
+            self.H = self.tied_gptq_handle.H
+            self.num_samples = self.tied_gptq_handle.num_samples
+            self._pruned_ids = self.tied_gptq_handle._pruned_ids
 
         
 
