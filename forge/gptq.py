@@ -300,8 +300,8 @@ class GPTQ:
         if self.tied_gptq_handle is not None:
             self._owner().update(input)
             # mirror pointers/counters (keeps tokens_collected sensible)
-            #self.H = self.tied_gptq_handle.H
-            #self.num_samples = self.tied_gptq_handle.num_samples
+            self.H = self._owner().H
+            self.num_samples = self._owner().num_samples
             return
 
         # Create H on the same device as inputs (caller controls where update() runs)
