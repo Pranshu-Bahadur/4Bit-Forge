@@ -573,11 +573,11 @@ class GPTQ:
             H_work.zero_()
             H_work.diagonal().fill_(1.0)
 
-        #if algorithm == "gptq":
-        d = H_work.diagonal()
-        scale = d.clone()
-        scale[scale == 0] = 1.0
-        H_work.div_(scale.unsqueeze(-1))
+        if algorithm == "gptq":
+            d = H_work.diagonal()
+            scale = d.clone()
+            scale[scale == 0] = 1.0
+            H_work.div_(scale.unsqueeze(-1))
 
         return H_work
 
