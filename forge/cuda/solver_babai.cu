@@ -339,10 +339,10 @@ torch::Tensor babai_solver_cuda(
     auto dev = weight.device();
 
     // Keep outputs/scratch in the "W dtype world"
-    auto qweight = torch::empty({C, R},
+    auto qweight = torch::zeros({C, R},
         torch::TensorOptions().dtype(torch::kUInt8).device(dev));
 
-    auto Eblk = torch::empty({block_size, R},
+    auto Eblk = torch::zeros({block_size, R},
         torch::TensorOptions().dtype(st).device(dev));
 
     auto qmeta_flat =
@@ -356,7 +356,7 @@ torch::Tensor babai_solver_cuda(
     auto invD_all = A.diagonal(0, 0, 1).reciprocal().contiguous();
 
     // Scratch for addmm_ path (in W dtype)
-    torch::Tensor A_tmp = torch::empty({C, block_size},
+    torch::Tensor A_tmp = torch::zeros({C, block_size},
         torch::TensorOptions().dtype(st).device(dev));
 
     auto stream = at::cuda::getCurrentCUDAStream();
