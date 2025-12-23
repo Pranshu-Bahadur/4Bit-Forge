@@ -310,7 +310,6 @@ torch::Tensor babai_solver_cuda(
     TORCH_CHECK(qmeta_bytes.is_cuda(), "qmeta_bytes must be CUDA");
 
     weight      = weight.contiguous();
-    A           = A.contiguous();
     qmeta_bytes = qmeta_bytes.contiguous();
 
     const int64_t C = weight.size(0);
@@ -340,24 +339,24 @@ torch::Tensor babai_solver_cuda(
     auto dev = weight.device();
 
     // Keep outputs/scratch in the "W dtype world"
-    auto qweight = torch::zeros({C, R},
+    auto qweight = torch::empty({C, R},
         torch::TensorOptions().dtype(torch::kUInt8).device(dev));
 
-    auto Eblk = torch::zeros({block_size, R},
+    auto Eblk = torch::empty({block_size, R},
         torch::TensorOptions().dtype(st).device(dev));
 
     auto qmeta_flat =
         (qmeta_bytes.dim() == 3) ? qmeta_bytes.view({C * G, 4}) : qmeta_bytes;
 
     // Cast A to W dtype (no fp32 A_f)
-    torch::Tensor A_t = (A.scalar_type() == st) ? A : A.to(st);
-    A_t = A_t.contiguous();
+    A = (A.scalar_type() == st) ? A : A.to(st);
+    A = A.contiguous();
 
     // invD_all = 1 / diag(A) (in W dtype)
-    auto invD_all = A_t.diagonal(0, 0, 1).reciprocal().contiguous();
+    auto invD_all = A.diagonal(0, 0, 1).reciprocal().contiguous();
 
     // Scratch for addmm_ path (in W dtype)
-    torch::Tensor A_tmp = torch::zeros({C, block_size},
+    torch::Tensor A_tmp = torch::empty({C, block_size},
         torch::TensorOptions().dtype(st).device(dev));
 
     auto stream = at::cuda::getCurrentCUDAStream();
@@ -383,7 +382,7 @@ torch::Tensor babai_solver_cuda(
                 weight.data_ptr<float>(),
                 qweight.data_ptr<uint8_t>(),
                 reinterpret_cast<const QMetaPacked*>(qmeta_flat.data_ptr<uint8_t>()),
-                A_t.data_ptr<float>(),
+                A.data_ptr<float>(),
                 invD_all.data_ptr<float>(),
                 (float*)Eblk_view.data_ptr<float>(),
                 (int)C, (int)R, (int)G,
@@ -396,7 +395,7 @@ torch::Tensor babai_solver_cuda(
                 (at::Half*)weight.data_ptr<at::Half>(),
                 qweight.data_ptr<uint8_t>(),
                 reinterpret_cast<const QMetaPacked*>(qmeta_flat.data_ptr<uint8_t>()),
-                (at::Half*)A_t.data_ptr<at::Half>(),
+                (at::Half*)A.data_ptr<at::Half>(),
                 (at::Half*)invD_all.data_ptr<at::Half>(),
                 (at::Half*)Eblk_view.data_ptr<at::Half>(),
                 (int)C, (int)R, (int)G,
@@ -409,7 +408,7 @@ torch::Tensor babai_solver_cuda(
                 (at::BFloat16*)weight.data_ptr<at::BFloat16>(),
                 qweight.data_ptr<uint8_t>(),
                 reinterpret_cast<const QMetaPacked*>(qmeta_flat.data_ptr<uint8_t>()),
-                (at::BFloat16*)A_t.data_ptr<at::BFloat16>(),
+                (at::BFloat16*)A.data_ptr<at::BFloat16>(),
                 (at::BFloat16*)invD_all.data_ptr<at::BFloat16>(),
                 (at::BFloat16*)Eblk_view.data_ptr<at::BFloat16>(),
                 (int)C, (int)R, (int)G,
@@ -422,7 +421,7 @@ torch::Tensor babai_solver_cuda(
                 (c10::Float8_e4m3fn*)weight.data_ptr<c10::Float8_e4m3fn>(),
                 qweight.data_ptr<uint8_t>(),
                 reinterpret_cast<const QMetaPacked*>(qmeta_flat.data_ptr<uint8_t>()),
-                (c10::Float8_e4m3fn*)A_t.data_ptr<c10::Float8_e4m3fn>(),
+                (c10::Float8_e4m3fn*)A.data_ptr<c10::Float8_e4m3fn>(),
                 (c10::Float8_e4m3fn*)invD_all.data_ptr<c10::Float8_e4m3fn>(),
                 (c10::Float8_e4m3fn*)Eblk_view.data_ptr<c10::Float8_e4m3fn>(),
                 (int)C, (int)R, (int)G,
@@ -453,7 +452,7 @@ torch::Tensor babai_solver_cuda(
                 if (st == at::ScalarType::Float) {
                     fill_A_scaled_kernel_wdtype<float><<<grd, blk, 0, stream>>>(
                         A_tmp.data_ptr<float>(),
-                        A_t.data_ptr<float>(),
+                        A.data_ptr<float>(),
                         invD_all.data_ptr<float>(),
                         (int)C, (int)block_size,
                         (int)block_start, B
@@ -466,7 +465,7 @@ torch::Tensor babai_solver_cuda(
                 } else if (st == at::ScalarType::Half) {
                     fill_A_scaled_kernel_wdtype<at::Half><<<grd, blk, 0, stream>>>(
                         (at::Half*)A_tmp.data_ptr<at::Half>(),
-                        (at::Half*)A_t.data_ptr<at::Half>(),
+                        (at::Half*)A.data_ptr<at::Half>(),
                         (at::Half*)invD_all.data_ptr<at::Half>(),
                         (int)C, (int)block_size,
                         (int)block_start, B
@@ -479,7 +478,7 @@ torch::Tensor babai_solver_cuda(
                 } else { // BFloat16
                     fill_A_scaled_kernel_wdtype<at::BFloat16><<<grd, blk, 0, stream>>>(
                         (at::BFloat16*)A_tmp.data_ptr<at::BFloat16>(),
-                        (at::BFloat16*)A_t.data_ptr<at::BFloat16>(),
+                        (at::BFloat16*)A.data_ptr<at::BFloat16>(),
                         (at::BFloat16*)invD_all.data_ptr<at::BFloat16>(),
                         (int)C, (int)block_size,
                         (int)block_start, B
@@ -499,7 +498,7 @@ torch::Tensor babai_solver_cuda(
                 babai_update_left_kernel_wdtype<c10::Float8_e4m3fn, MAX_B, TILE_R, TILE_I>
                     <<<fp8_grid, tile_block, 0, stream>>>(
                         (c10::Float8_e4m3fn*)weight.data_ptr<c10::Float8_e4m3fn>(),
-                        (c10::Float8_e4m3fn*)A_t.data_ptr<c10::Float8_e4m3fn>(),
+                        (c10::Float8_e4m3fn*)A.data_ptr<c10::Float8_e4m3fn>(),
                         (c10::Float8_e4m3fn*)invD_all.data_ptr<c10::Float8_e4m3fn>(),
                         (c10::Float8_e4m3fn*)Eblk_view.data_ptr<c10::Float8_e4m3fn>(),
                         (int)C, (int)R,
