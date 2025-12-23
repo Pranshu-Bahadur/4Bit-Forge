@@ -256,7 +256,7 @@ class GPTQ:
         return int(self.num_samples.item())
     
     def _owner(self) -> "GPTQ":
-        if self.tied_gptq_handle is not None:
+        if self.tied_gptq_handle:
             return self.tied_gptq_handle
         return self
 
@@ -294,7 +294,7 @@ class GPTQ:
         (saves duplicate X^T X work when users call update() on multiple handles).
         """
 
-        if self.tied_gptq_handle is not None:
+        if self.tied_gptq_handle:
             self._owner().update(input)
             # mirror pointers/counters (keeps tokens_collected sensible)
             self.H = self._owner().H
@@ -361,7 +361,7 @@ class GPTQ:
         if self.layer is not None:
             self._init_from_layer(self.layer)
 
-        if self.tied_gptq_handle is not None:
+        if self.tied_gptq_handle:
             owner = self.tied_gptq_handle
             owner.num_tied_handles -= 1
             if owner.num_tied_handles <= 0:
@@ -396,7 +396,7 @@ class GPTQ:
 
     @torch.no_grad()
     def _prepare_hessian_once(self, *, group=None):
-        assert self.tied_gptq_handle is None
+        assert not self.tied_gptq_handle
 
         # 0) zero-sample / missing Hessian -> identity
         if self.H is None or (self.num_samples is not None and int(self.num_samples.item()) == 0):
@@ -474,20 +474,19 @@ class GPTQ:
         
 
 
-        # 1) Hessian preparation
-        owner = self._owner()
-            # tied handle: ensure owner is prepared
-
-        owner._prepare_hessian_once() #TODO pass in group if needed later
+        
+        if not self.tied_gptq_handle:
+            self._prepare_hessian_once()
         
         # mirror shared state/views
-        self.H = owner.H
-        self.num_samples = owner.num_samples
-        self._pruned_ids = owner._pruned_ids
+        self.H = self._owner().H
+        self.num_samples = self._owner().num_samples
+        self._pruned_ids = self._owner()._pruned_ids
 
         
 
         if self.H is None:
+            print(self._owner().H, self.H)
             # no samples => identity fallback
             dev = self.W_device if self.W_device is not None else (self.layer.weight.device)
             self.H = torch.eye(self.d_col, device=dev, dtype=torch.float32)
@@ -525,7 +524,7 @@ class GPTQ:
         self.W_device = W_t.device
         self.W_dtype = W_t.dtype
 
-        self._h_factor = owner._get_hessian_factor_cached(owner._h_perm, 
+        self._h_factor = self._owner()._get_hessian_factor_cached(self._owner()._h_perm, 
                                              rel_damp=self.rel_damp, 
                                              algorithm=self.algorithm,
                                              out_dtype=None) #self.layer.weight.dtype
@@ -675,7 +674,7 @@ class GPTQ:
             H.diagonal().add_(damp)
 
         # If Hessian can be shared, clone before factorization so we don't trash it.
-        shared_h = (self.num_tied_handles > 0) or (self.tied_gptq_handle is not None)
+        shared_h = (self.num_tied_handles > 0) or (self.tied_gptq_handle)
         H_work = H.clone() if shared_h else H  # fp32 buffer
 
         try:
