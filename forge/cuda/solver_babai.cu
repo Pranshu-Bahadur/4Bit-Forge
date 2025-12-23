@@ -343,7 +343,7 @@ torch::Tensor babai_solver_cuda(
     auto A_f = (A.scalar_type() == at::ScalarType::Float) ? A : A.to(torch::kFloat);
     A_f = A_f.contiguous();
     weight = (weight.scalar_type() == at::ScalarType::Float) ? weight : weight.to(torch::kFloat);
-    weight = weight.contiguous()
+    weight = weight.contiguous();
 
 
     // invD_all[i] = 1 / A[i,i]
