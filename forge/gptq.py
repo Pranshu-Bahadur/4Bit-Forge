@@ -539,6 +539,9 @@ class GPTQ:
 
         H_work = self.H#.clone()
 
+        if perm is not None and not self.tied_gptq_handle:
+            H_work = H_work.index_select(0, perm).index_select(1, perm)
+
         # dead INPUT dims (self.W is (C,R))
         dead = self.W.eq(0).all(dim=1)  # (C,)
         zero_idx = dead.nonzero(as_tuple=False).flatten()
@@ -554,8 +557,7 @@ class GPTQ:
         damp = float(rel_damp) * diag.mean()
         diag.add_(damp)
 
-        if perm is not None:
-            H_work = H_work.index_select(0, perm).index_select(1, perm)
+        
 
         try:
             if algorithm == "babai":
@@ -566,7 +568,7 @@ class GPTQ:
                 torch.linalg.cholesky(H_work, upper=True, out=H_work)      # U where H^{-1}=U^T U
         except RuntimeError as e:
             self.issue_non_invertible = True
-            #print(f"[HESSIAN] factorization failed: {e}")  # enable during bring-up
+            print(f"[HESSIAN] factorization failed: {e}")  # enable during bring-up
             H_work.zero_()
             H_work.diagonal().fill_(1.0)
 
@@ -628,7 +630,7 @@ class GPTQ:
             )
 
             owner._hfactor_cache = {
-                "perm": (perm.clone() if perm is not None else None),
+                "perm": (perm if perm is not None else None),
                 "factor_fp32": factor_fp32,
             }
 
