@@ -440,7 +440,7 @@ torch::Tensor babai_solver_cuda(
             // Option A: fully W-dtype tiled kernel (also works for fp8)
             int grid_x = (static_cast<int>(R) + TILE_R - 1) / TILE_R;
             int grid_y = (static_cast<int>(block_start) + TILE_I - 1) / TILE_I;
-            dim3 grid(tile_x, grid_y); // <-- (typo guard below)
+            dim3 grid(grid_x, grid_y); // <-- (typo guard below)
 
             (void)grid; // silence unused if we switch paths
 
