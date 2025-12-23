@@ -166,10 +166,10 @@ __global__ void babai_quant_block_kernel_fast(
     // --- Correctness: derive active mask AFTER sync; do not use full mask on edge tile.
     const unsigned full = 0xFFFFFFFFu;
     unsigned mask = __ballot_sync(__activemask(), r < R);
-    if (mask == 0) return; // whole warp out-of-range (uniform)
+    //if (mask == 0) return; // whole warp out-of-range (uniform)
 
     int lane = threadIdx.x & 31;
-    if ((mask & (1u << lane)) == 0) return; // inactive lane exits safely
+    //if ((mask & (1u << lane)) == 0) return; // inactive lane exits safely
 
     // pick an active source lane for broadcasts
     int src = __ffs(mask) - 1;
@@ -177,7 +177,7 @@ __global__ void babai_quant_block_kernel_fast(
     // Load this column across the block into registers
     float x[MAX_B];
     
-    
+
     for (int i = 0; i < MAX_B; ++i) x[i] = 0.0f;
 
     for (int i = 0; i < B; ++i) {
