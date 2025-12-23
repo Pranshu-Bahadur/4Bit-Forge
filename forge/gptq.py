@@ -184,7 +184,7 @@ class GPTQ:
 
         # Hessian & calibration state
         self.H: torch.Tensor | None = None
-        self.num_samples: torch.Tensor = torch.zeros((), device=self.layer.device, dtype=torch.long)
+        self.num_samples: torch.Tensor = torch.zeros((), device=self.layer.weight.device, dtype=torch.long)
 
         # Working weight (transposed (C,R)) during quant
         self.W: torch.Tensor | None = None
@@ -206,11 +206,10 @@ class GPTQ:
         self.issue_non_invertible: bool = False
 
         # torch.compile (internal)
-        _maybe_set_dynamo_suppress_errors(torch_compile_suppress_errors)
+        #_maybe_set_dynamo_suppress_errors(torch_compile_suppress_errors)
         self._tc_enabled = False #TODO remove torch.compile #bool(torch_compile) or (os.getenv("FORGE_GPTQ_COMPILE", "0") == "1")
-        self._tc_mode = os.getenv("FORGE_GPTQ_COMPILE_MODE", torch_compile_mode)
-        self._tc_fullgraph = bool(torch_compile_fullgraph)
-        self._tc_dynamic = bool(torch_compile_dynamic)
+        self._tc_fullgraph = False #bool(torch_compile_fullgraph)
+        self._tc_dynamic = False#bool(torch_compile_dynamic)
 
         self._compiled_addmm_ = None  # lazily created
 
