@@ -319,7 +319,8 @@ class GPTQ:
             input = input.transpose(1, 2).flatten(0, 1)
 
         # Important: cast AFTER any caller-side token subsampling/capping to minimize conversion cost.
-        if not self.H:
+        if self.H is None:
+            print('init H')
             self.H = torch.zeros((input.shape[-1], input.shape[-1]), device=input.device, dtype=torch.float32)
 
         if input.dtype != torch.float32:
