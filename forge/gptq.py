@@ -524,7 +524,7 @@ class GPTQ:
         self._h_factor = owner._get_hessian_factor_cached(owner._h_perm, 
                                              rel_damp=self.rel_damp, 
                                              algorithm=self.algorithm,
-                                             out_dtype=None) #self.layer.weight.dtype
+                                             out_dtype=self.W_dtype) #self.layer.weight.dtype
 
 
     # ------------------------------------------------------------------ #
@@ -752,7 +752,7 @@ class GPTQ:
         
         # ------------------- Solve -------------------
         qweight_t = self.solver(
-            weight=W_t.to(torch.float32),
+            weight=W_t,
             hessian_inv=h_factor,
             qmeta=qmeta,
             maxq=maxq,
