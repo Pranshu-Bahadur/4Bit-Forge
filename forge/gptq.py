@@ -298,7 +298,7 @@ class GPTQ:
             self._init_from_layer(self.layer)
 
         if self.tied_gptq_handle is not None:
-            self.tied_gptq_handle.update(input)
+            self.__owner().update(input)
             # mirror pointers/counters (keeps tokens_collected sensible)
             #self.H = self.tied_gptq_handle.H
             #self.num_samples = self.tied_gptq_handle.num_samples
