@@ -851,7 +851,7 @@ class GPTQ:
             raise ValueError(f"group_size must be a multiple of 32, got {group_size}")
 
         # Keep original dtype on CUDA, fp32 on CPU.
-        W = weight if device.type == "cuda" else weight.to(torch.float32)
+        W = weight #if device.type == "cuda" else weight.to(torch.float32)
         if not W.is_contiguous():
             # Pre-solver path already makes W contiguous; this is just a safety net.
             W = W.contiguous()
