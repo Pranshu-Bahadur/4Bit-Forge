@@ -304,6 +304,7 @@ class GPTQ:
             # mirror pointers/counters (keeps tokens_collected sensible)
             #self.H = self._owner().H
             self.num_samples = self._owner().num_samples
+            print('tied', self.num_samples)
             return
 
         # Create H on the same device as inputs (caller controls where update() runs)
@@ -329,9 +330,10 @@ class GPTQ:
 
         n_new = int(inp2d.shape[0])
         if n_new <= 0:
+            print(f'0 new samples; curr sample count {self.num_samples.item()}')
             return
 
-        # MoE-Quant style EMA update
+        # MoE-Quant style EMA updat
         ns = int(self.num_samples.item())          # scalar python int
         total = float(ns + n_new)
         beta = float(ns) / total
@@ -341,7 +343,8 @@ class GPTQ:
         
         self.H.addmm_(inp2d.transpose(0, 1), inp2d, beta=beta, alpha=alpha)
 
-        self.num_samples.add_(n_new)
+        self.num_samples += n_new
+        print('owner', self.num_samples)
 
     @torch.no_grad()
     def reset(self) -> None:
