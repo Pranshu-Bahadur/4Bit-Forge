@@ -752,7 +752,7 @@ class GPTQ:
         
         # ------------------- Solve -------------------
         qweight_t = self.solver(
-            weight=W_t,
+            weight=W_t.to(torch.float32),
             hessian_inv=h_factor,
             qmeta=qmeta,
             maxq=maxq,
@@ -943,7 +943,7 @@ class GPTQ:
                     self.block_size,
                 )
             return cuda_kernels.gptq_solver(
-                weight.float(),
+                weight,
                 hessian_inv,
                 qmeta,
                 group_size,
