@@ -220,13 +220,9 @@ __global__ void babai_quant_block_kernel_wdtype(
     __syncthreads();
 
     int r = blockIdx.x * blockDim.x + threadIdx.x;
+    if (r >= R) return;
 
-    const unsigned full = 0xFFFFFFFFu;
-    unsigned mask = __ballot_sync(full, r < R);
-    if (mask == 0) return;
-
-    int lane = threadIdx.x & 31;
-    if ((mask & (1u << lane)) == 0) return;
+    
 
     // Load x[0:B] = W[block_start:block_start+B, r]
     scalar_t x[MAX_B];
