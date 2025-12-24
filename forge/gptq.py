@@ -555,8 +555,8 @@ class GPTQ:
         if mask_zeros.any():
             diag[mask_zeros] = 1.0
 
-        damp = float(rel_damp) * diag.mean()
-        diag.add_(damp)
+        #damp = float(rel_damp) * diag.mean()
+        #diag.add_(damp)
 
         
 
@@ -573,7 +573,7 @@ class GPTQ:
             H_work.zero_()
             H_work.diagonal().fill_(1.0)
 
-        if algorithm == "babai":
+        if algorithm == "gptq":
             d = H_work.diagonal()
             scale = d.clone()
             scale[scale == 0] = 1.0
