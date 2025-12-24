@@ -555,8 +555,9 @@ class GPTQ:
         if mask_zeros.any():
             diag[mask_zeros] = 1.0
 
-        #damp = float(rel_damp) * diag.mean()
-        #diag.add_(damp)
+        if algorithm == 'gptq':
+            damp = float(rel_damp) * diag.mean()
+            diag.add_(damp)
 
         
 
