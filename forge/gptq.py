@@ -743,7 +743,7 @@ class GPTQ:
 
         # ------------------- Build qmeta4 grid -------------------
         qmeta, maxq, _pad = self.build_quant_grid(
-            weight=W_t,
+            weight=W_t.transpose(0, 1),
             group_size=group_size,
             bits=bits_i,
             symmetric=self.sym,
@@ -828,31 +828,25 @@ class GPTQ:
     @torch.no_grad()
     def build_quant_grid(
         self,
-        weight: torch.Tensor,      # (C, R) transposed weight matrix
+        weight: torch.Tensor,      # (R_out, C_in)  UNTRANSPOSED linear.weight
         group_size: int,
         bits: int,
         symmetric: bool = False,
-        mode: str = "mse",      # "absmax" or "mse"
+        mode: str = "mse",
         quant_max_shrink: float = 0.2,
         quant_n_grid: int = 100,
         quant_norm: float = 2.4,
         impl: Literal["cuda", "triton"] = "cuda",
     ) -> tuple[torch.Tensor, torch.Tensor, int]:
-        """
-        Build groupwise quantization metadata in packed qmeta4 format.
-
-        qmeta: (C, G, 4) uint8, where G = ceil(R / group_size)
-
-        NOTE: Tail-group padding uses wrap-around of real tail values (not zeros),
-        so tail qmeta is not biased by artificial zeros when R % group_size != 0.
-        """
         if weight.ndim != 2:
-            raise ValueError("build_quant_grid expects weight to be 2D (C, R).")
-        C, R = int(weight.shape[0]), int(weight.shape[1])
+            raise ValueError("build_quant_grid expects weight to be 2D (R_out, C_in).")
+
+        R_out, C_in = int(weight.shape[0]), int(weight.shape[1])
         device = weight.device
 
-        if group_size is None or group_size <= 0 or group_size > R:
-            group_size = R
+        # group_size is along input features (C_in)
+        if group_size is None or group_size <= 0 or group_size > C_in:
+            group_size = C_in
         if group_size % 32 != 0:
             raise ValueError(f"group_size must be a multiple of 32, got {group_size}")
 
@@ -860,12 +854,13 @@ class GPTQ:
         if not W.is_contiguous():
             W = W.contiguous()
 
-        num_groups = (R + group_size - 1) // group_size
-        padded_R = num_groups * group_size
-        pad = padded_R - R
+        G = (C_in + group_size - 1) // group_size
+        padded_C = G * group_size
+        pad = padded_C - C_in
 
         if pad == 0:
-            x_groups = W.view(C, num_groups, group_size).view(-1, group_size)
+            # group along C_in: (R_out, G, group_size) -> (R_out*G, group_size)
+            x_groups = W.view(R_out, G, group_size).reshape(-1, group_size)
             qmeta_flat, maxq = self._build_quant_grid_groups(
                 x_groups=x_groups,
                 bits=bits,
@@ -877,14 +872,14 @@ class GPTQ:
                 impl=impl,
             )
         else:
-            full_R = (R // group_size) * group_size
-            full_groups = full_R // group_size
+            full_C = (C_in // group_size) * group_size
+            full_groups = full_C // group_size
 
             qmeta_parts = []
             maxq = None
 
             if full_groups > 0:
-                x_full = W[:, :full_R].view(C, full_groups, group_size).reshape(-1, group_size)
+                x_full = W[:, :full_C].view(R_out, full_groups, group_size).reshape(-1, group_size)
                 qmeta_full, maxq = self._build_quant_grid_groups(
                     x_groups=x_full,
                     bits=bits,
@@ -897,20 +892,21 @@ class GPTQ:
                 )
                 qmeta_parts.append(qmeta_full)
 
-            tail_len = R - full_R
+            tail_len = C_in - full_C
             if tail_len <= 0:
                 raise RuntimeError("pad != 0 but tail_len <= 0; unexpected state.")
 
-            # --- Key fix: pad tail by wrapping real tail values, NOT zeros ---
-            tail = W[:, full_R:R]  # (C, tail_len)
+            tail = W[:, full_C:C_in]  # (R_out, tail_len)
+
+            # pad tail by wrapping REAL tail values (per-row), not zeros
             if tail_len < group_size:
                 rep = group_size - tail_len
-                # wrap indices: 0..rep-1 mapped into 0..tail_len-1
                 idx = torch.arange(rep, device=device) % tail_len
-                pad_vals = tail.index_select(1, idx)  # (C, rep)
-                x_tail = torch.cat([tail, pad_vals], dim=1)  # (C, group_size)
+                pad_vals = tail.index_select(1, idx)  # (R_out, rep)
+                x_tail = torch.cat([tail, pad_vals], dim=1)  # (R_out, group_size)
             else:
-                x_tail = tail  # already full group_size (rare)
+                x_tail = tail  # already group_size (rare)
+
             x_tail = x_tail.reshape(-1, group_size)
 
             qmeta_tail, maxq2 = self._build_quant_grid_groups(
@@ -930,8 +926,10 @@ class GPTQ:
 
             qmeta_flat = torch.cat(qmeta_parts, dim=0)
 
-        qmeta = qmeta_flat.view(C, num_groups, 4)
+        # qmeta now (R_out, G, 4)  => flat index: qmeta[r * G + g]
+        qmeta = qmeta_flat.view(R_out, G, 4).contiguous()
         return qmeta, maxq, pad
+
 
 
     @torch.no_grad()
