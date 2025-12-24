@@ -1,4 +1,3 @@
-// solver_babai.cu
 #include <torch/extension.h>
 #include <ATen/cuda/CUDAContext.h>
 #include <c10/cuda/CUDAStream.h>
@@ -109,26 +108,14 @@ __global__ void fill_A_scaled_kernel(
     A_tmp[i * block_size + k] = from_f32<scalar_t>(s);
 }
 
-template <typename scalar_t>
-__global__ void cast_E_kernel(
-    scalar_t* __restrict__ E_out,     // [block_size, R]
-    const float* __restrict__ E_in,   // [B, R]
-    int R, int B
-) {
-    int idx = blockIdx.x * blockDim.x + threadIdx.x;
-    int total = B * R;
-    if (idx >= total) return;
-    int k = idx / R;
-    int r = idx - k * R;
-    E_out[k * R + r] = from_f32<scalar_t>(E_in[k * R + r]);
-}
-
 // -----------------------------------------------------------------------------
 // Kernel 1: Babai quantize block (back-to-front) + intra-block propagation.
 //
-// - Builds S_sh(i,t) = (A(i,t)/A(i,i)) = A(i,t) * invD(i) in shared.
-// - Triangle hygiene: only load needed upper entries (t > i); others set to 0.
-// - Warp decode optimization uses ACTIVE mask and broadcasts from an active lane.
+// IMPORTANT: qmeta layout is [R * G], where:
+//   - R is output dim (columns of W_t)
+//   - G = ceil(C / group_size) groups along input dim C
+//
+// W and qweight are transposed layout: [C, R].
 // -----------------------------------------------------------------------------
 
 template <typename scalar_t, int MAX_B>
@@ -164,40 +151,33 @@ __global__ void babai_quant_block_kernel_fast(
     int r = blockIdx.x * blockDim.x + threadIdx.x;
     if (r >= R) return;
 
-    // --- Correctness: derive active mask AFTER sync; do not use full mask on edge tile.
-    const unsigned full = 0xFFFFFFFFu;
-    //if (mask == 0) return; // whole warp out-of-range (uniform)
-
-    int lane = threadIdx.x & 31;
-    //if ((mask & (1u << lane)) == 0) return; // inactive lane exits safely
-
-    // pick an active source lane for broadcasts
-
     // Load this column across the block into registers
     float x[MAX_B];
-    
-
+    #pragma unroll
     for (int i = 0; i < MAX_B; ++i) x[i] = 0.0f;
 
-    for (int i = 0; i < B; ++i) {
-        int row = block_start + i;
-        x[i] = to_f32(W[row * R + r]);
+    #pragma unroll
+    for (int i = 0; i < MAX_B; ++i) {
+        if (i < B) {
+            int row = block_start + i;
+            x[i] = to_f32(W[row * R + r]);
+        }
     }
 
     const int maxq_i = (1 << bits) - 1;
 
-    // Back-to-front
+    // Back-to-front within this block
     for (int t = B - 1; t >= 0; --t) {
         int row = block_start + t;
 
+        // groups along C (input dim)
         int g = row / group_size;
-        if (g >= G) g = G - 1;   // or return; but clamping matches your “tail group” idea
+        // With correct host checks, g < G always; keep clamp as a safety net.
+        if (g >= G) g = G - 1;
 
         float s = 0.f, inv_s = 0.f, q0 = 0.f;
-        
         uint32_t packed = qmeta_to_u32(qmeta[r * G + g]);
         decode_qmeta(packed, s, inv_s, q0, bits);
-        
 
         float err, deq;
         uint8_t qb;
@@ -218,74 +198,15 @@ __global__ void babai_quant_block_kernel_fast(
     }
 }
 
-// -----------------------------------------------------------------------------
-// Kernel 2: Prefix update for FP8 (custom), float accumulate.
-// W[i,r] += sum_k (A[i, block_start+k] * invD[i]) * Eblk[k,r]
-// -----------------------------------------------------------------------------
-
-template <int MAX_B, int TILE_R, int TILE_I>
-__global__ void babai_update_left_fp8_kernel(
-    c10::Float8_e4m3fn* __restrict__ W,     // [C, R]
-    const float* __restrict__ A,            // [C, C]
-    const float* __restrict__ invD_all,     // [C]
-    const float* __restrict__ Eblk,         // [B, R]
-    int C, int R,
-    int block_start, int B
-) {
-    __shared__ float E_sh[MAX_B * TILE_R];   // [B][TILE_R]
-    __shared__ float S_sh[TILE_I * MAX_B];   // [TILE_I][B]
-
-    int r0 = blockIdx.x * TILE_R;
-    int i0 = blockIdx.y * TILE_I;
-
-    int tx = threadIdx.x; // 0..TILE_R-1
-    int ty = threadIdx.y; // 0..TILE_I-1
-
-    // load E tile
-    for (int k = ty; k < B; k += TILE_I) {
-        int r = r0 + tx;
-        E_sh[k * TILE_R + tx] = (r < R) ? Eblk[k * R + r] : 0.f;
-    }
-
-    int i = i0 + ty;
-    if (i < block_start) {
-        float invd = invD_all[i];
-        for (int k = tx; k < B; k += TILE_R) {
-            float a = A[i * C + (block_start + k)];
-            S_sh[ty * MAX_B + k] = a * invd;
-        }
-    } else {
-        for (int k = tx; k < B; k += TILE_R) {
-            S_sh[ty * MAX_B + k] = 0.f;
-        }
-    }
-
-    __syncthreads();
-
-    int r = r0 + tx;
-    if (i < block_start && r < R) {
-        float acc = 0.f;
-        #pragma unroll
-        for (int k = 0; k < MAX_B; ++k) {
-            if (k < B) {
-                acc = __fmaf_rn(S_sh[ty * MAX_B + k], E_sh[k * TILE_R + tx], acc);
-            }
-        }
-        float w = static_cast<float>(W[i * R + r]);
-        w += acc;
-        W[i * R + r] = static_cast<c10::Float8_e4m3fn>(w);
-    }
-}
-
 } // namespace
 
 // -----------------------------------------------------------------------------
 // Host wrapper
 // -----------------------------------------------------------------------------
 torch::Tensor babai_solver_cuda(
-    torch::Tensor weight,      // [C, R]
-    torch::Tensor A,           // [C, C] upper-tri = chol(H)^T
-    torch::Tensor qmeta_bytes, // [R, G, 4] or [R*G, 4]
+    torch::Tensor weight,      // [C, R] (transposed weight)
+    torch::Tensor A,           // [C, C] upper-tri = chol(H)^T (or compatible)
+    torch::Tensor qmeta_bytes, // [R, G, 4] or [R*G, 4] bytes (QMetaPacked)
     int64_t group_size,
     int64_t bits,
     int64_t block_size
@@ -294,17 +215,15 @@ torch::Tensor babai_solver_cuda(
     TORCH_CHECK(A.is_cuda(),      "A must be CUDA");
     TORCH_CHECK(qmeta_bytes.is_cuda(), "qmeta_bytes must be CUDA");
 
-
-    qmeta_bytes = qmeta_bytes.contiguous();
-
+    TORCH_CHECK(weight.dim() == 2, "weight must be [C, R]");
     const int64_t C = weight.size(0);
     const int64_t R = weight.size(1);
 
-    TORCH_CHECK(weight.dim() == 2, "weight must be [C, R]");
     TORCH_CHECK(A.dim() == 2 && A.size(0) == C && A.size(1) == C, "A must be [C, C]");
 
-    // Determine G
-    
+    qmeta_bytes = qmeta_bytes.contiguous();
+
+    // Determine G from qmeta tensor shape
     int64_t G;
     if (qmeta_bytes.dim() == 3) {
         TORCH_CHECK(qmeta_bytes.size(0) == R, "qmeta_bytes[0] must be R");
@@ -316,52 +235,54 @@ torch::Tensor babai_solver_cuda(
         TORCH_CHECK(qmeta_bytes.size(0) % R == 0, "qmeta_bytes[0] must be multiple of R");
         G = qmeta_bytes.size(0) / R;
     }
-    
+
+    // Match Python "effective" group_size along C and assert it matches qmeta's G
+    TORCH_CHECK(group_size > 0, "group_size must be > 0");
+    if (group_size > C) group_size = C;
+    // If you hard-require 32-multiple in Python, keep it here to avoid silent mismatch.
+    TORCH_CHECK(group_size % 32 == 0, "group_size must be multiple of 32 (effective group_size).");
+
+    const int64_t expected_G = (C + group_size - 1) / group_size;
+    TORCH_CHECK(expected_G == G,
+                "qmeta G mismatch: got G=", G,
+                " but expected ceil(C/group_size)=", expected_G,
+                " with C=", C, " group_size=", group_size);
 
     constexpr int MAX_B = 32;
     if (block_size <= 0 || block_size > MAX_B) block_size = MAX_B;
     if (block_size > C) block_size = C;
 
+    // qweight produced in transposed layout [C, R], then returned as [R, C]
     auto qweight = torch::zeros({C, R},
         torch::TensorOptions().dtype(torch::kUInt8).device(weight.device()));
 
-    // Eblk (float) reusable
+    // Eblk (float) reusable (max rows = block_size)
     auto Eblk = torch::zeros({block_size, R},
         torch::TensorOptions().dtype(at::kFloat).device(weight.device()));
 
-    auto qmeta_flat =
-        (qmeta_bytes.dim() == 3) ? qmeta_bytes.view({R * G, 4}) : qmeta_bytes;
+    auto qmeta_flat = (qmeta_bytes.dim() == 3) ? qmeta_bytes.view({R * G, 4}) : qmeta_bytes;
 
-    // Cast A to float once for reads
+    // Cast A and weight to float once for reads/updates (solver kernels are float)
     auto A_f = (A.scalar_type() == at::ScalarType::Float) ? A : A.to(torch::kFloat);
     A_f = A_f.contiguous();
-    weight = (weight.scalar_type() == at::ScalarType::Float) ? weight : weight.to(torch::kFloat);
-    weight = weight.contiguous();
 
+    if (weight.scalar_type() != at::ScalarType::Float) {
+        weight = weight.to(torch::kFloat);
+    }
+    weight = weight.contiguous();
 
     // invD_all[i] = 1 / A[i,i]
     auto invD_all = A_f.diagonal(0, 0, 1).reciprocal().contiguous();
 
     auto stream = at::cuda::getCurrentCUDAStream();
-    auto st = weight.scalar_type();
 
     // Scratch for addmm_ path (reused, no per-iter allocs)
-    torch::Tensor A_tmp, E_tmp;
-    if (st == at::ScalarType::Half || st == at::ScalarType::BFloat16 || st == at::ScalarType::Float) {
-        A_tmp = torch::zeros({C, block_size}, torch::TensorOptions().dtype(st).device(weight.device()));
-        if (st != at::ScalarType::Float) {
-            E_tmp = torch::zeros({block_size, R}, torch::TensorOptions().dtype(st).device(weight.device()));
-        }
-    }
+    auto A_tmp = torch::zeros({C, block_size},
+        torch::TensorOptions().dtype(at::kFloat).device(weight.device()));
 
     constexpr int THREADS_Q = 128;
 
-    // fp8 prefix update tiling
-    constexpr int TILE_R = 64;
-    constexpr int TILE_I = 4;
-    dim3 fp8_block(TILE_R, TILE_I);
-
-    // Right-to-left blocks
+    // Right-to-left blocks along C
     for (int64_t block_end = C; block_end > 0; block_end -= block_size) {
         const int64_t block_start = std::max<int64_t>(0, block_end - block_size);
         const int64_t B_long      = block_end - block_start;
@@ -373,41 +294,40 @@ torch::Tensor babai_solver_cuda(
         const int grid_q = (static_cast<int>(R) + THREADS_Q - 1) / THREADS_Q;
 
         babai_quant_block_kernel_fast<float, MAX_B><<<grid_q, THREADS_Q, 0, stream>>>(
-                weight.data_ptr<float>(),
-                qweight.data_ptr<uint8_t>(),
-                reinterpret_cast<const QMetaPacked*>(qmeta_flat.data_ptr<uint8_t>()),
-                A_f.data_ptr<float>(),
-                invD_all.data_ptr<float>(),
-                Eblk_view.data_ptr<float>(),
-                (int)C, (int)R, (int)G,
-                (int)block_start, B,
-                (int)group_size,
-                (uint8_t)bits
+            weight.data_ptr<float>(),
+            qweight.data_ptr<uint8_t>(),
+            reinterpret_cast<const QMetaPacked*>(qmeta_flat.data_ptr<uint8_t>()),
+            A_f.data_ptr<float>(),
+            invD_all.data_ptr<float>(),
+            Eblk_view.data_ptr<float>(),
+            (int)C, (int)R, (int)G,
+            (int)block_start, B,
+            (int)group_size,
+            (uint8_t)bits
         );
-        
+        CUDA_CHECK(cudaGetLastError());
 
         // 2) Prefix update (rows [0, block_start))
         if (block_start > 0) {
-                // Fill A_tmp slice and E_tmp (if needed), then cuBLAS addmm_
-                const int tx = 16, ty = 16;
-                dim3 blk(tx, ty);
-                dim3 grd((B + tx - 1) / tx, ((int)block_start + ty - 1) / ty);
+            const int tx = 16, ty = 16;
+            dim3 blk(tx, ty);
+            dim3 grd((B + tx - 1) / tx, ((int)block_start + ty - 1) / ty);
 
-                fill_A_scaled_kernel<float><<<grd, blk, 0, stream>>>(
-                        A_tmp.data_ptr<float>(),
-                        A_f.data_ptr<float>(),
-                        invD_all.data_ptr<float>(),
-                        (int)C, (int)block_size,
-                        (int)block_start, B
-                );
+            fill_A_scaled_kernel<float><<<grd, blk, 0, stream>>>(
+                A_tmp.data_ptr<float>(),
+                A_f.data_ptr<float>(),
+                invD_all.data_ptr<float>(),
+                (int)C, (int)block_size,
+                (int)block_start, B
+            );
+            CUDA_CHECK(cudaGetLastError());
 
-                auto W_left = weight.narrow(0, 0, block_start);
-                auto A_view = A_tmp.narrow(0, 0, block_start).narrow(1, 0, B_long);
-                W_left.addmm_(A_view, Eblk_view, /*beta=*/1.0, /*alpha=*/1.0);
-                
+            auto W_left = weight.narrow(0, 0, block_start);                             // [block_start, R]
+            auto A_view = A_tmp.narrow(0, 0, block_start).narrow(1, 0, B_long);         // [block_start, B]
+            W_left.addmm_(A_view, Eblk_view, /*beta=*/1.0, /*alpha=*/1.0);
         }
     }
-    
 
-    return qweight;
+    // Return in standard Linear weight layout: [R, C]
+    return qweight.transpose(0, 1).contiguous();
 }
