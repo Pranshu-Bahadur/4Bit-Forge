@@ -190,7 +190,9 @@ __global__ void babai_quant_block_kernel_fast(
     for (int t = B - 1; t >= 0; --t) {
         int row = block_start + t;
 
-        int g  = row / group_size;
+        int g = row / group_size;
+        if (g >= G) g = G - 1;   // or return; but clamping matches your “tail group” idea
+
         float s = 0.f, inv_s = 0.f, q0 = 0.f;
         
         uint32_t packed = qmeta_to_u32(qmeta[r * G + g]);
