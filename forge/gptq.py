@@ -767,9 +767,16 @@ class GPTQ:
         # We must return weights in the ORIGINAL order for the linear layer
         if not is_identity_perm:
             qweight_t = qweight_t.index_select(0, perm_inv)
-            qmeta = qmeta.index_select(0, perm_inv)
+        
+        # perm: LongTensor [C] (column permutation)
+        perm_inv = torch.empty_like(perm)
+        perm_inv[perm] = torch.arange(perm.numel(), device=perm.device)
 
-        return qweight_t, qmeta, maxq
+        # group id for each ORIGINAL column j, where group id is based on permuted position
+        g_idx = (perm_inv // group_size).to(torch.int32)   # shape [C]
+
+
+        return qweight_t, qmeta, maxq, g_idx
 
     @torch.no_grad()
     def quantize(self, bits: int | float) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
@@ -800,7 +807,7 @@ class GPTQ:
         main = _is_main_process(self.is_distributed) or not self.is_distributed
 
         if main:
-            qweight_t, qmeta, maxq = self._quantize_layer(bits_i)
+            qweight_t, qmeta, maxq, g_idx = self._quantize_layer(bits_i)
         else:
             # allocate placeholders for broadcast
             qweight_t = torch.empty((C, R), device=self.W_device, dtype=torch.uint8)
@@ -819,7 +826,7 @@ class GPTQ:
 
         # return qweight in (R, C) to match original nn.Linear.weight layout
         qweight = qweight_t.transpose(0, 1).contiguous()
-        return qweight, qmeta, maxq
+        return qweight, qmeta, maxq, g_idx
 
     # ================================================================== #
     #                       Existing 4Bit-Forge API                      #
