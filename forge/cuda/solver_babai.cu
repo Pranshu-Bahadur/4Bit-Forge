@@ -1,3 +1,4 @@
+// solver_babai.cu
 #include <torch/extension.h>
 #include <ATen/cuda/CUDAContext.h>
 #include <c10/cuda/CUDAStream.h>
@@ -151,7 +152,6 @@ __global__ void babai_quant_block_kernel_fast(
     int r = blockIdx.x * blockDim.x + threadIdx.x;
     if (r >= R) return;
 
-    // Load this column across the block into registers
     float x[MAX_B];
     #pragma unroll
     for (int i = 0; i < MAX_B; ++i) x[i] = 0.0f;
@@ -170,9 +170,7 @@ __global__ void babai_quant_block_kernel_fast(
     for (int t = B - 1; t >= 0; --t) {
         int row = block_start + t;
 
-        // groups along C (input dim)
         int g = row / group_size;
-        // With correct host checks, g < G always; keep clamp as a safety net.
         if (g >= G) g = G - 1;
 
         float s = 0.f, inv_s = 0.f, q0 = 0.f;
@@ -191,7 +189,7 @@ __global__ void babai_quant_block_kernel_fast(
         #pragma unroll
         for (int i = 0; i < MAX_B; ++i) {
             if (i < t) {
-                float alpha = S_sh[i * MAX_B + t]; // already 0 for t<=i
+                float alpha = S_sh[i * MAX_B + t];
                 x[i] = __fmaf_rn(alpha, err, x[i]);
             }
         }
@@ -204,9 +202,9 @@ __global__ void babai_quant_block_kernel_fast(
 // Host wrapper
 // -----------------------------------------------------------------------------
 torch::Tensor babai_solver_cuda(
-    torch::Tensor weight,      // [C, R] (transposed weight)
-    torch::Tensor A,           // [C, C] upper-tri = chol(H)^T (or compatible)
-    torch::Tensor qmeta_bytes, // [R, G, 4] or [R*G, 4] bytes (QMetaPacked)
+    torch::Tensor weight,      // [C, R]
+    torch::Tensor A,           // [C, C] upper-tri = chol(H)^T
+    torch::Tensor qmeta_bytes, // [R, G, 4] or [R*G, 4]
     int64_t group_size,
     int64_t bits,
     int64_t block_size
@@ -236,33 +234,30 @@ torch::Tensor babai_solver_cuda(
         G = qmeta_bytes.size(0) / R;
     }
 
-    // Match Python "effective" group_size along C and assert it matches qmeta's G
+    // Effective group_size along C and assert matches qmeta G
     TORCH_CHECK(group_size > 0, "group_size must be > 0");
     if (group_size > C) group_size = C;
-    // If you hard-require 32-multiple in Python, keep it here to avoid silent mismatch.
-    TORCH_CHECK(group_size % 32 == 0, "group_size must be multiple of 32 (effective group_size).");
+    TORCH_CHECK(group_size % 32 == 0, "group_size must be multiple of 32 (effective group_size)");
 
     const int64_t expected_G = (C + group_size - 1) / group_size;
     TORCH_CHECK(expected_G == G,
                 "qmeta G mismatch: got G=", G,
-                " but expected ceil(C/group_size)=", expected_G,
+                " expected ceil(C/group_size)=", expected_G,
                 " with C=", C, " group_size=", group_size);
 
     constexpr int MAX_B = 32;
     if (block_size <= 0 || block_size > MAX_B) block_size = MAX_B;
     if (block_size > C) block_size = C;
 
-    // qweight produced in transposed layout [C, R], then returned as [R, C]
     auto qweight = torch::zeros({C, R},
         torch::TensorOptions().dtype(torch::kUInt8).device(weight.device()));
 
-    // Eblk (float) reusable (max rows = block_size)
     auto Eblk = torch::zeros({block_size, R},
         torch::TensorOptions().dtype(at::kFloat).device(weight.device()));
 
     auto qmeta_flat = (qmeta_bytes.dim() == 3) ? qmeta_bytes.view({R * G, 4}) : qmeta_bytes;
 
-    // Cast A and weight to float once for reads/updates (solver kernels are float)
+    // Cast A and weight to float once
     auto A_f = (A.scalar_type() == at::ScalarType::Float) ? A : A.to(torch::kFloat);
     A_f = A_f.contiguous();
 
@@ -271,18 +266,15 @@ torch::Tensor babai_solver_cuda(
     }
     weight = weight.contiguous();
 
-    // invD_all[i] = 1 / A[i,i]
     auto invD_all = A_f.diagonal(0, 0, 1).reciprocal().contiguous();
 
     auto stream = at::cuda::getCurrentCUDAStream();
 
-    // Scratch for addmm_ path (reused, no per-iter allocs)
     auto A_tmp = torch::zeros({C, block_size},
         torch::TensorOptions().dtype(at::kFloat).device(weight.device()));
 
     constexpr int THREADS_Q = 128;
 
-    // Right-to-left blocks along C
     for (int64_t block_end = C; block_end > 0; block_end -= block_size) {
         const int64_t block_start = std::max<int64_t>(0, block_end - block_size);
         const int64_t B_long      = block_end - block_start;
@@ -290,7 +282,6 @@ torch::Tensor babai_solver_cuda(
 
         auto Eblk_view = Eblk.narrow(0, 0, B_long); // [B, R]
 
-        // 1) Quantize block + intra-block propagation
         const int grid_q = (static_cast<int>(R) + THREADS_Q - 1) / THREADS_Q;
 
         babai_quant_block_kernel_fast<float, MAX_B><<<grid_q, THREADS_Q, 0, stream>>>(
@@ -307,7 +298,6 @@ torch::Tensor babai_solver_cuda(
         );
         CUDA_CHECK(cudaGetLastError());
 
-        // 2) Prefix update (rows [0, block_start))
         if (block_start > 0) {
             const int tx = 16, ty = 16;
             dim3 blk(tx, ty);
@@ -322,12 +312,12 @@ torch::Tensor babai_solver_cuda(
             );
             CUDA_CHECK(cudaGetLastError());
 
-            auto W_left = weight.narrow(0, 0, block_start);                             // [block_start, R]
-            auto A_view = A_tmp.narrow(0, 0, block_start).narrow(1, 0, B_long);         // [block_start, B]
+            auto W_left = weight.narrow(0, 0, block_start);
+            auto A_view = A_tmp.narrow(0, 0, block_start).narrow(1, 0, B_long);
             W_left.addmm_(A_view, Eblk_view, /*beta=*/1.0, /*alpha=*/1.0);
         }
     }
 
     // Return in standard Linear weight layout: [R, C]
-    return qweight.transpose(0, 1).contiguous();
+    return qweight.contiguous();
 }
