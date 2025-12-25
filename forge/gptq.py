@@ -84,7 +84,7 @@ class GPTQ(object):
             _owner.H = torch.eye(C, device=_owner.device, dtype=torch.float32)
         
         _owner.pruned_ids = (torch.diag(_owner.H) == 0)
-        _owner.diagonal()[_owner.pruned_ids] = 1
+        _owner.H.diagonal()[_owner.pruned_ids] = 1
     
         if _owner.quantization_order == "activation":
             _owner.perm = torch.argsort(_owner.H.diagonal(), device=_owner.device)
@@ -110,7 +110,7 @@ class GPTQ(object):
         qweight = self._solver(A, W, qmeta)[self.perm_inv, :].transpose(-2, -1).contiguous()
         return qweight, qmeta, maxq
 
-
+    @torch.no_grad()
     def _h_factor(self):
         H = self.H.clone()
         H.index_select(0, self.perm).index_select(1, self.perm)
