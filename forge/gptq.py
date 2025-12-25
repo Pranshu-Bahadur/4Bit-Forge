@@ -204,7 +204,7 @@ class GPTQ(object):
 
         if self.algorithm == 'babai':
             return kernels.babai_solver(
-                    W,
+                    W.to(torch.float32),
                     A,
                     qmeta,
                     self.group_size,
