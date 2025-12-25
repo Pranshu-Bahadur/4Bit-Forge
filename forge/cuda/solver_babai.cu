@@ -197,6 +197,7 @@ __global__ void babai_quant_block_kernel_wdtype(
     const scalar_t* __restrict__ A,             // [C, C] upper-tri (W dtype)
     const scalar_t* __restrict__ invD_all,      // [C] invD = 1/Aii (W dtype)
     scalar_t* __restrict__ Eblk,                // [B, R] (W dtype)
+    int32_t* __restrict__ g_idx,
     int C, int R, int G,
     int block_start, int B,
     int group_size,
