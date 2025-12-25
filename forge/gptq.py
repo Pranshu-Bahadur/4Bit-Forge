@@ -212,14 +212,3 @@ class GPTQ(object):
                     self.group_size // 4,
                     g_idx
                 )
-
-            
-
-
-            
-        
-        
-
-
-        
-        
