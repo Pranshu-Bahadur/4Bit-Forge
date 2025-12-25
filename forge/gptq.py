@@ -80,7 +80,7 @@ class GPTQ(object):
     def _prep(self):
         _owner = self.owner
         if _owner.H is None or (int(_owner.num_samples.item()) == 0) or torch.isnan(_owner.H).any():
-            C = int(self.W.shape[-1])
+            C = int(_owner.W.shape[-1])
             _owner.H = torch.eye(C, device=_owner.device, dtype=torch.float32)
         
         _owner.pruned_ids = (torch.diag(_owner.H) == 0)
@@ -89,7 +89,7 @@ class GPTQ(object):
         if _owner.quantization_order == "activation":
             _owner.perm = torch.argsort(_owner.H.diagonal(), device=_owner.device)
         else:
-            _owner.perm = torch.arange(int(self.W.shape[-1]), device=_owner.device)
+            _owner.perm = torch.arange(int(_owner.W.shape[-1]), device=_owner.device)
         _owner.perm_inv = torch.argsort(_owner.perm)
 
         if not self._is_owner():
