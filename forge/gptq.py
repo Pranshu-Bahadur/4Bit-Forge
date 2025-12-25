@@ -171,7 +171,7 @@ class GPTQ(object):
         Wg = W.reshape(R*int(G), self.group_size).contiguous()
 
         qmeta, maxq = kernels.build_group_meta_packed(
-                Wg,
+                Wg.to(torch.float32),
                 self.bits,
                 self.symmetric
                 )
@@ -185,7 +185,7 @@ class GPTQ(object):
                     device=Wg.device
                 )
             qmeta = kernels.mse_scale_groups_packed(
-                    Wg,
+                    Wg.to(torch.float32),
                     p,
                     qmeta,
                     float(maxq.item()),
