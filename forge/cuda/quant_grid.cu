@@ -22,7 +22,7 @@
 namespace {
 
 struct QMetaPacked {
-    int16_t  log2_scale_fp;
+    __half  scale;
     uint8_t  qzero;
     uint8_t  flags;
 };
@@ -40,17 +40,7 @@ __device__ __forceinline__ float fast_round(float x) {
     return __float2int_rn(x); 
 }
 
-__device__ __forceinline__ int16_t encode_scale_q88(float s) {
-    float log2s = fast_log2(fmaxf(s, 1e-20f));
-    float fp    = log2s * 256.0f;
-    fp = fminf(fmaxf(fp, -32768.0f), 32767.0f);
-    return static_cast<int16_t>(lrintf(fp));
-}
 
-__device__ __forceinline__ float decode_scale_q88(int16_t q) {
-    float fp = static_cast<float>(q) * (1.0f / 256.0f);
-    return fast_exp2(fp);
-}
 
 // ---- Butterfly Reductions ------------------------------------------
 
@@ -171,7 +161,7 @@ __global__ void build_group_meta_optimized(
         }
 
         QMetaPacked m;
-        m.log2_scale_fp = encode_scale_q88(s);
+        m.scale = __float2half_rn(s);
         float q0_clamped = fminf(fmaxf(q0, 0.0f), maxq);
         m.qzero          = static_cast<uint8_t>(lrintf(q0_clamped));
         m.flags          = symmetric ? 1 : 0;
@@ -200,7 +190,7 @@ __global__ void mse_search_kernel_nosmem(
     const int64_t base = static_cast<int64_t>(g) * group_size;
 
     QMetaPacked m = qmeta[g];
-    float base_s  = decode_scale_q88(m.log2_scale_fp);
+    float base_s  = __half2float(m.scale);
     float q0      = static_cast<float>(m.qzero);
 
     float best_loss = FLT_MAX;
@@ -330,7 +320,7 @@ __global__ void mse_search_kernel_nosmem(
     }
 
     if (lane == 0) {
-        m.log2_scale_fp = encode_scale_q88(best_s);
+        m.scale = __float2half_rn(best_s);
         qmeta[g]        = m;
     }
 }

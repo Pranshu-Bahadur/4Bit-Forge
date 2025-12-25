@@ -538,7 +538,7 @@ class GPTQ:
         if self.W is None:
             raise RuntimeError("W is None; call quantization_pre_step() first.")
 
-        H_work = self.H#.clone()
+        H_work = self.H.clone()
 
         if perm is not None and not self.tied_gptq_handle:
             H_work = H_work.index_select(0, perm).index_select(1, perm)
@@ -555,9 +555,9 @@ class GPTQ:
         if mask_zeros.any():
             diag[mask_zeros] = 1.0
 
-        if algorithm == 'gptq':
-            damp = float(rel_damp) * diag.mean()
-            diag.add_(damp)
+        #if algorithm == 'gptq':
+        damp = float(rel_damp) * diag.mean()
+        diag.add_(damp)
 
         
 
@@ -574,11 +574,11 @@ class GPTQ:
             H_work.zero_()
             H_work.diagonal().fill_(1.0)
 
-        if algorithm == "gptq":
-            d = H_work.diagonal()
-            scale = d.clone()
-            scale[scale == 0] = 1.0
-            H_work.div_(scale.unsqueeze(-1))
+        #if algorithm == "gptq":
+        d = H_work.diagonal()
+        scale = d.clone()
+        scale[scale == 0] = 1.0
+        H_work.div_(scale.unsqueeze(-1))
 
         return H_work
 

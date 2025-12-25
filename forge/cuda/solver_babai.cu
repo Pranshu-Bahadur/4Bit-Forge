@@ -30,7 +30,7 @@
 namespace {
 
 struct QMetaPacked {
-    int16_t  log2_scale_fp;  // Q8.8 fixed-point log2(scale)
+    __half  scale;  // Q8.8 fixed-point log2(scale)
     uint8_t  qzero;          // uint8
     uint8_t  flags;          // bit0 = symmetric
 };
@@ -123,15 +123,16 @@ __device__ __forceinline__ void decode_qmeta_to_wdtype(
 ) {
     uint32_t packed = qmeta_to_u32(qmeta_ptr);
 
-    int16_t log2_q88 = static_cast<int16_t>(packed & 0xFFFFu);
+    // NEW: low 16 bits store FP16 scale bits (not log2 Q8.8)
+    uint16_t scale_f16_bits = static_cast<uint16_t>(packed & 0xFFFFu);
+
     uint8_t qzero_u8 = static_cast<uint8_t>((packed >> 16) & 0xFFu);
     uint8_t flags    = static_cast<uint8_t>(packed >> 24);
 
     // fp32 decode
-    constexpr float INV256 = 1.0f / 256.0f;
-    float log2_scale = static_cast<float>(log2_q88) * INV256;
-    float s  = exp2f(log2_scale);
-    float is = exp2f(-log2_scale);
+    float s  = __half2float(__ushort_as_half(scale_f16_bits));
+    // inv scale: reciprocal (fast); scale should never be 0, but guard if you want
+    float is = __fdividef(1.0f, s);
 
     float q0 = static_cast<float>(qzero_u8);
     if (flags & 0x01) {
