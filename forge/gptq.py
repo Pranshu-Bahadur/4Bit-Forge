@@ -166,7 +166,7 @@ class GPTQ(object):
         #R, G, g_size
         if math.ceil(G) != G:
             W = torch.nn.functional(W, (0, (1 - (math.ceil(G) - G))*self.group_size))
-            G = math.ceil(G)
+            G = int(math.ceil(G))
 
         Wg = W.reshape(R, G, self.group_size).contiguous()
 
