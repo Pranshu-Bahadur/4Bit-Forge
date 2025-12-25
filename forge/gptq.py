@@ -165,10 +165,10 @@ class GPTQ(object):
 
         #R, G, g_size
         if math.ceil(G) != G:
-            W = torch.nn.functional(W, (0, (1 - (math.ceil(G) - G))*self.group_size))
+            W = torch.nn.functional(W, (0, (math.ceil(G) - G)*self.group_size))
             G = int(math.ceil(G))
 
-        Wg = W.reshape(R, int(G), self.group_size).contiguous()
+        Wg = W.reshape(R*int(G), self.group_size).contiguous()
 
         qmeta, maxq = kernels.build_group_meta_packed(
                 Wg,
