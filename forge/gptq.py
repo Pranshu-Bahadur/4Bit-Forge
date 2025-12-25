@@ -938,7 +938,7 @@ class GPTQ:
 
             qmeta_flat = torch.cat(qmeta_parts, dim=0)
 
-        qmeta = qmeta_flat.view(C, num_groups, 4)
+        qmeta = qmeta_flat.contiguous().view(C, num_groups, 4)
         return qmeta, maxq, pad
 
 
