@@ -241,7 +241,7 @@ __global__ void babai_quant_block_kernel_wdtype(
         int row = block_start + t;
 
         // groups along input dim (C)
-        int g = row / group_size;
+        int g = g_idx ? (int)g_idx[row] : (row / group_size);
         if (g >= G) g = G - 1; // safety (shouldn't trigger if host checks are correct)
 
         scalar_t s_t, invs_t, q0_t;
@@ -297,7 +297,8 @@ torch::Tensor babai_solver_cuda(
     torch::Tensor qmeta_bytes, // [R, G, 4] or [R*G, 4]
     int64_t group_size,
     int64_t bits,
-    int64_t block_size
+    int64_t block_size,
+    torch::Tensor g_idx
 ) {
     TORCH_CHECK(weight.is_cuda(), "weight must be CUDA");
     TORCH_CHECK(A.is_cuda(),      "A must be CUDA");
@@ -305,6 +306,7 @@ torch::Tensor babai_solver_cuda(
 
     weight      = weight.contiguous();
     qmeta_bytes = qmeta_bytes.contiguous();
+    g_idx = g_idx.contiguous();
 
     TORCH_CHECK(weight.dim() == 2, "weight must be [C, R]");
     const int64_t C = weight.size(0);
@@ -363,7 +365,6 @@ torch::Tensor babai_solver_cuda(
         reinterpret_cast<const QMetaPacked*>(qmeta_flat.data_ptr<uint8_t>());
 
 
-
     // A cast to W dtype
     torch::Tensor A_t = (A.scalar_type() == st) ? A : A.to(st);
     A_t = A_t.contiguous();
@@ -403,6 +404,7 @@ torch::Tensor babai_solver_cuda(
                 A_t.data_ptr<float>(),
                 invD_all.data_ptr<float>(),
                 Eblk_view.data_ptr<float>(),
+                g_idx.data_ptr<int32_t>(),
                 (int)C, (int)R, (int)G,
                 (int)block_start, B,
                 (int)group_size,
@@ -416,6 +418,7 @@ torch::Tensor babai_solver_cuda(
                 reinterpret_cast<__half*>(A_t.data_ptr<at::Half>()),
                 reinterpret_cast<__half*>(invD_all.data_ptr<at::Half>()),
                 reinterpret_cast<__half*>(Eblk_view.data_ptr<at::Half>()),
+                g_idx.data_ptr<int32_t>(),
                 (int)C, (int)R, (int)G,
                 (int)block_start, B,
                 (int)group_size,
@@ -429,6 +432,7 @@ torch::Tensor babai_solver_cuda(
                 reinterpret_cast<__nv_bfloat16*>(A_t.data_ptr<at::BFloat16>()),
                 reinterpret_cast<__nv_bfloat16*>(invD_all.data_ptr<at::BFloat16>()),
                 reinterpret_cast<__nv_bfloat16*>(Eblk_view.data_ptr<at::BFloat16>()),
+                g_idx.data_ptr<int32_t>(),
                 (int)C, (int)R, (int)G,
                 (int)block_start, B,
                 (int)group_size,

@@ -48,7 +48,8 @@ torch::Tensor babai_solver_cuda(
     torch::Tensor qmeta_bytes, // [R, G, 4] or [R*G, 4] bytes (QMetaPacked)
     int64_t group_size,
     int64_t bits,
-    int64_t block_size
+    int64_t block_size,
+    torch::Tensor g_idx
 );
 
 
