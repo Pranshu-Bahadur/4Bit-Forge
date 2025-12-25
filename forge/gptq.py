@@ -168,7 +168,7 @@ class GPTQ(object):
             W = torch.nn.functional(W, (0, (1 - (math.ceil(G) - G))*self.group_size))
             G = int(math.ceil(G))
 
-        Wg = W.reshape(R, G, self.group_size).contiguous()
+        Wg = W.reshape(R, int(G), self.group_size).contiguous()
 
         qmeta, maxq = kernels.build_group_meta_packed(
                 Wg,
@@ -192,7 +192,7 @@ class GPTQ(object):
                     float(norm),
                 )
             
-        self.G = G
+        self.G = int(G)
 
         return qmeta, maxq
 
