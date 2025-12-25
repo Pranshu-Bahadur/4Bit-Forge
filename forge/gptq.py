@@ -574,7 +574,7 @@ class GPTQ:
             H_work.zero_()
             H_work.diagonal().fill_(1.0)
 
-        if algorithm == "gptq":
+        if algorithm == "babai":
             d = H_work.diagonal()
             scale = d.clone()
             scale[scale == 0] = 1.0
