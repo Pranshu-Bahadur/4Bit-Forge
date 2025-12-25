@@ -193,7 +193,7 @@ template <typename scalar_t, int MAX_B>
 __global__ void babai_quant_block_kernel_wdtype(
     scalar_t* __restrict__ W,                   // [C, R]
     uint8_t*  __restrict__ qweight,             // [C, R]
-    const QMetaPacked* __restrict__ qmeta,      // [R * G]
+    const QMetaPacked* __restrict__ qmeta,      // [G * R]
     const scalar_t* __restrict__ A,             // [C, C] upper-tri (W dtype)
     const scalar_t* __restrict__ invD_all,      // [C] invD = 1/Aii (W dtype)
     scalar_t* __restrict__ Eblk,                // [B, R] (W dtype)
@@ -245,8 +245,8 @@ __global__ void babai_quant_block_kernel_wdtype(
         if (g >= G) g = G - 1; // safety (shouldn't trigger if host checks are correct)
 
         scalar_t s_t, invs_t, q0_t;
-        // NEW indexing: qmeta[r * G + g]
-        decode_qmeta_to_wdtype<scalar_t>(&qmeta[r * G + g], bits, s_t, invs_t, q0_t);
+        // NEW indexing: qmeta[g * R + r]
+        decode_qmeta_to_wdtype<scalar_t>(&qmeta[g * R + r], bits, s_t, invs_t, q0_t);
 
         scalar_t err_t, deq_t;
         uint8_t qb;
@@ -258,11 +258,9 @@ __global__ void babai_quant_block_kernel_wdtype(
 
         // Propagate to earlier rows i < t: x[i] += S(i,t) * err_t
 #pragma unroll
-        for (int i = 0; i < MAX_B; ++i) {
-            if (i < t) {
-                scalar_t alpha = S_sh[i * MAX_B + t];
-                x[i] = WOps<scalar_t>::fma(alpha, err_t, x[i]);
-            }
+        for (int i = 0; i < t; ++i) {
+            scalar_t alpha = S_sh[i * MAX_B + t];
+            x[i] = WOps<scalar_t>::fma(alpha, err_t, x[i]);
         }
     }
 }
@@ -352,9 +350,19 @@ torch::Tensor babai_solver_cuda(
     auto Eblk = torch::empty({block_size, R},
         torch::TensorOptions().dtype(st).device(dev));
 
-    auto qmeta_flat = (qmeta_bytes.dim() == 3) ? qmeta_bytes.view({R * G, 4}) : qmeta_bytes;
+    // qmeta_bytes: [R,G,4] or [R*G,4]
+    auto qmeta_rg = (qmeta_bytes.dim() == 3)
+        ? qmeta_bytes
+        : qmeta_bytes.view({R, G, 4});      // assume flattened is [R*G,4] in R-major
+
+    // transpose to [G,R,4] so that for fixed g, r is contiguous
+    auto qmeta_gr = qmeta_rg.permute({1, 0, 2}).contiguous();  // [G,R,4]
+    auto qmeta_flat = qmeta_gr.view({G * R, 4});               // [G*R,4]
+
     const QMetaPacked* qmeta_ptr =
         reinterpret_cast<const QMetaPacked*>(qmeta_flat.data_ptr<uint8_t>());
+
+
 
     // A cast to W dtype
     torch::Tensor A_t = (A.scalar_type() == st) ? A : A.to(st);
