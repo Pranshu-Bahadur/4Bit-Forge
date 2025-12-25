@@ -20,7 +20,7 @@ class GPTQ(object):
                  quantization_order : str = "activation",
                  rel_damp : float = 1e-2,
                  algorithm : str = "babai",
-                 owner: "GPTQ" | None = None
+                 owner = None
                  ):
         
         self.layer = layer
