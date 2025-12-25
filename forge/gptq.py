@@ -87,7 +87,7 @@ class GPTQ(object):
         _owner.H.diagonal()[_owner.pruned_ids] = 1
     
         if _owner.quantization_order == "activation":
-            _owner.perm = torch.argsort(_owner.H.diagonal(), device=_owner.device)
+            _owner.perm = torch.argsort(torch.diag(_owner.H), device=_owner.device)
         else:
             _owner.perm = torch.arange(int(_owner.W.shape[-1]), device=_owner.device)
         _owner.perm_inv = torch.argsort(_owner.perm)
