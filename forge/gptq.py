@@ -551,7 +551,7 @@ class GPTQ:
             H_work.index_fill_(1, zero_idx, 0.0)
 
         diag = H_work.diagonal()
-        mask_zeros = diag.abs() < 1e-12
+        mask_zeros = diag == 0
         if mask_zeros.any():
             diag[mask_zeros] = 1.0
 
@@ -574,10 +574,11 @@ class GPTQ:
             H_work.zero_()
             H_work.diagonal().fill_(1.0)
 
+        #bfloat16 / fp16 only...i need to either make solver use fp32 forall...or put this logic before invD in solver
         diag = H_work.diagonal()
-        mask_zeros = diag.abs() < 1e-12
+        mask_zeros = diag.abs() < 1e-6
         if mask_zeros.any():
-            diag[mask_zeros] = 1.0
+            diag[mask_zeros] = 1e-6
 
         if algorithm == "gptq": #TODO ...prolly redundant for babai...
             d = H_work.diagonal()
