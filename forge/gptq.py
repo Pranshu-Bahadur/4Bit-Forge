@@ -113,7 +113,7 @@ class GPTQ(object):
         H.index_select(0, self.perm).index_select(1, self.perm)
 
         #deviating...
-        if self.is_owner():
+        if self._is_owner():
             zero_cols = self.W.eq(0).all(dim=0)
             zero_idx = zero_cols.nonzero(as_tuple=False).flatten()
             if zero_idx.numel() > 0:
