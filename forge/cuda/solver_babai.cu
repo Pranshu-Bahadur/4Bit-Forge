@@ -214,8 +214,8 @@ __global__ void babai_quant_block_kernel_wdtype(
             int gi = block_start + i;
             int gt = block_start + t;
             scalar_t a   = A[gi * C + gt];
-            scalar_t inv = 1.0f;//invD_all[gi];
-            v = WOps<scalar_t>::mul(a, inv);
+            scalar_t inv = invD_all[gi];
+            v = a;//WOps<scalar_t>::mul(a, inv);
         }
         S_sh[i * MAX_B + t] = v;
     }
