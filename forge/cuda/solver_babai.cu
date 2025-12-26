@@ -158,14 +158,15 @@ __device__ __forceinline__ void quantize_scalar_wdtype(
     int maxq,
     scalar_t& err_out,
     uint8_t& q_out,
-    scalar_t& deq_out
+    scalar_t& deq_out,
+    int32_t q_raw
 ) {
     // biased = x * inv_s + q0 (W dtype)
     scalar_t biased_t = WOps<scalar_t>::fma(x, inv_s, q0);
 
     // rounding decision needs fp32
     float biased_f = WOps<scalar_t>::to_f32(biased_t);
-    int q_raw = __float2int_rn(biased_f);
+    q_raw = __float2int_rn(biased_f);
     int q = (q_raw < 0) ? 0 : q_raw;
     q = (q > maxq) ? maxq : q;
 
@@ -193,6 +194,7 @@ template <typename scalar_t, int MAX_B>
 __global__ void babai_quant_block_kernel_wdtype(
     scalar_t* __restrict__ W,                   // [C, R]
     uint8_t*  __restrict__ qweight,             // [C, R]
+    int16_t* __restrict__ delta_q,
     const QMetaPacked* __restrict__ qmeta,      // [G * R]
     const scalar_t* __restrict__ A,             // [C, C] upper-tri (W dtype)
     const scalar_t* __restrict__ invD_all,      // [C] invD = 1/Aii (W dtype)
@@ -251,11 +253,16 @@ __global__ void babai_quant_block_kernel_wdtype(
 
         scalar_t err_t, deq_t;
         uint8_t qb;
-        quantize_scalar_wdtype<scalar_t>(x[t], invs_t, s_t, q0_t, maxq_i, err_t, qb, deq_t);
+        int32_t q_raw;
+        quantize_scalar_wdtype<scalar_t>(x[t], invs_t, s_t, q0_t, maxq_i, err_t, qb, deq_t, q_raw);
 
         qweight[row * R + r] = qb;
         W[row * R + r]       = deq_t;   // commits in W.dtype world
         Eblk[t * R + r]      = err_t;
+
+        if (q_raw != static_cast<int32_t>(qb)) {
+            delta_q[row * R + r] = q_raw - static_cast<int32_t>(qb);
+        }
 
         // Propagate to earlier rows i < t: x[i] += S(i,t) * err_t
 #pragma unroll
@@ -349,6 +356,9 @@ torch::Tensor babai_solver_cuda(
     auto qweight = torch::zeros({C, R},
         torch::TensorOptions().dtype(torch::kUInt8).device(dev));
 
+    auto delta_q = torch::zeros({C, R},
+        torch::TensorOptions().dtype(torch::kInt16).device(dev));
+
     // Eblk in W dtype
     auto Eblk = torch::empty({block_size, R},
         torch::TensorOptions().dtype(st).device(dev));
@@ -401,6 +411,7 @@ torch::Tensor babai_solver_cuda(
             babai_quant_block_kernel_wdtype<float, MAX_B><<<grid_q, THREADS_Q, 0, stream>>>(
                 weight.data_ptr<float>(),
                 qweight.data_ptr<uint8_t>(),
+                delta_q.data_ptr<int16_t>(),
                 qmeta_ptr,
                 A_t.data_ptr<float>(),
                 invD_all.data_ptr<float>(),
@@ -415,6 +426,7 @@ torch::Tensor babai_solver_cuda(
             babai_quant_block_kernel_wdtype<__half, MAX_B><<<grid_q, THREADS_Q, 0, stream>>>(
                 reinterpret_cast<__half*>(weight.data_ptr<at::Half>()),
                 qweight.data_ptr<uint8_t>(),
+                delta_q.data_ptr<int16_t>(),
                 qmeta_ptr,
                 reinterpret_cast<__half*>(A_t.data_ptr<at::Half>()),
                 reinterpret_cast<__half*>(invD_all.data_ptr<at::Half>()),
@@ -429,6 +441,7 @@ torch::Tensor babai_solver_cuda(
             babai_quant_block_kernel_wdtype<__nv_bfloat16, MAX_B><<<grid_q, THREADS_Q, 0, stream>>>(
                 reinterpret_cast<__nv_bfloat16*>(weight.data_ptr<at::BFloat16>()),
                 qweight.data_ptr<uint8_t>(),
+                delta_q.data_ptr<int16_t>(),
                 qmeta_ptr,
                 reinterpret_cast<__nv_bfloat16*>(A_t.data_ptr<at::BFloat16>()),
                 reinterpret_cast<__nv_bfloat16*>(invD_all.data_ptr<at::BFloat16>()),
@@ -494,5 +507,5 @@ torch::Tensor babai_solver_cuda(
         }
     }
 
-    return qweight;
+    return qweight, delta_q;
 }
