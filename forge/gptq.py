@@ -140,10 +140,10 @@ class GPTQ(object):
             H.zero_()
             H.diagonal().fill_(1.0)
         
-        if self.algorithm == "gptq": #TODO Remove...or do here...
+        if self.algorithm == "babai": #TODO Remove...or do here...
             d = H.diagonal()
             scale = d.clone()
-            scale[scale == 0] = 1.0
+            scale[scale < 1e-6] = 1.0
             H.div_(scale.unsqueeze(-1))
 
         return H
