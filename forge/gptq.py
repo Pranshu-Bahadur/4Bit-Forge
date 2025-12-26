@@ -37,6 +37,7 @@ class GPTQ(object):
         self.perm = None
         self.h_factor = None
         self.pruned_ids = None
+        self.prepared = False
 
         self.id = uuid.uuid4()
     
@@ -76,6 +77,16 @@ class GPTQ(object):
     @torch.no_grad()
     def _prep(self):
         _owner = self.owner
+        if not self._is_owner() and _owner.prepared:
+            self.H = _owner.H.clone() #For sanilty..not **really** needed
+            self.pruned_ids = _owner.pruned_ids
+            self.perm = _owner.perm
+            self.perm_inv = _owner.perm_inv
+            self.W[:, self.pruned_ids] = 0
+            self.num_samples = _owner.num_samples.clone()
+            self.prepared = True
+            return
+        
         if _owner.H is None or (int(_owner.num_samples.item()) == 0) or torch.isnan(_owner.H).any():
             C = int(_owner.W.shape[-1])
             _owner.H = torch.eye(C, device=_owner.device, dtype=torch.float32)
@@ -89,14 +100,8 @@ class GPTQ(object):
             _owner.perm = torch.arange(int(_owner.W.shape[-1]), device=_owner.device)
         _owner.perm_inv = torch.argsort(_owner.perm)
 
-        if not self._is_owner():
-            self.H = _owner.H.clone() #For sanilty..not **really** needed
-            self.pruned_ids = _owner.pruned_ids
-            self.perm = _owner.perm
-            self.perm_inv = _owner.perm_inv
-            self.W[:, self.pruned_ids] = 0
-        else:
-            _owner.W[:, _owner.pruned_ids] = 0
+        _owner.W[:, _owner.pruned_ids] = 0
+        _owner.prepared = True
     
     @torch.no_grad()
     def quantize(self):
@@ -142,7 +147,7 @@ class GPTQ(object):
         if self.algorithm == "babai": #TODO Remove...or do here...
             d = H.diagonal()
             scale = d.clone()
-            scale[scale <= 1e-6] = 1.0
+            scale[scale == 0] = 1.0
             H.div_(scale.unsqueeze(-1))
 
         return H
