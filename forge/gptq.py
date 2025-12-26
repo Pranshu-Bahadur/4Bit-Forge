@@ -32,10 +32,9 @@ class GPTQ(object):
         self.quantization_order = quantization_order
         self.rel_damp = rel_damp
         self.algorithm = algorithm
-        self.owner = owner if owner else self
+        self.owner = owner if owner is not None else self
 
         self.perm = None
-        self.h_factor = None
         self.pruned_ids = None
         self.prepared = False
         self.perm_inv = None
@@ -120,13 +119,13 @@ class GPTQ(object):
     @torch.no_grad()
     def _h_factor(self):
         H = self.H.clone()
-        H.index_select(0, self.perm).index_select(1, self.perm)
+        H = H.index_select(0, self.perm).index_select(1, self.perm)
 
         zero_cols = self.W.eq(0).all(dim=0)
         zero_idx = zero_cols.nonzero(as_tuple=False).flatten()
         if zero_idx.numel() > 0:
-            H.index_fill_(0, zero_idx, 0.0)
-            H.index_fill_(1, zero_idx, 0.0)
+            H = H.index_fill_(0, zero_idx, 0.0)
+            H = H.index_fill_(1, zero_idx, 0.0)
 
         diag = H.diagonal()
         mask_zeros = diag == 0
