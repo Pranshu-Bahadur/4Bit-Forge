@@ -112,21 +112,19 @@ class GPTQ(object):
         H = self.H.clone()
         H.index_select(0, self.perm).index_select(1, self.perm)
 
-        #deviating...
-        if self._is_owner():
-            zero_cols = self.W.eq(0).all(dim=0)
-            zero_idx = zero_cols.nonzero(as_tuple=False).flatten()
-            if zero_idx.numel() > 0:
-                H.index_fill_(0, zero_idx, 0.0)
-                H.index_fill_(1, zero_idx, 0.0)
+        zero_cols = self.W.eq(0).all(dim=0)
+        zero_idx = zero_cols.nonzero(as_tuple=False).flatten()
+        if zero_idx.numel() > 0:
+            H.index_fill_(0, zero_idx, 0.0)
+            H.index_fill_(1, zero_idx, 0.0)
 
-            diag = H.diagonal()
-            mask_zeros = diag == 0
-            if mask_zeros.any():
-                diag[mask_zeros] = 1.0
+        diag = H.diagonal()
+        mask_zeros = diag == 0
+        if mask_zeros.any():
+            diag[mask_zeros] = 1.0
         
-            damp = float(self.rel_damp) * diag.mean()
-            diag.add_(damp)
+        damp = float(self.rel_damp) * diag.mean()
+        diag.add_(damp)
 
         try:
             if self.algorithm == "babai":
@@ -144,7 +142,7 @@ class GPTQ(object):
         if self.algorithm == "babai": #TODO Remove...or do here...
             d = H.diagonal()
             scale = d.clone()
-            scale[scale < 1e-6] = 1.0
+            scale[scale <= 1e-6] = 1.0
             H.div_(scale.unsqueeze(-1))
 
         return H
