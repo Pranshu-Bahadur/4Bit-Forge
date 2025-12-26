@@ -42,10 +42,10 @@ torch::Tensor gptq_solver_cuda(
     int64_t block_size   // if <= 0, infer
 );
 
-torch::Tensor babai_solver_cuda(
-    torch::Tensor weight,      // [C, R] (transposed weight)
-    torch::Tensor A,           // [C, C] upper-tri = chol(H)^T (or compatible)
-    torch::Tensor qmeta_bytes, // [R, G, 4] or [R*G, 4] bytes (QMetaPacked)
+std::tuple<torch::Tensor, torch::Tensor> babai_solver_cuda(
+    torch::Tensor weight,      // [C, R]
+    torch::Tensor A,           // [C, C] upper-tri = chol(H)^T
+    torch::Tensor qmeta_bytes, // [R, G, 4] or [R*G, 4]
     int64_t group_size,
     int64_t bits,
     int64_t block_size,

@@ -302,7 +302,7 @@ __global__ void fill_A_scaled_kernel(
 // ============================================================================
 // Host wrapper (updated for NEW qmeta contract)
 // ============================================================================
-torch::Tensor babai_solver_cuda(
+std::tuple<torch::Tensor, torch::Tensor> babai_solver_cuda(
     torch::Tensor weight,      // [C, R]
     torch::Tensor A,           // [C, C] upper-tri = chol(H)^T
     torch::Tensor qmeta_bytes, // [R, G, 4] or [R*G, 4]
