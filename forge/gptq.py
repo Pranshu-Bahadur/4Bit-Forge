@@ -163,14 +163,14 @@ class GPTQ(object):
         
         W = self.W.clone()
         R, C = W.shape
-        G = C / self.group_size
+        G = (C + self.group_size - 1) // self.group_size
+        pad = G * self.group_size - C
 
         #R, G, g_size
-        if math.ceil(G) != G:
-            W = torch.nn.functional(W, (0, (math.ceil(G) - G)*self.group_size))
-            G = int(math.ceil(G))
+        if pad:
+            W = torch.nn.functional(W, (0, pad))
 
-        Wg = W.reshape(R*int(G), self.group_size).contiguous()
+        Wg = W.reshape(R*G, self.group_size).contiguous()
 
         qmeta, maxq = kernels.build_group_meta_packed(
                 Wg,#.to(torch.float32),
@@ -194,15 +194,12 @@ class GPTQ(object):
                     float(norm),
                 )
             
-        self.G = int(G)
-
         return qmeta, maxq
 
 
     @torch.no_grad()
     def _solver(self, A, W, qmeta):
         g_idx = (self.perm // self.group_size).to(torch.int32)
-        #g_idx = g_idx.clamp_max(self.G - 1)
 
         if self.algorithm == 'babai':
             return kernels.babai_solver(
