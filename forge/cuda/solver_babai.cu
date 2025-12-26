@@ -158,19 +158,19 @@ __device__ __forceinline__ void quantize_scalar_wdtype(
     int maxq,
     scalar_t& err_out,
     uint8_t& q_out,
-    scalar_t& deq_out
+    scalar_t& deq_out,
 ) {
     // biased = x * inv_s + q0 (W dtype)
     scalar_t biased_t = WOps<scalar_t>::fma(x, inv_s, q0);
 
     // rounding decision needs fp32
     float biased_f = WOps<scalar_t>::to_f32(biased_t);
-    int q = __float2int_rn(biased_f);
-    q = (q < 0) ? 0 : q;
+    int q_raw = __float2int_rn(biased_f);
+    q = (q_raw < 0) ? 0 : q_raw;
     q = (q > maxq) ? maxq : q;
 
     // deq = (q - q0) * s (W dtype)
-    scalar_t q_t   = WOps<scalar_t>::from_f32(static_cast<float>(q));
+    scalar_t q_t   = WOps<scalar_t>::from_f32(static_cast<float>(q_raw));
     scalar_t dq_t  = WOps<scalar_t>::sub(q_t, q0);
     scalar_t deq_t = WOps<scalar_t>::mul(dq_t, s);
 
