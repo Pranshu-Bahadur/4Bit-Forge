@@ -166,7 +166,7 @@ __device__ __forceinline__ void quantize_scalar_wdtype(
     // rounding decision needs fp32
     float biased_f = WOps<scalar_t>::to_f32(biased_t);
     int q_raw = __float2int_rn(biased_f);
-    q = (q_raw < 0) ? 0 : q_raw;
+    int q = (q_raw < 0) ? 0 : q_raw;
     q = (q > maxq) ? maxq : q;
 
     // deq = (q - q0) * s (W dtype)
