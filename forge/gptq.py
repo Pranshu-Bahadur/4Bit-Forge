@@ -119,14 +119,15 @@ class GPTQ(object):
     @torch.no_grad()
     def _h_factor(self):
         H = self.H.clone()
+        H = H.index_select(0, self.perm).index_select(1, self.perm).contiguous()
 
-        zero_cols = self.owner.W.eq(0).all(dim=0)
+
+        zero_cols = self.W.eq(0).all(dim=0)
         if zero_cols.any():
             H[zero_cols, :] = 0
             H[:, zero_cols] = 0
             H.diagonal()[zero_cols] = 1.0
 
-        H = H.index_select(0, self.perm).index_select(1, self.perm).contiguous()
 
         diag = H.diagonal()
         damp = float(self.rel_damp) * diag.mean()
