@@ -71,22 +71,22 @@ class GPTQ(object):
         alpha = 2.0 / total_samples
 
         if self.H is None:
-            self.H = alpha*(X.T@X)
+            self.H = alpha*(X.transpose(0, 1)@X)
         else:
             beta = num_samples / total_samples
-            self.H.addmm_(X.T, X, alpha=alpha, beta=beta)
+            self.H.addmm_(X.transpose(0, 1), X, alpha=alpha, beta=beta)
         
         self.num_samples.add_(new_samples)
     
     @torch.no_grad()
     def _prep(self):
         _owner = self.owner
-        if not self._is_owner() and _owner.prepared:
+        if (not self._is_owner()) and _owner.prepared:
             self.H = _owner.H.clone() #For sanilty..not **really** needed
             self.pruned_ids = _owner.pruned_ids
             self.perm = _owner.perm
             self.perm_inv = _owner.perm_inv
-            self.W[:, self.pruned_ids] = 0
+            self.W[:, _owner.pruned_ids] = 0
             self.num_samples = _owner.num_samples.clone()
             self.prepared = True
             return
@@ -196,7 +196,8 @@ class GPTQ(object):
 
     @torch.no_grad()
     def _solver(self, A, W, qmeta):
-        g_idx = (self.perm // self.group_size).to(torch.int32)
+        g_idx = (self.perm / self.group_size).to(torch.int32)
+        g_idx = g_idx.clamp_max(self.G - 1)
 
         if self.algorithm == 'babai':
             qw, dq = kernels.babai_solver(
