@@ -113,8 +113,8 @@ class GPTQ(object):
         qmeta, maxq = self._quant_grid()
         A = self._h_factor()
         W = self.W.transpose(-2, -1)[self.perm, :].contiguous()
-        qweight = self._solver(A, W, qmeta.clone())[self.perm_inv, :].transpose(-2, -1).contiguous()
-        return qweight, qmeta, maxq
+        qweight, delta_q = self._solver(A, W, qmeta.clone())
+        return qweight[self.perm_inv, :].transpose(-2, -1).contiguous(), delta_q[self.perm_inv, :].transpose(-2, -1).contiguous(), qmeta, maxq
 
     @torch.no_grad()
     def _h_factor(self):
