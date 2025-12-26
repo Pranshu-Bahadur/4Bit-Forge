@@ -144,12 +144,6 @@ class GPTQ(object):
             #print(f"[HESSIAN] factorization failed: {e}")  # enable during bring-up
             H.zero_()
             H.diagonal().fill_(1.0)
-        
-        if self.algorithm == "babai": #TODO Remove...or do here...
-            d = H.diagonal()
-            scale = d.clone()
-            scale[scale == 0] = 1.0
-            H.div_(scale.unsqueeze(-1))
 
         return H
 
