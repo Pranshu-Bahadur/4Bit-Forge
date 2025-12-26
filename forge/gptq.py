@@ -21,7 +21,7 @@ class GPTQ(object):
                  ):
         
         self.layer = layer
-        self.W = self.layer.weight #(R, C) => out_features, in_features
+        self.W = self.layer.weight.clone() #(R, C) => out_features, in_features
         self.device = self.W.device
         self.H = None
         self.num_samples = torch.zeros((), device=self.device, dtype=torch.int64)
@@ -47,7 +47,7 @@ class GPTQ(object):
 
     @torch.no_grad()
     def reset(self):
-        self.W = self.layer.weight
+        self.W = self.layer.weight.clone()
         self.H = None
         self.num_samples = torch.zeros((), device=self.device, dtype=torch.int64)
         self.prepared = False
@@ -99,7 +99,7 @@ class GPTQ(object):
         _owner.H.diagonal()[_owner.pruned_ids] = 1
     
         if _owner.quantization_order == "activation":
-            _owner.perm = torch.argsort(torch.diag(_owner.H))
+            _owner.perm = torch.argsort(torch.diag(_owner.H), descending=True)
         else:
             _owner.perm = torch.arange(int(_owner.W.shape[-1]), device=_owner.device)
         _owner.perm_inv = torch.argsort(_owner.perm)
@@ -119,19 +119,16 @@ class GPTQ(object):
     @torch.no_grad()
     def _h_factor(self):
         H = self.H.clone()
-        H = H.index_select(0, self.perm).index_select(1, self.perm)
 
         zero_cols = self.W.eq(0).all(dim=0)
-        zero_idx = zero_cols.nonzero(as_tuple=False).flatten()
-        if zero_idx.numel() > 0:
-            H = H.index_fill_(0, zero_idx, 0.0)
-            H = H.index_fill_(1, zero_idx, 0.0)
+        if zero_cols.any():
+            H[zero_cols, :] = 0
+            H[:, zero_cols] = 0
+            H.diagonal()[zero_cols] = 1.0
+
+        H = H.index_select(0, self.perm).index_select(1, self.perm).contiguous()
 
         diag = H.diagonal()
-        mask_zeros = diag == 0
-        if mask_zeros.any():
-            diag[mask_zeros] = 1.0
-        
         damp = float(self.rel_damp) * diag.mean()
         diag.add_(damp)
 
@@ -204,7 +201,7 @@ class GPTQ(object):
 
     @torch.no_grad()
     def _solver(self, A, W, qmeta):
-        g_idx = (self.perm / self.group_size).to(torch.int32)
+        g_idx = (self.perm // self.group_size).to(torch.int32)
         #g_idx = g_idx.clamp_max(self.G - 1)
 
         if self.algorithm == 'babai':
