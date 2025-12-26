@@ -125,8 +125,8 @@ class GPTQ(object):
             if mask_zeros.any():
                 diag[mask_zeros] = 1.0
         
-        damp = float(self.rel_damp) * diag.mean()
-        diag.add_(damp)
+            damp = float(self.rel_damp) * diag.mean()
+            diag.add_(damp)
 
         try:
             if self.algorithm == "babai":
