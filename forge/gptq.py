@@ -106,8 +106,8 @@ class GPTQ(object):
         self._prep()
         qmeta, maxq = self._quant_grid()
         A = self._h_factor()
-        W = self.W.transpose(-2, -1)[self.perm, :]
-        qweight = self._solver(A, W, qmeta)[self.perm_inv, :].transpose(-2, -1).contiguous()
+        W = self.W.transpose(-2, -1)[self.perm, :].contiguous()
+        qweight = self._solver(A, W, qmeta.clone())[self.perm_inv, :].transpose(-2, -1).contiguous()
         return qweight, qmeta, maxq
 
     @torch.no_grad()
@@ -143,7 +143,7 @@ class GPTQ(object):
             H.zero_()
             H.diagonal().fill_(1.0)
         
-        if self.algorithm == "gptq": #TODO ...prolly redundant for babai...
+        if self.algorithm == "gptq": #TODO Remove...or do here...
             d = H.diagonal()
             scale = d.clone()
             scale[scale == 0] = 1.0
@@ -171,7 +171,7 @@ class GPTQ(object):
         Wg = W.reshape(R*int(G), self.group_size).contiguous()
 
         qmeta, maxq = kernels.build_group_meta_packed(
-                Wg.to(torch.float32),
+                Wg,#.to(torch.float32),
                 self.bits,
                 self.symmetric
                 )
@@ -185,7 +185,7 @@ class GPTQ(object):
                     device=Wg.device
                 )
             qmeta = kernels.mse_scale_groups_packed(
-                    Wg.to(torch.float32),
+                    Wg,#.to(torch.float32),
                     p,
                     qmeta,
                     float(maxq.item()),
@@ -199,12 +199,12 @@ class GPTQ(object):
 
     @torch.no_grad()
     def _solver(self, A, W, qmeta):
-        g_idx = (self.perm / self.group_size).to(torch.int32)
-        g_idx = g_idx.clamp_max(self.G - 1)
+        g_idx = torch.ceil(self.perm / self.group_size).to(torch.int32)
+        #g_idx = g_idx.clamp_max(self.G - 1)
 
         if self.algorithm == 'babai':
             return kernels.babai_solver(
-                    W.to(torch.float32),
+                    W,#.to(torch.float32),
                     A,
                     qmeta,
                     self.group_size,
