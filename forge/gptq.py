@@ -122,7 +122,7 @@ class GPTQ(object):
         H = H.index_select(0, self.perm).index_select(1, self.perm).contiguous()
 
 
-        zero_cols = self.W.eq(0).all(dim=0)
+        zero_cols = self.owner.W.eq(0).all(dim=0)
         if zero_cols.any():
             H[zero_cols, :] = 0
             H[:, zero_cols] = 0
