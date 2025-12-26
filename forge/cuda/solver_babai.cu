@@ -507,5 +507,5 @@ torch::Tensor babai_solver_cuda(
         }
     }
 
-    return qweight, delta_q;
+    return std::make_tuple(qweight, delta_q);
 }
