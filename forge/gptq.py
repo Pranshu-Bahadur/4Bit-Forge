@@ -38,6 +38,7 @@ class GPTQ(object):
         self.h_factor = None
         self.pruned_ids = None
         self.prepared = False
+        self.perm_inv = None
 
         self.id = uuid.uuid4()
     
@@ -50,6 +51,10 @@ class GPTQ(object):
         self.W = self.layer.weight
         self.H = None
         self.num_samples = torch.zeros((), device=self.device, dtype=torch.int64)
+        self.prepared = False
+        self.perm = None
+        self.pruned_ids = None
+        self.perm_inv = None
 
         torch.cuda.empty_cache()
 
