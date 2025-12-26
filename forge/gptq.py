@@ -201,8 +201,8 @@ class GPTQ(object):
 
     @torch.no_grad()
     def _solver(self, A, W, qmeta):
-        g_idx = (self.perm // self.group_size).to(torch.int32)
-        #g_idx = g_idx.clamp_max(self.G - 1)
+        g_idx = (self.perm / self.group_size).to(torch.int32)
+        g_idx = g_idx.clamp_max(self.G - 1)
 
         if self.algorithm == 'babai':
             return kernels.babai_solver(
