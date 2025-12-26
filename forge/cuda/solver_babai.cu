@@ -158,7 +158,7 @@ __device__ __forceinline__ void quantize_scalar_wdtype(
     int maxq,
     scalar_t& err_out,
     uint8_t& q_out,
-    scalar_t& deq_out,
+    scalar_t& deq_out
 ) {
     // biased = x * inv_s + q0 (W dtype)
     scalar_t biased_t = WOps<scalar_t>::fma(x, inv_s, q0);
