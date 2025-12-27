@@ -144,10 +144,10 @@ __global__ void babai_quant_block_kernel_fast(
         float v = 0.0f;
         if (t > i) {
             float invd = invD_all[block_start + i];
-            float a    = A[(block_start + i) * C + (block_start + t)];
+            float a    = A[((block_start + i) * C) + (block_start + t)];
             v = a * invd;
         }
-        S_sh[i * MAX_B + t] = v;
+        S_sh[(i * MAX_B) + t] = v;
     }
     __syncthreads();
 
@@ -161,7 +161,7 @@ __global__ void babai_quant_block_kernel_fast(
     for (int i = 0; i < MAX_B; ++i) {
         if (i < B) {
             int row = block_start + i;
-            x[i] = to_f32(W[row * R + r]);
+            x[i] = to_f32(W[(row * R) + r]);
         }
     }
 
@@ -175,9 +175,9 @@ __global__ void babai_quant_block_kernel_fast(
         if (g >= G) g = G - 1;
         float eps  = 1e-12f;
 
-        float s = scales[G * r + g];
+        float s = scales[(g * R) + r];
         float inv_s = 1/(s + eps);
-        float q0 = qzeros[G * r + g];
+        float q0 = qzeros[(g * R) + r];
         //q0 = nearbyintf(q0);
         //q0 = fminf(fmaxf(q0, 0.f), maxq_i);
 
@@ -185,14 +185,14 @@ __global__ void babai_quant_block_kernel_fast(
         uint8_t qb;
         quantize_scalar(x[t], inv_s, s, q0, maxq_i, err, qb, deq);
 
-        qweight[row * R + r] = qb;
-        W[row * R + r]       = deq;
-        Eblk[t * R + r]      = err;
+        qweight[(row * R) + r] = qb;
+        W[(row * R) + r]       = deq;
+        Eblk[(t * R) + r]      = err;
 
         // Propagate to earlier rows i < t
         #pragma unroll
         for (int i = 0; i < t; ++i) {
-                float alpha = S_sh[i * MAX_B + t];
+                float alpha = S_sh[(i * MAX_B) + t];
                 x[i] = __fmaf_rn(alpha, err, x[i]);
         }
     }
