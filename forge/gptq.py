@@ -206,7 +206,7 @@ class GPTQ(object):
             
         self.G = int(G)
 
-        return scales, qzeros
+        return scales.reshape(G*R), qzeros.reshape(G*R)
 
 
     @torch.no_grad()
