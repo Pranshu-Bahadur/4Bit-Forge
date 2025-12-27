@@ -206,7 +206,9 @@ class GPTQ(object):
             
         self.G = int(G)
 
-        return scales.view(G, R).reshape(G*R), qzeros.view(G, R).reshape(G*R)
+        scales_gr_1d = scales.view(R, G).transpose(0, 1).contiguous().view(-1)
+        qzeros_gr_1d = qzeros.view(R, G).transpose(0, 1).contiguous().view(-1)
+        return scales_gr_1d, qzeros_gr_1d
 
 
     @torch.no_grad()
