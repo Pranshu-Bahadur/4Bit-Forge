@@ -142,7 +142,7 @@ class GPTQ(object):
 
         diag = torch.diag(self.H)
         damp = float(self.rel_damp) * diag.mean()
-        H.diag().add_(damp)
+        H[range(self.W.shape[-1])][range(self.W.shape[-1])] += damp
 
         try:
             if self.algorithm == "babai":
