@@ -145,6 +145,8 @@ class GPTQ(object):
             H.zero_()
             H.diagonal().fill_(1.0)
 
+        H.div_(H.diag()[:, None])
+
         return H
 
 
@@ -211,4 +213,18 @@ class GPTQ(object):
                     g_idx,
                     self.G
                 )
+        else:
+            qw = kernels.gptq_solver(
+                W.to(torch.float32),
+                A.clone(),
+                scales.clone(),
+                qzeros.clone(),
+                self.bits,
+                self.group_size,
+                self.group_size // 4,
+                self.symmetric,
+                g_idx
+
+            )
+
             return qw

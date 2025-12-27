@@ -1,469 +1,382 @@
+// solver_fp32.cu
+// fp32-only GPTQ solver (debug-friendly)
+//
+// Assumptions:
+//   * W is float32 CUDA tensor shaped [C, R] (C = GPTQ dimension / in_features, R = out_features)
+//   * Hinv is float32 CUDA tensor shaped [C, C] containing the UPPER-triangular factor U such that
+//         inv(H) = U^T U
+//     Equivalently: U = chol(inv(H)).T  (if chol returns lower)
+//   * scales and qzeros are float32 CUDA tensors with numel == R * G,
+//     where G = ceil(C / group_size). Layout is [R, G] flattened row-major:
+//         idx = r * G + g
+//   * qweight is uint8 codes, stored as [C, R] (same layout as W).
+//
+// This file provides:
+//   * gptq_quantize_block_fp32: quantize a contiguous block of rows [block_start, block_start+B)
+//                              and write Delta (W - Wq) to Eblk.
+//   * gptq_trsm_block_fp32:     forward-substitution solve (U_block^T) E^T = Delta^T, in-place on Eblk.
+//   * gptq_solve_fp32:          full loop over blocks including tail update via W_tail.addmm_.
+
 #include <torch/extension.h>
+#include <pybind11/pybind11.h>
 #include <ATen/cuda/CUDAContext.h>
-#include <c10/cuda/CUDAStream.h>
+
+#include <cuda.h>
 #include <cuda_runtime.h>
 
-#include <cstdint>
+#include <c10/cuda/CUDAGuard.h>
+
 #include <cmath>
+#include <cstdint>
 
-// Headers for specific types
-#include <c10/util/Half.h>
-#include <c10/util/BFloat16.h>
-#include <c10/util/Float8_e4m3fn.h>
+// -----------------------------
+// Checks / helpers
+// -----------------------------
 
-#define CUDA_CHECK(expr)                                                      \
-  do {                                                                        \
-    cudaError_t _err = (expr);                                                \
-    TORCH_CHECK(_err == cudaSuccess, "CUDA error: ",                          \
-                cudaGetErrorString(_err), " at ", __FILE__, ":", __LINE__);   \
-  } while (0)
+#define CHECK_CUDA(x) TORCH_CHECK((x).is_cuda(), #x " must be a CUDA tensor")
+#define CHECK_CONTIGUOUS(x) TORCH_CHECK((x).is_contiguous(), #x " must be contiguous")
+#define CHECK_FP32(x) TORCH_CHECK((x).scalar_type() == at::kFloat, #x " must be float32")
+#define CHECK_U8(x) TORCH_CHECK((x).scalar_type() == at::kByte, #x " must be uint8")
+#define CHECK_I32(x) TORCH_CHECK((x).scalar_type() == at::kInt, #x " must be int32")
 
-namespace {
-
-// --- Data Structures --------------------------------------------------------
-
-struct QMetaPacked {
-    int16_t  log2_scale_fp;  // Q8.8 fixed-point log2(scale)
-    uint8_t  qzero;          // zero-point (0..255)
-    uint8_t  flags;          // bitfield; bit0 = symmetric
-};
-static_assert(sizeof(QMetaPacked) == 4, "QMetaPacked must be 4 bytes.");
-
-__device__ __forceinline__ uint32_t qmeta_to_u32(const QMetaPacked& m) {
-    return *reinterpret_cast<const uint32_t*>(&m);
+static inline int64_t ceil_div_int64(int64_t a, int64_t b) {
+    return (a + b - 1) / b;
 }
 
-// --- Generic Load/Store Helpers (Vectorized) -------------------------------
-
-template <typename T>
-__device__ __forceinline__ void load_4(const T* src, float* dst) {
-    if constexpr (sizeof(T) == 4) {
-        float4 v = *reinterpret_cast<const float4*>(src);
-        dst[0] = v.x; dst[1] = v.y; dst[2] = v.z; dst[3] = v.w;
-    } 
-    else if constexpr (sizeof(T) == 2) {
-        int2 v = *reinterpret_cast<const int2*>(src);
-        const T* vals = reinterpret_cast<const T*>(&v);
-        dst[0] = static_cast<float>(vals[0]);
-        dst[1] = static_cast<float>(vals[1]);
-        dst[2] = static_cast<float>(vals[2]);
-        dst[3] = static_cast<float>(vals[3]);
-    } 
-    else if constexpr (sizeof(T) == 1) {
-        int v = *reinterpret_cast<const int*>(src);
-        const T* vals = reinterpret_cast<const T*>(&v);
-        dst[0] = static_cast<float>(vals[0]);
-        dst[1] = static_cast<float>(vals[1]);
-        dst[2] = static_cast<float>(vals[2]);
-        dst[3] = static_cast<float>(vals[3]);
+__device__ __forceinline__ float warp_reduce_sum(float v) {
+    // Full mask
+    unsigned mask = 0xffffffffu;
+    for (int offset = 16; offset > 0; offset >>= 1) {
+        v += __shfl_down_sync(mask, v, offset);
     }
+    return v;
 }
 
-template <typename T>
-__device__ __forceinline__ void store_4(T* dst, const float* src) {
-    if constexpr (sizeof(T) == 4) {
-        float4 v;
-        v.x = src[0]; v.y = src[1]; v.z = src[2]; v.w = src[3];
-        *reinterpret_cast<float4*>(dst) = v;
-    } 
-    else if constexpr (sizeof(T) == 2) {
-        int2 v;
-        T* vals = reinterpret_cast<T*>(&v);
-        vals[0] = static_cast<T>(src[0]);
-        vals[1] = static_cast<T>(src[1]);
-        vals[2] = static_cast<T>(src[2]);
-        vals[3] = static_cast<T>(src[3]);
-        *reinterpret_cast<int2*>(dst) = v;
-    } 
-    else if constexpr (sizeof(T) == 1) {
-        int v;
-        T* vals = reinterpret_cast<T*>(&v);
-        vals[0] = static_cast<T>(src[0]);
-        vals[1] = static_cast<T>(src[1]);
-        vals[2] = static_cast<T>(src[2]);
-        vals[3] = static_cast<T>(src[3]);
-        *reinterpret_cast<int*>(dst) = v;
-    }
+// Clamp to [0, maxq]
+__device__ __forceinline__ int clamp_q(int q, int maxq) {
+    q = (q < 0) ? 0 : q;
+    q = (q > maxq) ? maxq : q;
+    return q;
 }
 
-// --- QMeta Decoding ---------------------------------------------------------
-
-__device__ __forceinline__ void decode_qmeta(
-    uint32_t packed,
-    float&   scale,
-    float&   inv_scale,
-    float&   qzero_f,
-    float&   maxq_g,
-    uint8_t  global_bits
+// Quantize a scalar using (s, q0) with clamp.
+__device__ __forceinline__ void quantize_scalar_u8(
+    float x,
+    float s,
+    float q0,
+    int maxq,
+    float &err_out,
+    uint8_t &q_out,
+    float &deq_out
 ) {
-    int16_t log2_q88 = static_cast<int16_t>(packed & 0xFFFFu);
-    uint8_t qzero_u8 = static_cast<uint8_t>((packed >> 16) & 0xFFu);
-    uint8_t flags    = static_cast<uint8_t>(packed >> 24);
+    // Protect against degenerate s
+    float inv_s = 1.0f / (s + 1e-20f);
 
-    constexpr float INV256 = 1.0f / 256.0f;
-    float log2_scale = __int2float_rn(log2_q88) * INV256;
-    scale     = exp2f(log2_scale);
-    inv_scale = exp2f(-log2_scale);
+    // q0 is expected integer-ish; clamp after rounding to nearest
+    float q0r = rintf(q0);
+    q0r = fminf(fmaxf(q0r, 0.0f), (float)maxq);
 
-    int maxq_i = (1 << global_bits) - 1;
-    maxq_g = static_cast<float>(maxq_i);
-
-    if (flags & 0x01) {
-        constexpr float HALF = 0.5f;
-        qzero_u8 = static_cast<uint8_t>((maxq_g + 1.0f) * HALF);
-    }
-    qzero_f = static_cast<float>(qzero_u8);
-}
-
-// --- Quantization Primitives ------------------------------------------------
-
-__device__ __forceinline__ void quantize_scalar(
-    float x, float inv_s, float s, float q0, int maxq_i,
-    float& delta_out, uint8_t& q_out, float& deq_out
-) {
-    float biased = x * inv_s + q0;
+    float biased = fmaf(x, inv_s, q0r);
     int q = __float2int_rn(biased);
+    q = clamp_q(q, maxq);
 
-    if (q < 0) q = 0;
-    else if (q > maxq_i) q = maxq_i;
-
-    deq_out   = __fmaf_rn(static_cast<float>(q), s, -q0 * s);
-    delta_out = x - deq_out;       // W_old - Q
-    q_out     = static_cast<uint8_t>(q);
+    // deq = (q - q0) * s
+    deq_out = (float(q) - q0r) * s;
+    err_out = x - deq_out;
+    q_out   = (uint8_t)q;
 }
 
-__device__ __forceinline__ void quantize_process_4(
-    const float* x_vals,
-    float inv_s, float s, float q0, int maxq_i,
-    float* delta_vals, uint32_t& q_packed, float* deq_vals
+// -----------------------------
+// 1) Quantize block -> qweight + Delta (stored to Eblk)
+// -----------------------------
+
+// Each CUDA block handles 1 row (one GPTQ dimension index) within the current B-sized block.
+// Threads iterate over r in [0, R).
+// Eblk layout: [B, R] row-major, storing Delta for each row-in-block.
+__global__ void gptq_quantize_block_kernel_fp32(
+    float* __restrict__ W,          // [C, R]
+    uint8_t* __restrict__ qweight,  // [C, R]
+    float* __restrict__ Eblk,       // [B, R]
+    const float* __restrict__ scales, // [R*G]
+    const float* __restrict__ qzeros, // [R*G]
+    const int32_t* __restrict__ g_idx, // [C] or nullptr
+    int C,
+    int R,
+    int G,
+    int block_start,
+    int B,
+    int group_size,
+    int bits
 ) {
-    uint8_t q_b[4];
-    #pragma unroll
-    for (int i = 0; i < 4; ++i) {
-        quantize_scalar(x_vals[i], inv_s, s, q0, maxq_i,
-                        delta_vals[i], q_b[i], deq_vals[i]);
-    }
-    q_packed =  (uint32_t)q_b[0]
-              | ((uint32_t)q_b[1] << 8)
-              | ((uint32_t)q_b[2] << 16)
-              | ((uint32_t)q_b[3] << 24);
-}
+    int t = (int)blockIdx.x; // 0..B-1
+    if (t >= B) return;
 
-// ----------------------------------------------------------------------------
-// Kernel 1: Quantize block (row-parallel, no delta zeroing)
-// grid.x = B (rows in block), blockDim.x = threads_quant
-// ----------------------------------------------------------------------------
+    int row = block_start + t;
+    if (row >= C) return;
 
-template <typename scalar_t, int WARPS_PER_BLOCK, bool VECTORIZED>
-__global__ void gptq_quant_block_kernel(
-    scalar_t* __restrict__ W,             // [C, R]
-    uint8_t* __restrict__ qweight,        // [C, R]
-    const QMetaPacked* __restrict__ qmeta,// [C * G]
-    float* __restrict__ delta_block,      // [B, R]
-    int64_t C, int64_t R, int64_t G,
-    int64_t block_start, int64_t block_end,
-    int64_t group_size,
-    uint8_t bits
-) {
-    const int B = static_cast<int>(block_end - block_start);
-    if (B <= 0) return;
-
-    const int row_in_block = blockIdx.x;
-    if (row_in_block >= B) return;
-
-    const int tid = threadIdx.x;
-    const int j   = static_cast<int>(block_start) + row_in_block;
-
-    scalar_t* W_row = W + j * R;
-    uint8_t*  Q_row = qweight + j * R;
-    float*    D_row = delta_block + row_in_block * R;
-
-    if (VECTORIZED) {
-        const int R_vec          = static_cast<int>(R) / 4;
-        const int group_size_vec = static_cast<int>(group_size) / 4;
-        auto* Q_row_vec          = reinterpret_cast<uint32_t*>(Q_row);
-        auto* D_row_vec          = reinterpret_cast<float4*>(D_row);
-
-        for (int col_v = tid; col_v < R_vec; col_v += blockDim.x) {
-            const int g = col_v / group_size_vec;
-            const QMetaPacked m = qmeta[j * static_cast<int>(G) + g];
-            float s, inv_s, q0, maxq_g;
-            decode_qmeta(qmeta_to_u32(m), s, inv_s, q0, maxq_g, bits);
-
-            float x_vals[4];
-            load_4(W_row + col_v * 4, x_vals);
-
-            float delta_vals[4], deq_vals[4];
-            uint32_t q_packed;
-
-            quantize_process_4(
-                x_vals, inv_s, s, q0, static_cast<int>(maxq_g),
-                delta_vals, q_packed, deq_vals
-            );
-
-            store_4(W_row + col_v * 4, deq_vals);
-            Q_row_vec[col_v] = q_packed;
-            D_row_vec[col_v] = make_float4(
-                delta_vals[0], delta_vals[1],
-                delta_vals[2], delta_vals[3]
-            );
-        }
+    int g = 0;
+    if (g_idx) {
+        g = (int)g_idx[row];
     } else {
-        for (int col = tid; col < static_cast<int>(R); col += blockDim.x) {
-            const int g = col / static_cast<int>(group_size);
-            const QMetaPacked m = qmeta[j * static_cast<int>(G) + g];
-            float s, inv_s, q0, maxq_g;
-            decode_qmeta(qmeta_to_u32(m), s, inv_s, q0, maxq_g, bits);
+        g = row / group_size;
+    }
+    if (g < 0) g = 0;
+    if (g >= G) g = G - 1;
 
-            float delta, deq;
-            uint8_t q_byte;
-            quantize_scalar(
-                static_cast<float>(W_row[col]),
-                inv_s, s, q0, static_cast<int>(maxq_g),
-                delta, q_byte, deq
-            );
+    const int maxq = (1 << bits) - 1;
 
-            W_row[col] = static_cast<scalar_t>(deq);
-            Q_row[col] = q_byte;
-            D_row[col] = delta;
-        }
+    float* W_row = W + (int64_t)row * R;
+    uint8_t* Q_row = qweight + (int64_t)row * R;
+    float* E_row = Eblk + (int64_t)t * R;
+
+    for (int r = (int)threadIdx.x; r < R; r += (int)blockDim.x) {
+        // scale/q0 per (out_channel=r, group=g)
+        int64_t idx = (int64_t)r * G + g;
+        float s  = scales[idx];
+        float q0 = qzeros[idx];
+
+        float x = W_row[r];
+        float err, deq;
+        uint8_t q;
+        quantize_scalar_u8(x, s, q0, maxq, err, q, deq);
+
+        W_row[r] = deq;
+        Q_row[r] = q;
+        E_row[r] = err;
     }
 }
 
-// ----------------------------------------------------------------------------
-// Kernel 2: TRSM (Solve A * X = B)  with A lower-triangular
-// A: [B, B], Bmat: [N, B], Xmat: [N, B]
-// ----------------------------------------------------------------------------
+// Launcher wrapper
+static void launch_gptq_quantize_block_fp32(
+    torch::Tensor W,
+    torch::Tensor qweight,
+    torch::Tensor Eblk,
+    torch::Tensor scales,
+    torch::Tensor qzeros,
+    c10::optional<torch::Tensor> g_idx,
+    int64_t block_start,
+    int64_t B,
+    int64_t group_size,
+    int64_t bits
+) {
+    CHECK_CUDA(W); CHECK_CUDA(qweight); CHECK_CUDA(Eblk); CHECK_CUDA(scales); CHECK_CUDA(qzeros);
+    CHECK_CONTIGUOUS(W); CHECK_CONTIGUOUS(qweight); CHECK_CONTIGUOUS(Eblk); CHECK_CONTIGUOUS(scales); CHECK_CONTIGUOUS(qzeros);
+    CHECK_FP32(W); CHECK_U8(qweight); CHECK_FP32(Eblk); CHECK_FP32(scales); CHECK_FP32(qzeros);
+    if (g_idx.has_value()) {
+        CHECK_CUDA(*g_idx);
+        CHECK_CONTIGUOUS(*g_idx);
+        CHECK_I32(*g_idx);
+    }
 
+    const int C = (int)W.size(0);
+    const int R = (int)W.size(1);
+    TORCH_CHECK(qweight.size(0) == C && qweight.size(1) == R, "qweight shape must match W [C,R]");
+
+    TORCH_CHECK(Eblk.size(0) == B && Eblk.size(1) == R, "Eblk must be [B,R]");
+
+    TORCH_CHECK(group_size > 0, "group_size must be > 0");
+    const int G = (int)ceil_div_int64(C, group_size);
+    TORCH_CHECK(scales.numel() == (int64_t)R * G, "scales must have numel == R*G (layout [R,G])");
+    TORCH_CHECK(qzeros.numel() == (int64_t)R * G, "qzeros must have numel == R*G (layout [R,G])");
+
+    const int threads = 256; // simple/default
+    const dim3 block(threads);
+    const dim3 grid((unsigned)B);
+
+    cudaStream_t stream = at::cuda::getDefaultCUDAStream().stream();
+
+    const int32_t* gptr = g_idx.has_value() ? (const int32_t*)(g_idx->data_ptr<int>()) : nullptr;
+
+    gptq_quantize_block_kernel_fp32<<<grid, block, 0, stream>>>(
+        W.data_ptr<float>(),
+        qweight.data_ptr<uint8_t>(),
+        Eblk.data_ptr<float>(),
+        scales.data_ptr<float>(),
+        qzeros.data_ptr<float>(),
+        gptr,
+        C,
+        R,
+        G,
+        (int)block_start,
+        (int)B,
+        (int)group_size,
+        (int)bits
+    );
+}
+
+// -----------------------------
+// 2) TRSM: (U_block^T) E^T = Delta^T, in-place on Eblk
+// -----------------------------
+
+// Loads U_block (upper) into shared, then performs forward substitution per column r.
+// Eblk is [B,R]. After solve, Eblk becomes E.
 template <int MAX_B>
-__global__ void block_trsm_lower_kernel(
-    const float* __restrict__ A,    // [B, B]
-    const float* __restrict__ Bmat, // [N, B]
-    float* __restrict__ Xmat,       // [N, B]
-    int B, int N
+__global__ void gptq_trsm_block_kernel_fp32(
+    float* __restrict__ Eblk,       // [B,R] in/out
+    const float* __restrict__ U,    // [C,C] upper-tri
+    int C,
+    int R,
+    int block_start,
+    int B
 ) {
-    int row = blockIdx.x * blockDim.x + threadIdx.x;
-    if (row >= N) return;
+    __shared__ float U_sh[MAX_B * MAX_B];
+    __shared__ float inv_diag[MAX_B];
 
-    float x[MAX_B];
-    float b[MAX_B];
-
-    #pragma unroll
-    for (int i = 0; i < MAX_B; ++i) {
-        x[i] = 0.f;
-        b[i] = 0.f;
-    }
-
-    for (int i = 0; i < B; ++i) {
-        b[i] = Bmat[row * B + i];
-    }
-
-    // Forward substitution
-    for (int i = 0; i < B; ++i) {
-        float sum = 0.f;
-        for (int k = 0; k < i; ++k) {
-            sum += A[i * B + k] * x[k];
+    // Load U_block into shared (only upper part needed).
+    for (int idx = (int)threadIdx.x; idx < B * B; idx += (int)blockDim.x) {
+        int i = idx / B;
+        int j = idx - i * B;
+        float v = 0.0f;
+        if (j >= i) {
+            v = U[(int64_t)(block_start + i) * C + (block_start + j)];
         }
-        float diag = A[i * B + i];
-        float rhs  = b[i] - sum;
-        x[i] = rhs / diag;
+        U_sh[i * MAX_B + j] = v;
     }
+    // Precompute inv diagonal
+    for (int i = (int)threadIdx.x; i < B; i += (int)blockDim.x) {
+        float d = U_sh[i * MAX_B + i];
+        inv_diag[i] = 1.0f / (d + 1e-20f);
+    }
+    __syncthreads();
 
+    int r = (int)blockIdx.x * (int)blockDim.x + (int)threadIdx.x;
+    if (r >= R) return;
+
+    // Forward substitution on L = U^T.
+    // L(i,k) = U(k,i). We use U_sh[k * MAX_B + i].
     for (int i = 0; i < B; ++i) {
-        Xmat[row * B + i] = x[i];
+        float acc = Eblk[(int64_t)i * R + r];
+        #pragma unroll
+        for (int k = 0; k < MAX_B; ++k) {
+            if (k >= i) break;
+            acc -= U_sh[k * MAX_B + i] * Eblk[(int64_t)k * R + r];
+        }
+        acc *= inv_diag[i];
+        Eblk[(int64_t)i * R + r] = acc;
     }
 }
 
-// ----------------------------------------------------------------------------
-// Kernel 3: Custom Tail Update for FP8 Support
-// W_tail -= H_cross^T @ E_J
-// 
-// W_tail: [C_tail, R] (scalar_t, e.g. fp8)
-// H_cross:[B, C_tail] (float, pre-casted for precision/convenience)
-// E_J:    [B, R]      (float)
-// ----------------------------------------------------------------------------
-
-template <typename scalar_t>
-__global__ void update_tail_kernel(
-    scalar_t* __restrict__ W,    // [C_tail, R]
-    const float* __restrict__ H, // [B, C_tail]
-    const float* __restrict__ E, // [B, R]
-    int C_tail, int R, int B,
-    int stride_w_c, int stride_w_r,
-    int stride_h_b, int stride_h_c,
-    int stride_e_b, int stride_e_r
+static void launch_gptq_trsm_block_fp32(
+    torch::Tensor Eblk,
+    torch::Tensor U,
+    int64_t block_start,
+    int64_t B
 ) {
-    int r = blockIdx.x * blockDim.x + threadIdx.x; // column index
-    int c = blockIdx.y * blockDim.y + threadIdx.y; // row index
+    CHECK_CUDA(Eblk); CHECK_CUDA(U);
+    CHECK_CONTIGUOUS(Eblk); CHECK_CONTIGUOUS(U);
+    CHECK_FP32(Eblk); CHECK_FP32(U);
 
-    if (r >= R || c >= C_tail) return;
+    const int C = (int)U.size(0);
+    TORCH_CHECK(U.dim() == 2 && U.size(0) == U.size(1), "U must be [C,C]");
 
-    float acc = 0.0f;
-    for (int k = 0; k < B; ++k) {
-        float h_val = H[k * stride_h_b + c * stride_h_c];
-        float e_val = E[k * stride_e_b + r * stride_e_r];
-        acc += h_val * e_val;
-    }
+    const int R = (int)Eblk.size(1);
+    TORCH_CHECK(Eblk.size(0) == B, "Eblk first dim must equal B");
 
-    int w_idx = c * stride_w_c + r * stride_w_r;
-    float w_val = static_cast<float>(W[w_idx]);
-    w_val -= acc;
-    W[w_idx] = static_cast<scalar_t>(w_val);
+    // Keep MAX_B small-ish for shared memory.
+    constexpr int MAX_B = 128;
+    TORCH_CHECK(B <= MAX_B, "B must be <= ", MAX_B);
+
+    const int threads = 256;
+    const dim3 block(threads);
+    const dim3 grid((unsigned)ceil_div_int64(R, threads));
+
+    cudaStream_t stream = at::cuda::getDefaultCUDAStream().stream();
+
+    gptq_trsm_block_kernel_fp32<MAX_B><<<grid, block, 0, stream>>>(
+        Eblk.data_ptr<float>(),
+        U.data_ptr<float>(),
+        C,
+        R,
+        (int)block_start,
+        (int)B
+    );
 }
 
-} // anonymous namespace
+// -----------------------------
+// 3) Full solver (block loop + tail update)
+// -----------------------------
 
-// ----------------------------------------------------------------------------
-// Host Wrapper
-// ----------------------------------------------------------------------------
-
-torch::Tensor gptq_solver_cuda(
-    torch::Tensor weight,       // [C, R]
-    torch::Tensor hessian_inv,  // [C, C]
-    torch::Tensor qmeta_bytes,  // [C, G, 4] or [C*G, 4]
-    int64_t group_size,
+// Returns qweight [C,R] uint8. Mutates W in-place to dequantized values.
+torch::Tensor gptq_solve_fp32(
+    torch::Tensor W,            // [C,R] fp32
+    torch::Tensor Hinv_u,       // [C,C] fp32 upper
+    torch::Tensor scales,       // [R*G] fp32
+    torch::Tensor qzeros,       // [R*G] fp32
     int64_t bits,
-    int64_t block_size
+    int64_t group_size,
+    int64_t block_size,
+    bool symmetric,
+    torch::Tensor g_idx
 ) {
-    TORCH_CHECK(weight.is_cuda(), "weight must be CUDA");
-    TORCH_CHECK(hessian_inv.is_cuda(), "hessian_inv must be CUDA");
-    
-    weight      = weight.contiguous();
-    hessian_inv = hessian_inv.contiguous();
-    qmeta_bytes = qmeta_bytes.contiguous();
+    (void)symmetric; // currently unused in solver; quantize_scalar clamps q0 and uses it.
 
-    const int64_t C = weight.size(0);
-    const int64_t R = weight.size(1);
+    CHECK_CUDA(W); CHECK_CUDA(Hinv_u); CHECK_CUDA(scales); CHECK_CUDA(qzeros);
+    CHECK_CONTIGUOUS(W); CHECK_CONTIGUOUS(Hinv_u); CHECK_CONTIGUOUS(scales); CHECK_CONTIGUOUS(qzeros);
+    CHECK_FP32(W); CHECK_FP32(Hinv_u); CHECK_FP32(scales); CHECK_FP32(qzeros);
 
-    // Determine G
-    int64_t G;
-    if (qmeta_bytes.dim() == 3) {
-        G = qmeta_bytes.size(1);
-    } else {
-        G = qmeta_bytes.size(0) / C;
+    TORCH_CHECK(W.dim() == 2, "W must be 2D [C,R]");
+    TORCH_CHECK(Hinv_u.dim() == 2 && Hinv_u.size(0) == Hinv_u.size(1), "Hinv_u must be [C,C]");
+
+    const int64_t C = W.size(0);
+    const int64_t R = W.size(1);
+    TORCH_CHECK(Hinv_u.size(0) == C, "Hinv_u size mismatch with W");
+
+    TORCH_CHECK(bits >= 2 && bits <= 8, "bits must be in [2,8]");
+    TORCH_CHECK(group_size > 0, "group_size must be > 0");
+    TORCH_CHECK(block_size > 0, "block_size must be > 0");
+
+    const int64_t G = ceil_div_int64(C, group_size);
+    TORCH_CHECK(scales.numel() == R * G, "scales must have numel == R*G");
+    TORCH_CHECK(qzeros.numel() == R * G, "qzeros must have numel == R*G");
+
+    if (g_idx.has_value()) {
+        CHECK_CUDA(*g_idx);
+        CHECK_CONTIGUOUS(*g_idx);
+        CHECK_I32(*g_idx);
+        TORCH_CHECK(g_idx->numel() == C, "g_idx must have numel == C");
     }
 
-    // Clamp block size
-    constexpr int MAX_BLOCK_SIZE = 32;
-    if (block_size <= 0 || block_size > MAX_BLOCK_SIZE) block_size = MAX_BLOCK_SIZE;
-    if (block_size > C) block_size = C;
+    // Allocate qweight [C,R]
+    auto qweight = at::empty({C, R}, torch::TensorOptions().dtype(at::kByte).device(W.device()));
 
-    auto qweight     = torch::empty({C, R}, torch::TensorOptions().dtype(torch::kUInt8).device(weight.device()));
-    auto delta_block = torch::empty({block_size, R}, torch::TensorOptions().dtype(at::kFloat).device(weight.device()));
+    // Temporary Eblk [B,R] (Delta then E)
+    // We'll allocate at max block_size and slice per block if tail smaller.
+    auto Ebuf = at::empty({block_size, R}, torch::TensorOptions().dtype(at::kFloat).device(W.device()));
 
-    auto qmeta_flat =
-        (qmeta_bytes.dim() == 3) ? qmeta_bytes.view({C * G, 4}) : qmeta_bytes;
-
-    auto stream = at::cuda::getCurrentCUDAStream();
-    const bool use_vectorized = (R % 4 == 0) && (group_size % 4 == 0);
-    constexpr int WARPS_PER_BLOCK = 8;
-    const int threads_quant = WARPS_PER_BLOCK * 32;
-
-    // Macro for dispatching quant kernel
-    #define LAUNCH_QKERNEL(SCALAR_T) \
-        if (use_vectorized) { \
-            gptq_quant_block_kernel<SCALAR_T, WARPS_PER_BLOCK, true><<< \
-                B, threads_quant, 0, stream>>>( \
-                weight.data_ptr<SCALAR_T>(), \
-                qweight.data_ptr<uint8_t>(), \
-                reinterpret_cast<const QMetaPacked*>(qmeta_flat.data_ptr<uint8_t>()), \
-                delta_block.data_ptr<float>(), \
-                C, R, G, \
-                block_start, block_end, \
-                group_size, \
-                static_cast<uint8_t>(bits)); \
-        } else { \
-            gptq_quant_block_kernel<SCALAR_T, WARPS_PER_BLOCK, false><<< \
-                B, threads_quant, 0, stream>>>( \
-                weight.data_ptr<SCALAR_T>(), \
-                qweight.data_ptr<uint8_t>(), \
-                reinterpret_cast<const QMetaPacked*>(qmeta_flat.data_ptr<uint8_t>()), \
-                delta_block.data_ptr<float>(), \
-                C, R, G, \
-                block_start, block_end, \
-                group_size, \
-                static_cast<uint8_t>(bits)); \
-        }
-
-    // --- Main Block Loop ---
+    // Block loop
     for (int64_t block_start = 0; block_start < C; block_start += block_size) {
-        const int64_t block_end = std::min(block_start + block_size, C);
-        const int64_t B_long    = block_end - block_start;
-        const int B             = static_cast<int>(B_long);
-        const int N             = static_cast<int>(R);
+        int64_t block_end = std::min<int64_t>(block_start + block_size, C);
+        int64_t B = block_end - block_start;
 
-        // 1. Quantize block (row-parallel)
-        AT_DISPATCH_SWITCH(weight.scalar_type(), "gptq_quant_block",
-            AT_DISPATCH_CASE(at::ScalarType::Float,         [&] { LAUNCH_QKERNEL(float); })
-            AT_DISPATCH_CASE(at::ScalarType::Half,          [&] { LAUNCH_QKERNEL(at::Half); })
-            AT_DISPATCH_CASE(at::ScalarType::BFloat16,      [&] { LAUNCH_QKERNEL(at::BFloat16); })
-            AT_DISPATCH_CASE(at::ScalarType::Float8_e4m3fn, [&] { LAUNCH_QKERNEL(c10::Float8_e4m3fn); })
+        // Slice Eblk = Ebuf[0:B]
+        auto Eblk = Ebuf.narrow(0, 0, B).contiguous();
+
+        // Quantize rows in block, fill Delta into Eblk
+        launch_gptq_quantize_block_fp32(
+            W,
+            qweight,
+            Eblk,
+            scales,
+            qzeros,
+            g_idx,
+            block_start,
+            B,
+            group_size,
+            bits
         );
-        CUDA_CHECK(cudaGetLastError());
 
-        if (block_end >= C) continue;
+        // TRSM: Eblk = solve(U_block^T, Delta)
+        launch_gptq_trsm_block_fp32(Eblk, Hinv_u, block_start, B);
 
-        // 2. Prepare TRSM inputs
-        auto H_block = hessian_inv.narrow(0, block_start, B_long)
-                                  .narrow(1, block_start, B_long)
-                                  .to(torch::kFloat);                // [B, B]
-        auto A_lower = H_block.t().contiguous();                     // [B, B] lower-triangular
-
-        auto Delta_J = delta_block.narrow(0, 0, B_long);             // [B, R]
-        auto Delta_T = Delta_J.t().contiguous();                     // [R, B]
-
-        // 3. Solve A_lower * E_T = Delta_T  => E_T: [R, B]
-        auto E_T = torch::empty_like(Delta_T);                       // [R, B]
-        {
-            const int threads_trsm = 256;
-            const int blocks_trsm  = (N + threads_trsm - 1) / threads_trsm;
-            block_trsm_lower_kernel<MAX_BLOCK_SIZE><<<
-                blocks_trsm, threads_trsm, 0, stream>>>(
-                    A_lower.data_ptr<float>(),
-                    Delta_T.data_ptr<float>(),
-                    E_T.data_ptr<float>(),
-                    B, N
-            );
-        }
-        CUDA_CHECK(cudaGetLastError());
-
-        // 4. Tail update: W_tail -= H_cross^T @ E_J
-        auto H_cross = hessian_inv.narrow(0, block_start, B_long)
-                                  .narrow(1, block_end, C - block_end);   // [B, C_tail]
-
-        auto W_tail = weight.narrow(0, block_end, C - block_end);         // [C_tail, R]
-        auto E_J    = E_T.t();                                            // [B, R]
-
-        if (weight.scalar_type() == at::ScalarType::Float8_e4m3fn) {
-            auto H_cross_f   = H_cross.to(torch::kFloat).contiguous(); 
-            auto E_J_contig  = E_J.contiguous();
-
-            int C_tail_int = static_cast<int>(W_tail.size(0));
-            int R_int      = static_cast<int>(W_tail.size(1));
-
-            dim3 block(16, 16);
-            dim3 grid((R_int + 15) / 16, (C_tail_int + 15) / 16);
-
-            update_tail_kernel<c10::Float8_e4m3fn><<<grid, block, 0, stream>>>(
-                W_tail.data_ptr<c10::Float8_e4m3fn>(),
-                H_cross_f.data_ptr<float>(),
-                E_J_contig.data_ptr<float>(),
-                C_tail_int, R_int, B,
-                static_cast<int>(W_tail.stride(0)),
-                static_cast<int>(W_tail.stride(1)),
-                static_cast<int>(H_cross_f.stride(0)),
-                static_cast<int>(H_cross_f.stride(1)),
-                static_cast<int>(E_J_contig.stride(0)),
-                static_cast<int>(E_J_contig.stride(1))
-            );
-            CUDA_CHECK(cudaGetLastError());
-        } else {
-            // Standard high-precision path (fp16/bf16/fp32): W_tail -= H_cross^T @ E_J
-            W_tail.addmm_(
-                H_cross.t(),
-                E_J.to(weight.scalar_type()),
-                -1.0f, 1.0f
-            );
+        // Update tail W[block_end:,:] -= H_cross^T @ Eblk
+        if (block_end < C) {
+            auto H_cross = Hinv_u.narrow(0, block_start, B).narrow(1, block_end, C - block_end);
+            // Ensure contiguous for addmm
+            auto Ht = H_cross.transpose(0, 1).contiguous(); // [C_tail, B]
+            auto Ect = Eblk.contiguous();                  // [B, R]
+            auto W_tail = W.narrow(0, block_end, C - block_end);
+            // W_tail = 1*W_tail + (-1) * (Ht @ Ect)
+            W_tail.addmm_(Ht, Ect, /*beta=*/1.0, /*alpha=*/-1.0);
         }
     }
 
