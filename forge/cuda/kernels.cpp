@@ -52,7 +52,8 @@ torch::Tensor babai_solver_cuda(
     int64_t group_size,
     int64_t bits,
     int64_t block_size,
-    torch::Tensor g_idx
+    torch::Tensor g_idx,
+    int G
 );
 
 

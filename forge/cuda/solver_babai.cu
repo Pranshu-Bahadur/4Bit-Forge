@@ -211,7 +211,8 @@ torch::Tensor babai_solver_cuda(
     int64_t group_size,
     int64_t bits,
     int64_t block_size,
-    torch::Tensor g_idx
+    torch::Tensor g_idx,
+    int G
 ) {
     TORCH_CHECK(weight.is_cuda(), "weight must be CUDA");
     TORCH_CHECK(A.is_cuda(),      "A must be CUDA");
@@ -229,18 +230,10 @@ torch::Tensor babai_solver_cuda(
     qzeros = qzeros.contiguous();
     g_idx = g_idx.contiguous();
 
+    int64_t G = G;
+
     // Determine G from qmeta tensor shape
-    int64_t G;
-    if (scales.dim() == 3) {
-        TORCH_CHECK(scales.size(0) == R, "scales[0] must be R");
-        TORCH_CHECK(scales.size(2) == 1, "scales[...,1] expected");
-        G = scales.size(1);
-    } else {
-        TORCH_CHECK(scales.dim() == 2 && scales.size(1) == 1,
-                    "scales must be [R,G,1] or [R*G,1]");
-        TORCH_CHECK(scales.size(0) % R == 0, "scales[0] must be multiple of R");
-        G = scales.size(0) / R;
-    }
+    
 
     // Effective group_size along C and assert matches qmeta G
     TORCH_CHECK(group_size > 0, "group_size must be > 0");

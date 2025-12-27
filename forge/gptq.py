@@ -192,7 +192,7 @@ class GPTQ(object):
             
         self.G = int(G)
 
-        return scales.reshape(-1, 1), qzeros.reshape(-1, 1)
+        return scales, qzeros
 
 
     @torch.no_grad()
@@ -208,6 +208,7 @@ class GPTQ(object):
                     self.group_size,
                     self.bits,
                     self.group_size // 4,
-                    g_idx
+                    g_idx,
+                    self.G
                 )
             return qw
