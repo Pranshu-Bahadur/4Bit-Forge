@@ -175,9 +175,9 @@ __global__ void babai_quant_block_kernel_fast(
         int g = g_idx ? (int)g_idx[row] : (row / group_size);
         if (g >= G) g = G - 1;
 
-        float s = scales[r * G + g];
+        float s = scales[g * G + r];
         float inv_s = 1/s;
-        float q0 = qzeros[r * G + g];
+        float q0 = qzeros[g * G + r];
 
         float err, deq;
         uint8_t qb;
