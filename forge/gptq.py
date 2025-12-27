@@ -71,10 +71,10 @@ class GPTQ(object):
         alpha = 2.0 / total_samples
 
         if self.H is None:
-            self.H = alpha*(X.transpose(0, 1)@X)
+            self.H = alpha*(X.T@X)
         else:
             beta = num_samples / total_samples
-            self.H.addmm_(X.transpose(0, 1), X, alpha=alpha, beta=beta)
+            self.H.addmm_(X.T, X, alpha=alpha, beta=beta)
         
         self.num_samples.add_(new_samples)
     
@@ -86,7 +86,7 @@ class GPTQ(object):
             self.pruned_ids = _owner.pruned_ids
             self.perm = _owner.perm
             self.perm_inv = _owner.perm_inv
-            self.W[:, _owner.pruned_ids] = 0
+            self.W[:, self.pruned_ids] = 0
             self.num_samples = _owner.num_samples.clone()
             self.prepared = True
             return
@@ -110,23 +110,22 @@ class GPTQ(object):
     @torch.no_grad()
     def quantize(self):
         self._prep()
-        qmeta, maxq = self._quant_grid()
+        scales, qzeros = self._quant_grid()
         A = self._h_factor()
         W = self.W.transpose(-2, -1)[self.perm, :].contiguous()
-        qweight, delta_q = self._solver(A, W, qmeta.clone())
-        return qweight[self.perm_inv, :].transpose(-2, -1).contiguous(), delta_q[self.perm_inv, :].transpose(-2, -1).contiguous(), qmeta, maxq
+        qweight = self._solver(A, W, scales, qzeros)
+        return qweight[self.perm_inv, :].transpose(-2, -1).contiguous(), scales, qzeros
 
     @torch.no_grad()
     def _h_factor(self):
         H = self.H.clone()
-        H = H.index_select(0, self.perm).index_select(1, self.perm).contiguous()
-
-
-        zero_cols = self.owner.W.eq(0).all(dim=0)
+        zero_cols = self.W.eq(0).all(dim=0)
         if zero_cols.any():
             H[zero_cols, :] = 0
             H[:, zero_cols] = 0
             H.diagonal()[zero_cols] = 1.0
+        
+        H = H.index_select(0, self.perm).index_select(1, self.perm).contiguous()
 
 
         diag = H.diagonal()
@@ -167,7 +166,7 @@ class GPTQ(object):
 
         Wg = W.reshape(R*G, self.group_size).contiguous()
 
-        qmeta, maxq = kernels.build_group_meta_packed(
+        scales, qzeros = kernels.build_group_meta_packed(
                 Wg.to(torch.float32),
                 self.bits,
                 self.symmetric
@@ -181,32 +180,34 @@ class GPTQ(object):
                     dtype=torch.float32,
                     device=Wg.device
                 )
-            qmeta = kernels.mse_scale_groups_packed(
+            kernels.mse_scale_groups_packed(
                     Wg.to(torch.float32),
+                    scales,
+                    qzeros,
                     p,
-                    qmeta,
-                    float(maxq.item()),
                     float(norm),
+                    self.bits,
+                    self.symmetric
                 )
             
         self.G = int(G)
 
-        return qmeta, maxq
+        return scales.reshape(-1, 1), qzeros.reshape(-1, 1)
 
 
     @torch.no_grad()
-    def _solver(self, A, W, qmeta):
-        g_idx = (self.perm / self.group_size).to(torch.int32)
-        g_idx = g_idx.clamp_max(self.G - 1)
+    def _solver(self, A, W, scales, qzeros):
+        g_idx = (self.perm // self.group_size).to(torch.int32)
 
         if self.algorithm == 'babai':
-            qw, dq = kernels.babai_solver(
+            qw = kernels.babai_solver(
                     W.to(torch.float32),
                     A.clone(),
-                    qmeta,
+                    scales.clone(),
+                    qzeros.clone()
                     self.group_size,
                     self.bits,
                     self.group_size // 4,
                     g_idx
                 )
-            return qw, dq
+            return qw
