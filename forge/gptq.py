@@ -82,7 +82,7 @@ class GPTQ(object):
     def _prep(self):
         _owner = self.owner
         if (not self._is_owner()) and _owner.prepared:
-            self.H = _owner.H.clone() #For sanilty..not **really** needed
+            self.H = _owner.H#.clone() #For sanilty..not **really** needed
             self.pruned_ids = _owner.pruned_ids
             self.perm = _owner.perm
             self.perm_inv = _owner.perm_inv
@@ -118,19 +118,18 @@ class GPTQ(object):
 
     @torch.no_grad()
     def _h_factor(self):
-        H = self.H.clone()
+        H = self.H#.clone()
         H = H.index_select(0, self.perm).index_select(1, self.perm).contiguous()
 
-        diag = H.diagonal()
-
-        damp = float(self.rel_damp) * diag.mean()
-        diag.add_(damp)
-        
-        zero_cols = self.owner.W.eq(0).all(dim=1)
-        if zero_cols.any():
-            H[zero_cols, :] = 0
-            H[:, zero_cols] = 0
-            H.diagonal()[zero_cols] = 1.0
+        if self._is_owner():
+            zero_cols = self.W.eq(0).all(dim=0)
+            if zero_cols.any():
+                H[zero_cols, :] = 0
+                H[:, zero_cols] = 0
+                H.diagonal()[zero_cols] = 1.0
+                diag = self.H.diagonal()
+                damp = float(self.rel_damp) * diag.mean()
+                diag.add_(damp)
 
         try:
             if self.algorithm == "babai":
