@@ -123,8 +123,8 @@ template <typename scalar_t, int MAX_B>
 __global__ void babai_quant_block_kernel_fast(
     scalar_t* __restrict__ W,                   // [C, R]
     uint8_t*  __restrict__ qweight,             // [C, R]
-    const float* __restrict__ scales,
-    const float* __restrict__ qzeros,
+    const float* __restrict__ scales, //G*R
+    const float* __restrict__ qzeros, ////G*R
     const float* __restrict__ A,                // [C, C] float (upper-tri expected)
     const float* __restrict__ invD_all,         // [C] float
     float* __restrict__ Eblk,                   // [B, R] float
@@ -175,9 +175,9 @@ __global__ void babai_quant_block_kernel_fast(
         int g = g_idx ? (int)g_idx[row] : (row / group_size);
         if (g >= G) g = G - 1;
 
-        float s = scales[G * r + g];
+        float s = scales[g * R + r];
         float inv_s = 1/s;
-        float q0 = qzeros[G * r + g];
+        float q0 = qzeros[g * R + r];
         q0 = nearbyintf(q0);
         q0 = fminf(fmaxf(q0, 0.f), maxq_i);
 
@@ -191,11 +191,9 @@ __global__ void babai_quant_block_kernel_fast(
 
         // Propagate to earlier rows i < t
         #pragma unroll
-        for (int i = 0; i < MAX_B; ++i) {
-            if (i < t) {
+        for (int i = 0; i < t; ++i) {
                 float alpha = S_sh[i * MAX_B + t];
                 x[i] = __fmaf_rn(alpha, err, x[i]);
-            }
         }
     }
 }
