@@ -205,9 +205,9 @@ class GPTQ(object):
             
         self.G = int(G)
 
-        scales_gr_1d = scales.view(R, G).transpose(-2, -1).contiguous().reshape(G*R)
-        qzeros_gr_1d = qzeros.view(R, G).transpose(-2, -1).contiguous().reshape(G*R)
-        return scales_gr_1d, qzeros_gr_1d
+        #scales_gr_1d = scales.view(R, G).transpose(-2, -1).contiguous().reshape(G*R)
+        #qzeros_gr_1d = qzeros.view(R, G).transpose(-2, -1).contiguous().reshape(G*R)
+        return scales, qzeros
 
 
     @torch.no_grad()
@@ -227,7 +227,8 @@ class GPTQ(object):
                     self.G
                 )
             return qw
-        else:
+        
+        if self.algorithm == 'gptq':
             qw = kernels.gptq_solver(
                 W.to(torch.float32),
                 A.clone(),

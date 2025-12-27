@@ -155,10 +155,9 @@ __global__ void babai_quant_block_kernel_fast(
     if (r >= R) return;
 
     float x[MAX_B];
-    #pragma unroll
+
     for (int i = 0; i < MAX_B; ++i) x[i] = 0.0f;
 
-    #pragma unroll
     for (int i = 0; i < MAX_B; ++i) {
         if (i < B) {
             int row = block_start + i;
@@ -175,9 +174,9 @@ __global__ void babai_quant_block_kernel_fast(
         int g = g_idx ? (int)g_idx[row] : (row / group_size);
         if (g >= G) g = G - 1;
 
-        float s = scales[g * R + r];
+        float s = scales[G * r + g];
         float inv_s = 1/s;
-        float q0 = qzeros[g * R + r];
+        float q0 = qzeros[G * r + g];
         //q0 = nearbyintf(q0);
         //q0 = fminf(fmaxf(q0, 0.f), maxq_i);
 
@@ -206,8 +205,8 @@ __global__ void babai_quant_block_kernel_fast(
 torch::Tensor babai_solver_cuda(
     torch::Tensor weight,      // [C, R]
     torch::Tensor A,           // [C, C] upper-tri = chol(H)^T
-    torch::Tensor scales, // [G*R]
-    torch::Tensor qzeros, // [G*R]
+    torch::Tensor scales, // [R*G]
+    torch::Tensor qzeros, // [R*G]
     int64_t group_size,
     int64_t bits,
     int64_t block_size,
