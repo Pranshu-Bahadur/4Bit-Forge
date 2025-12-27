@@ -205,8 +205,8 @@ class GPTQ(object):
             
         self.G = int(G)
 
-        #scales_gr_1d = scales.view(R, G).transpose(-2, -1).contiguous().reshape(G*R)
-        #qzeros_gr_1d = qzeros.view(R, G).transpose(-2, -1).contiguous().reshape(G*R)
+        scales = scales.view(R, G).transpose(-2, -1).clone().reshape(G*R).contiguous()
+        qzeros = qzeros.view(R, G).transpose(-2, -1).clone().reshape(G*R).contiguous()
         return scales, qzeros
 
 
