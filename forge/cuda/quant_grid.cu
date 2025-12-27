@@ -75,7 +75,7 @@ __global__ void build_quantization_grid(
             float xmin = local_min;
             float xmax = local_max;
             float maxq = float((1 << bit_width) - 1);
-            float eps  = 0.0;//1e-12f;
+            float eps  = 1e-12f;
             float s, q0;
 
             if (symmetric) {
@@ -85,14 +85,14 @@ __global__ void build_quantization_grid(
             } else {
                 s  = (xmax - xmin) / maxq + eps;
                 float q = -xmin / s;
-                //q = fminf(fmaxf(q, 0.0f), maxq);
-                //q0 = lrintf(q);
-                q0 = q;
+                q = fminf(fmaxf(q, 0.0f), maxq);
+                q0 = lrintf(q);
+                //q0 = q;
             }
 
             scales[g] = s;
-            qzeros[g] = q0;
-            //fminf(fmaxf(q0, 0.0f), maxq);
+            qzeros[g] = fminf(fmaxf(q0, 0.0f), maxq);
+            //
         }
     }
 }
@@ -143,7 +143,7 @@ __global__ void mse_build_quantization_grid(
             float q0 = 0.0;
             float rcp_s = 1.0f / s;
             if (symmetric) {
-               q0 = fminf(fmaxf(lrintf(q0g), 0.0f), maxq);
+               q0 = q0g;//minf(fmaxf(lrintf(q0g), 0.0f), maxq);
             }
             else {
                 q0 = -xmin*rcp_s;
