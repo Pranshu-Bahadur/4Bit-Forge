@@ -145,7 +145,7 @@ class GPTQ(object):
             H.zero_()
             H.diagonal().fill_(1.0)
 
-        H.div_(H.diag()[:, None])
+        #H.div_(H.diag()[:, None])
 
         return H
 
