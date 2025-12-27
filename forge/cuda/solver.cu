@@ -357,7 +357,8 @@ torch::Tensor gptq_solver_cuda(
     
     weight      = weight.contiguous();
     hessian_inv = hessian_inv.contiguous();
-    qmeta_bytes = qmeta_bytes.contiguous();
+    scales = scales.contiguous();
+    qzeros = qzeros.contiguous();
 
     const int64_t C = weight.size(0);
     const int64_t R = weight.size(1);
