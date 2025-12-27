@@ -81,7 +81,7 @@ class GPTQ(object):
     @torch.no_grad()
     def _prep(self):
         _owner = self.owner
-        if (not self._is_owner()) and _owner.prepared:
+        if (not self._is_owner()) and _owner.prepared and (not self.prepared):
             self.H = _owner.H#.clone() #For sanilty..not **really** needed
             self.pruned_ids = _owner.pruned_ids
             self.perm = _owner.perm
@@ -106,6 +106,16 @@ class GPTQ(object):
 
         _owner.W[:, _owner.pruned_ids] = 0
         _owner.prepared = True
+        _owner.H = _owner.H[_owner.perm, _owner.perm]
+
+        if (not self._is_owner()) and _owner.prepared and (not self.prepared):
+            self.H = _owner.H#.clone() #For sanilty..not **really** needed
+            self.pruned_ids = _owner.pruned_ids
+            self.perm = _owner.perm
+            self.perm_inv = _owner.perm_inv
+            self.W[:, self.pruned_ids] = 0
+            self.num_samples = _owner.num_samples.clone()
+            self.prepared = True
     
     @torch.no_grad()
     def quantize(self):
@@ -119,7 +129,6 @@ class GPTQ(object):
     @torch.no_grad()
     def _h_factor(self):
         H = self.H#.clone()
-        H = H.index_select(0, self.perm).index_select(1, self.perm).contiguous()
 
         if self._is_owner():
             zero_cols = self.W.eq(0).all(dim=0)
