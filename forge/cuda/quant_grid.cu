@@ -85,12 +85,14 @@ __global__ void build_quantization_grid(
             } else {
                 s  = (xmax - xmin) / maxq + eps;
                 float q = -xmin / s;
-                q = fminf(fmaxf(q, 0.0f), maxq);
-                q0 = lrintf(q);
+                //q = fminf(fmaxf(q, 0.0f), maxq);
+                //q0 = lrintf(q);
+                q0 = q;
             }
 
             scales[g] = s;
-            qzeros[g] = fminf(fmaxf(q0, 0.0f), maxq);
+            qzeros[g] = q0;
+            //fminf(fmaxf(q0, 0.0f), maxq);
         }
     }
 }
@@ -142,11 +144,11 @@ __global__ void mse_build_quantization_grid(
             float q0 = 0.0;
             float rcp_s = 1.0f / s;
             if (symmetric) {
-               q0 = q0g;//fminf(fmaxf(lrintf(q0g), 0.0f), maxq);
+               q0 = fminf(fmaxf(lrintf(q0g), 0.0f), maxq);
             }
             else {
                 q0 = -xmin*rcp_s;
-                //q0 = q0;//fminf(fmaxf(lrintf(q0), 0.0f), maxq);
+                q0 = fminf(fmaxf(lrintf(q0), 0.0f), maxq);
                 
             }
             float loss = 0.0;
