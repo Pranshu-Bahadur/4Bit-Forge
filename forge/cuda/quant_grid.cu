@@ -75,7 +75,7 @@ __global__ void build_quantization_grid(
             float xmin = local_min;
             float xmax = local_max;
             float maxq = float((1 << bit_width) - 1);
-            float eps  = 1e-12f;
+            float eps  = 0.0;//1e-12f;
             float s, q0;
 
             if (symmetric) {
