@@ -220,7 +220,7 @@ std::tuple<torch::Tensor, torch::Tensor> build_quantization_meta_cuda(
 }
 
 
-void mse_quantization_grid_cuda(
+std::tuple<torch::Tensor, torch::Tensor> mse_quantization_grid_cuda(
     torch::Tensor X, //R*G, 128
     torch::Tensor scales,
     torch::Tensor qzeros,
@@ -254,5 +254,7 @@ void mse_quantization_grid_cuda(
         candidates.data_ptr<float>(), 
         RG, P, group_size, 
         bit_width, norm, symmetric);
+
+    return std::make_tuple(scales, qzeros);
 }
 

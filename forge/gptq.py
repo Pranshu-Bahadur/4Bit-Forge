@@ -194,7 +194,7 @@ class GPTQ(object):
                     dtype=torch.float32,
                     device=Wg.device
                 )
-            kernels.mse_scale_groups_packed(
+            scales, qzeros = kernels.mse_scale_groups_packed(
                     Wg.to(torch.float32),
                     scales,
                     qzeros,
@@ -206,7 +206,7 @@ class GPTQ(object):
             
         self.G = int(G)
 
-        return scales.reshape(G*R), qzeros.reshape(G*R)
+        return scales.view(G, R).reshape(G*R), qzeros.view(G, R).reshape(G*R)
 
 
     @torch.no_grad()

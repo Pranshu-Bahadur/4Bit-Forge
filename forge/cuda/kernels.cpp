@@ -25,7 +25,7 @@ std::tuple<torch::Tensor, torch::Tensor> build_quantization_meta_cuda(
     bool symmetric
 );
 
-void mse_quantization_grid_cuda(
+std::tuple<torch::Tensor, torch::Tensor> mse_quantization_grid_cuda(
     torch::Tensor X, //R*G, 128
     torch::Tensor scales,
     torch::Tensor qzeros,
