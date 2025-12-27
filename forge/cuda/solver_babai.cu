@@ -173,10 +173,11 @@ __global__ void babai_quant_block_kernel_fast(
 
         int g = g_idx ? (int)g_idx[row] : (row / group_size);
         if (g >= G) g = G - 1;
+        float eps  = 1e-12f;
 
-        float s = scales[g * R + r];
-        float inv_s = 1/s;
-        float q0 = qzeros[g * R + r];
+        float s = scales[G * r + g];
+        float inv_s = 1/(s + eps);
+        float q0 = qzeros[G * r + g];
         //q0 = nearbyintf(q0);
         //q0 = fminf(fmaxf(q0, 0.f), maxq_i);
 
