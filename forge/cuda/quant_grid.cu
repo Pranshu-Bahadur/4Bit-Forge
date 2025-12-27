@@ -43,10 +43,10 @@ __global__ void build_quantization_grid(
     const float* __restrict__ X, //R*G, group_size
     float* scales, //R*G
     float* qzeros, //R*G
-    const int64_t __restrict__ RG,
-    const int64_t __restrict__ group_size,
-    const int __restrict__ bit_width,
-    const bool __restrict__ symmetric
+    const int64_t  RG,
+    const int64_t  group_size,
+    const int  bit_width,
+    const bool  symmetric
 ) {
     
     int bid = blockIdx.x;
@@ -101,12 +101,12 @@ __global__ void mse_build_quantization_grid(
     float* scales, //R*G
     float* qzeros, //R*G
     const float* __restrict__ candidates, //candidates
-    const int64_t __restrict__ RG,
-    const int64_t __restrict__ P, //100
-    const int64_t __restrict__ group_size,
-    const int __restrict__ bit_width,
-    const float __restrict__ norm,
-    const bool __restrict__ symmetric
+    const int64_t  RG,
+    const int64_t  P, //100
+    const int64_t  group_size,
+    const int bit_width,
+    const float norm,
+    const bool symmetric
 ) {
 
     int bid = blockIdx.x;

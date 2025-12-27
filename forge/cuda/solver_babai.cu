@@ -263,8 +263,6 @@ torch::Tensor babai_solver_cuda(
     auto Eblk = torch::zeros({block_size, R},
         torch::TensorOptions().dtype(at::kFloat).device(weight.device()));
 
-    auto scales = (scales.dim() == 3) ? scales.view({R * G, 1}) : scales;
-    auto qzeros = (qzeros.dim() == 3) ? qzeros.view({R * G, 1}) : qzeros;
 
     // Cast A and weight to float once
     auto A_f = (A.scalar_type() == at::ScalarType::Float) ? A : A.to(torch::kFloat);
