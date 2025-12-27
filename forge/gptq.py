@@ -204,7 +204,7 @@ class GPTQ(object):
                     W.to(torch.float32),
                     A.clone(),
                     scales.clone(),
-                    qzeros.clone()
+                    qzeros.clone(),
                     self.group_size,
                     self.bits,
                     self.group_size // 4,
