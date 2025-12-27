@@ -213,6 +213,7 @@ class GPTQ(object):
                     g_idx,
                     self.G
                 )
+            return qw
         else:
             qw = kernels.gptq_solver(
                 W.to(torch.float32),
