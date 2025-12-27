@@ -140,7 +140,7 @@ class GPTQ(object):
                 H[:, zero_cols] = 0
                 H[zero_cols, zero_cols] = 1.0
 
-        diag = torch.diag(self.H)
+        diag = torch.diagonal(H)
         damp = float(self.rel_damp) * diag.mean()
         H[range(self.W.shape[-1])][range(self.W.shape[-1])] += damp
 
