@@ -171,7 +171,7 @@ class GPTQ(object):
         W = self.W.clone()
         R, C = W.shape
         G = (C + self.group_size - 1) // self.group_size
-        pad = G * self.group_size - C
+        pad = (G * self.group_size) - C
 
         #R, G, g_size
         if pad:

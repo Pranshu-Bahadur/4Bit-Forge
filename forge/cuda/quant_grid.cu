@@ -54,7 +54,7 @@ __global__ void build_quantization_grid(
     int tid = threadIdx.x;
     int lane = tid % 32;
     int wib = tid / 32; //warps in block
-    int wid = (int64_t)bid * wpb + wib;
+    int wid = (int64_t)((bid * wpb) + wib);
 
 
     for (int64_t g = wid; g < (int64_t)(RG); g += (int64_t)(gridDim.x * wpb)) {
@@ -116,7 +116,7 @@ __global__ void mse_build_quantization_grid(
     int tid = threadIdx.x;
     int lane = tid % 32;
     int wib = tid / 32; //warps in block
-    int wid = (int64_t)bid * wpb + wib;
+    int wid = (int64_t)((bid * wpb) + wib);
 
     float maxq = float((1 << bit_width) - 1);
 
