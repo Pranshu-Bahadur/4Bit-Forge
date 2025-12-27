@@ -59,22 +59,22 @@ class GPTQ(object):
 
     @torch.no_grad()
     def update(self, X : Tensor):
-        if isinstance(self.layer, nn.Linear): #Only supports Linear
-            X = X.reshape(-1, X.shape[-1]).to(torch.float32) #@TODO if upcast needed? addmm might upcast to fp32
-        
-        new_samples = int(X.shape[0])
-        
-        num_samples = int(self.num_samples.item()) #@TODO might cause CPU synch 
-        total_samples = num_samples + new_samples
-        alpha = 2.0 / total_samples
+        if self._is_owner():
+            if isinstance(self.owner.layer, nn.Linear): #Only supports Linear
+                X = X.reshape(-1, X.shape[-1]).to(torch.float32) #@TODO if upcast needed? addmm might upcast to fp32
+            
+            new_samples = int(X.shape[0])
+            
+            num_samples = int(self.owner.num_samples.item()) #@TODO might cause CPU synch 
+            total_samples = num_samples + new_samples
+            alpha = 2.0 / total_samples
 
-        if self.H is None:
-            self.H = torch.zeros((X.shape[-1], X.shape[-1]), device=self.device, dtype=torch.float32)
+            if self.owner.H is None:
+                self.owner.H = torch.zeros((X.shape[-1], X.shape[-1]), device=self.owner.device, dtype=torch.float32)
 
-        beta = num_samples / total_samples
-        self.H.addmm_(X.transpose(-2, -1), X, alpha=alpha, beta=beta)
-        
-        self.num_samples.add_(new_samples)
+            beta = num_samples / total_samples
+            self.owner.H .addmm_(X.transpose(-2, -1), X, alpha=alpha, beta=beta)
+            self.owner.num_samples.add_(new_samples)
     
     @torch.no_grad()
     def _prep(self):
