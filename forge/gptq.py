@@ -71,10 +71,10 @@ class GPTQ(object):
         alpha = 2.0 / total_samples
 
         if self.H is None:
-            self.H = alpha*(X.T@X)
+            self.H = alpha*(X.transpose(0, 1)@X)
         else:
             beta = num_samples / total_samples
-            self.H.addmm_(X.T, X, alpha=alpha, beta=beta)
+            self.H.addmm_(X.transpose(0, 1), X, alpha=alpha, beta=beta)
         
         self.num_samples.add_(new_samples)
     
@@ -109,7 +109,7 @@ class GPTQ(object):
 
         _owner.W[:, _owner.pruned_ids] = 0
         _owner.prepared = True
-        _owner.H = _owner.H[_owner.perm, _owner.perm]
+        _owner.H = _owner.H[_owner.perm][:,_owner.perm]
 
         if (not self._is_owner()) and _owner.prepared and (not self.prepared):
             self.H = _owner.H.clone() #For sanilty..not **really** needed
@@ -139,7 +139,7 @@ class GPTQ(object):
                 H[:, zero_cols] = 0
                 H[zero_cols, zero_cols] = 1.0
 
-                diag = H.diagonal()
+                diag = torch.diag(H)
                 damp = float(self.rel_damp) * diag.mean()
                 H[range(self.W.shape[-1]), range(self.W.shape[-1])] += (damp)
 
