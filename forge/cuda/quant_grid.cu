@@ -85,8 +85,9 @@ __global__ void build_quantization_grid(
             } else {
                 s  = (xmax - xmin) / maxq + eps;
                 float q = -xmin / s;
-                q = fminf(fmaxf(q, 0.0f), maxq);
-                q0 = lrintf(q);
+                
+                q = lrintf(q);
+                q0 = fminf(fmaxf(q, 0.0f), maxq);
                 //q0 = q;
             }
 
@@ -127,7 +128,7 @@ __global__ void mse_build_quantization_grid(
             xmin = -(sg*q0g);
         }
         float best_s = sg;
-        float best_q = fminf(fmaxf(q0g, 0.0f), maxq);
+        float best_q = q0g;
         float best_loss = FLT_MAX;
 
         const float* group = X + (g*group_size);
