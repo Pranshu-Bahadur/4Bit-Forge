@@ -159,14 +159,7 @@ static void launch_gptq_quantize_block_fp32(
     int64_t group_size,
     int64_t bits
 ) {
-    CHECK_CUDA(W); CHECK_CUDA(qweight); CHECK_CUDA(Eblk); CHECK_CUDA(scales); CHECK_CUDA(qzeros);
-    CHECK_CONTIGUOUS(W); CHECK_CONTIGUOUS(qweight); CHECK_CONTIGUOUS(Eblk); CHECK_CONTIGUOUS(scales); CHECK_CONTIGUOUS(qzeros);
-    CHECK_FP32(W); CHECK_U8(qweight); CHECK_FP32(Eblk); CHECK_FP32(scales); CHECK_FP32(qzeros);
-    if (g_idx.has_value()) {
-        CHECK_CUDA(*g_idx);
-        CHECK_CONTIGUOUS(*g_idx);
-        CHECK_I32(*g_idx);
-    }
+    
 
     const int C = (int)W.size(0);
     const int R = (int)W.size(1);
@@ -262,9 +255,7 @@ static void launch_gptq_trsm_block_fp32(
     int64_t block_start,
     int64_t B
 ) {
-    CHECK_CUDA(Eblk); CHECK_CUDA(U);
-    CHECK_CONTIGUOUS(Eblk); CHECK_CONTIGUOUS(U);
-    CHECK_FP32(Eblk); CHECK_FP32(U);
+    
 
     const int C = (int)U.size(0);
     TORCH_CHECK(U.dim() == 2 && U.size(0) == U.size(1), "U must be [C,C]");
@@ -310,9 +301,7 @@ torch::Tensor gptq_solve_fp32(
 ) {
     (void)symmetric; // currently unused in solver; quantize_scalar clamps q0 and uses it.
 
-    CHECK_CUDA(W); CHECK_CUDA(Hinv_u); CHECK_CUDA(scales); CHECK_CUDA(qzeros);
-    CHECK_CONTIGUOUS(W); CHECK_CONTIGUOUS(Hinv_u); CHECK_CONTIGUOUS(scales); CHECK_CONTIGUOUS(qzeros);
-    CHECK_FP32(W); CHECK_FP32(Hinv_u); CHECK_FP32(scales); CHECK_FP32(qzeros);
+    
 
     TORCH_CHECK(W.dim() == 2, "W must be 2D [C,R]");
     TORCH_CHECK(Hinv_u.dim() == 2 && Hinv_u.size(0) == Hinv_u.size(1), "Hinv_u must be [C,C]");
