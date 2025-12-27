@@ -185,7 +185,7 @@ static void launch_gptq_quantize_block_fp32(
 
     cudaStream_t stream = at::cuda::getDefaultCUDAStream().stream();
 
-    const int32_t* gptr = g_idx.has_value() ? (const int32_t*)(g_idx->data_ptr<int>()) : nullptr;
+    const int32_t* gptr = g_idx.has_value() ? (const int32_t*)(g_idx.data_ptr<int>()) : nullptr;
 
     gptq_quantize_block_kernel_fp32<<<grid, block, 0, stream>>>(
         W.data_ptr<float>(),
@@ -329,12 +329,7 @@ torch::Tensor gptq_solve_fp32(
     TORCH_CHECK(scales.numel() == R * G, "scales must have numel == R*G");
     TORCH_CHECK(qzeros.numel() == R * G, "qzeros must have numel == R*G");
 
-    if (g_idx.has_value()) {
-        CHECK_CUDA(*g_idx);
-        CHECK_CONTIGUOUS(*g_idx);
-        CHECK_I32(*g_idx);
-        TORCH_CHECK(g_idx->numel() == C, "g_idx must have numel == C");
-    }
+    
 
     // Allocate qweight [C,R]
     auto qweight = at::empty({C, R}, torch::TensorOptions().dtype(at::kByte).device(W.device()));
