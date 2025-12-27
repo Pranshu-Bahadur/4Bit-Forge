@@ -220,12 +220,11 @@ class GPTQ(object):
                 A.clone(),
                 scales.clone(),
                 qzeros.clone(),
-                self.bits,
                 self.group_size,
+                self.bits,
                 self.group_size // 4,
-                self.symmetric,
-                g_idx
-
+                g_idx,
+                self.G
             )
 
             return qw

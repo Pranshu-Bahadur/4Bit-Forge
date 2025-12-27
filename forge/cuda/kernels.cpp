@@ -35,16 +35,16 @@ void mse_quantization_grid_cuda(
     bool symmetric
 );
 
-torch::Tensor gptq_solve_fp32(
-    torch::Tensor W,            // [C,R] fp32
-    torch::Tensor Hinv_u,       // [C,C] fp32 upper
-    torch::Tensor scales,       // [R*G] fp32
-    torch::Tensor qzeros,       // [R*G] fp32
-    int64_t bits,
+torch::Tensor gptq_solver_cuda(
+    torch::Tensor weight,       // [C, R]
+    torch::Tensor hessian_inv,  // [C, C]
+    torch::Tensor scales, 
+    torch::Tensor qzeros,
     int64_t group_size,
+    int64_t bits,
     int64_t block_size,
-    bool symmetric,
-    torch::Tensor g_idx
+    torch::Tensor g_idx,
+    int64_t G
 );
 
 torch::Tensor babai_solver_cuda(
@@ -75,7 +75,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
 
     m.def(
         "gptq_solver",
-        &gptq_solve_fp32,
+        &gptq_solver_cuda,
         "GPTQ Solver"
     );
 
