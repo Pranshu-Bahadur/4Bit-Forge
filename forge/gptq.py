@@ -155,7 +155,7 @@ class GPTQ(object):
             #print(f"[HESSIAN] factorization failed: {e}")  # enable during bring-up
             H = torch.eye(self.W.shape[-1], device=self.device, dtype=torch.float32)
 
-        H.div_(H.diag()[:, None])
+        #H.div_(H.diag()[:, None])
 
         return H
 
