@@ -229,9 +229,6 @@ torch::Tensor babai_solver_cuda(
     scales = scales.contiguous();
     qzeros = qzeros.contiguous();
     g_idx = g_idx.contiguous();
-
-    int64_t G = G;
-
     // Determine G from qmeta tensor shape
     
 
