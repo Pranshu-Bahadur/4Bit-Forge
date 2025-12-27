@@ -119,7 +119,7 @@ class GPTQ(object):
     @torch.no_grad()
     def _h_factor(self):
         H = self.H.clone()
-        zero_cols = self.W.eq(0).all(dim=0)
+        zero_cols = self.owner.W.eq(0).all(dim=0)
         if zero_cols.any():
             H[zero_cols, :] = 0
             H[:, zero_cols] = 0
