@@ -82,7 +82,7 @@ class GPTQ(object):
     def _prep(self):
         _owner = self.owner
         if (not self._is_owner()) and _owner.prepared and (not self.prepared):
-            self.H = _owner.H#.clone() #For sanilty..not **really** needed
+            self.H = _owner.H.clone() #For sanilty..not **really** needed
             self.pruned_ids = _owner.pruned_ids
             self.perm = _owner.perm
             self.perm_inv = _owner.perm_inv
@@ -96,7 +96,10 @@ class GPTQ(object):
             _owner.H = torch.eye(C, device=_owner.device, dtype=torch.float32)
         
         _owner.pruned_ids = (torch.diag(_owner.H) == 0)
-        _owner.H.diagonal()[_owner.pruned_ids] = 1
+        _owner.H[_owner.pruned_ids, : ] = 0
+        _owner.H[:, _owner.pruned_ids] = 0
+        _owner.H[_owner.pruned_ids, _owner.pruned_ids] = 1
+
     
         if _owner.quantization_order == "activation":
             _owner.perm = torch.argsort(torch.diag(_owner.H), descending=True)
@@ -109,7 +112,7 @@ class GPTQ(object):
         _owner.H = _owner.H[_owner.perm, _owner.perm]
 
         if (not self._is_owner()) and _owner.prepared and (not self.prepared):
-            self.H = _owner.H#.clone() #For sanilty..not **really** needed
+            self.H = _owner.H.clone() #For sanilty..not **really** needed
             self.pruned_ids = _owner.pruned_ids
             self.perm = _owner.perm
             self.perm_inv = _owner.perm_inv
@@ -130,15 +133,15 @@ class GPTQ(object):
     def _h_factor(self):
         H = self.H.clone()
 
-        if self._is_owner():
-            zero_cols = self.W.eq(0).all(dim=0)
-            if zero_cols.any():
+        zero_cols = self.W.eq(0).all(dim=0)
+        if zero_cols.any():
                 H[zero_cols, :] = 0
                 H[:, zero_cols] = 0
-                H.diagonal()[zero_cols] = 1.0
-                diag = self.H.diagonal()
+                H[zero_cols, zero_cols] = 1.0
+
+                diag = H.diagonal()
                 damp = float(self.rel_damp) * diag.mean()
-                diag.add_(damp)
+                H[range(self.W.shape[-1]), range(self.W.shape[-1])] += (damp)
 
         try:
             if self.algorithm == "babai":
@@ -150,8 +153,7 @@ class GPTQ(object):
         except RuntimeError as e:
             self.issue_non_invertible = True
             #print(f"[HESSIAN] factorization failed: {e}")  # enable during bring-up
-            H.zero_()
-            H.diagonal().fill_(1.0)
+            H = torch.eye(self.W.shape[-1], device=self.device, dtype=torch.float32)
 
         H.div_(H.diag()[:, None])
 
