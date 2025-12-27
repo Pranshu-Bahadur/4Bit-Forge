@@ -178,7 +178,6 @@ static void launch_gptq_quantize_block_fp32(
 
     cudaStream_t stream = at::cuda::getDefaultCUDAStream().stream();
 
-    const int32_t* gptr = g_idx.data_ptr<int>();//g_idx.has_value() ? (const int32_t*)() : nullptr;
 
     gptq_quantize_block_kernel_fp32<<<grid, block, 0, stream>>>(
         W.data_ptr<float>(),
@@ -186,7 +185,7 @@ static void launch_gptq_quantize_block_fp32(
         Eblk.data_ptr<float>(),
         scales.data_ptr<float>(),
         qzeros.data_ptr<float>(),
-        gptr,
+        g_idx.data_ptr<int32_t>(),
         C,
         R,
         G,
@@ -299,8 +298,6 @@ torch::Tensor gptq_solve_fp32(
     bool symmetric,
     torch::Tensor g_idx
 ) {
-    (void)symmetric; // currently unused in solver; quantize_scalar clamps q0 and uses it.
-
     
 
     TORCH_CHECK(W.dim() == 2, "W must be 2D [C,R]");
