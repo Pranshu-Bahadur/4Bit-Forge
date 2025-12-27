@@ -126,7 +126,7 @@ class GPTQ(object):
         damp = float(self.rel_damp) * diag.mean()
         diag.add_(damp)
         
-        zero_cols = self.owner.W.eq(0).all(dim=0)
+        zero_cols = self.owner.W.eq(0).all(dim=1)
         if zero_cols.any():
             H[zero_cols, :] = 0
             H[:, zero_cols] = 0
