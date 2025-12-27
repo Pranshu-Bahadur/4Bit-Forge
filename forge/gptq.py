@@ -91,7 +91,7 @@ class GPTQ(object):
             self.prepared = True
             return
         
-        if _owner.H is None or (int(_owner.num_samples.item()) == 0) or torch.isnan(_owner.H).any():
+        if _owner.H is None or (int(_owner.num_samples.item()) == 0) or torch.isnan(_owner.H).any().item():
             C = int(_owner.W.shape[-1])
             _owner.H = torch.eye(C, device=_owner.device, dtype=torch.float32)
         
