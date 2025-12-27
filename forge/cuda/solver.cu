@@ -153,7 +153,7 @@ static void launch_gptq_quantize_block_fp32(
     torch::Tensor Eblk,
     torch::Tensor scales,
     torch::Tensor qzeros,
-    c10::optional<torch::Tensor> g_idx,
+    torch::Tensor g_idx,
     int64_t block_start,
     int64_t B,
     int64_t group_size,
@@ -185,7 +185,7 @@ static void launch_gptq_quantize_block_fp32(
 
     cudaStream_t stream = at::cuda::getDefaultCUDAStream().stream();
 
-    const int32_t* gptr = g_idx.has_value() ? (const int32_t*)(g_idx.data_ptr<int>()) : nullptr;
+    const int32_t* gptr = g_idx.data_ptr<int>();//g_idx.has_value() ? (const int32_t*)() : nullptr;
 
     gptq_quantize_block_kernel_fp32<<<grid, block, 0, stream>>>(
         W.data_ptr<float>(),
