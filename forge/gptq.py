@@ -82,7 +82,7 @@ class GPTQ(object):
     def _prep(self):
         _owner = self.owner
         if (not self._is_owner()) and _owner.prepared and (not self.prepared):
-            self.H = _owner.H.clone() #For sanilty..not **really** needed
+            self.H = _owner.H#.clone() #For sanilty..not **really** needed
             self.pruned_ids = _owner.pruned_ids
             self.perm = _owner.perm
             self.perm_inv = _owner.perm_inv
@@ -112,7 +112,7 @@ class GPTQ(object):
         _owner.H = _owner.H[_owner.perm][:,_owner.perm]
 
         if (not self._is_owner()) and _owner.prepared and (not self.prepared):
-            self.H = _owner.H.clone() #For sanilty..not **really** needed
+            self.H = _owner.H#.clone() #For sanilty..not **really** needed
             self.pruned_ids = _owner.pruned_ids
             self.perm = _owner.perm
             self.perm_inv = _owner.perm_inv
@@ -131,18 +131,18 @@ class GPTQ(object):
 
     @torch.no_grad()
     def _h_factor(self):
-        H = self.H.clone()
+        H = self.H#.clone()
 
+        if self._is_owner():
+            zero_cols = self.W.eq(0).all(dim=0)
+            if zero_cols.any():
+                    H[zero_cols, :] = 0
+                    H[:, zero_cols] = 0
+                    H[zero_cols, zero_cols] = 1.0
 
-        zero_cols = self.W.eq(0).all(dim=0)
-        if zero_cols.any():
-                H[zero_cols, :] = 0
-                H[:, zero_cols] = 0
-                H[zero_cols, zero_cols] = 1.0
-
-        diag = torch.diagonal(H)
-        damp = float(self.rel_damp) * diag.mean()
-        H[range(self.W.shape[-1]), range(self.W.shape[-1])] += damp
+            diag = torch.diagonal(self.H)
+            damp = float(self.rel_damp) * diag.mean()
+            self.H[range(self.W.shape[-1]), range(self.W.shape[-1])] += damp
 
         try:
             if self.algorithm == "babai":
