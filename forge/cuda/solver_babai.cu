@@ -178,6 +178,8 @@ __global__ void babai_quant_block_kernel_fast(
         float s = scales[r * G + g];
         float inv_s = 1/s;
         float q0 = qzeros[r * G + g];
+        q0 = nearbyintf(q0);
+        q0 = fminf(fmaxf(q0, 0.f), maxq_i);
 
         float err, deq;
         uint8_t qb;
