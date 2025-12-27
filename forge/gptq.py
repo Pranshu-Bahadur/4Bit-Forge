@@ -125,7 +125,7 @@ class GPTQ(object):
         self._prep()
         scales, qzeros = self._quant_grid()
         A = self._h_factor()
-        W = self.W.transpose(-2, -1)[self.perm].clone()#.contiguous()
+        W = self.W.clone().transpose(-2, -1)[self.perm]#.contiguous()
         qweight = self._solver(A, W, scales, qzeros)
         return qweight[self.perm_inv].transpose(-2, -1).contiguous(), scales, qzeros
 
