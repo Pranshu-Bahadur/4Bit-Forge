@@ -181,7 +181,7 @@ class GPTQ(object):
         Wg = W.reshape(R*G, self.group_size).contiguous()
 
         scales, qzeros = kernels.build_group_meta_packed(
-                Wg.to(torch.float32),
+                Wg.to(torch.float32).contiguous(),
                 self.bits,
                 self.symmetric
                 )
@@ -195,9 +195,9 @@ class GPTQ(object):
                     device=Wg.device
                 )
             scales, qzeros = kernels.mse_scale_groups_packed(
-                    Wg.to(torch.float32),
-                    scales,
-                    qzeros,
+                    Wg.to(torch.float32).contiguous(),
+                    scales.contiguous(),
+                    qzeros.contiguous(),
                     p,
                     float(norm),
                     self.bits,
