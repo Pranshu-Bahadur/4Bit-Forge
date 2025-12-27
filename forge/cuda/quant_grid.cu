@@ -138,7 +138,6 @@ __global__ void mse_build_quantization_grid(
             vals[v] = group[lane+(32*v)];
         }
 
-        #pragma unroll 8
         for (int p = 0; p < P; p += 1){
             float s = sg *  candidates[p];
             float q0 = 0.0;
