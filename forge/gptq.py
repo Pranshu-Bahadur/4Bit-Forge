@@ -71,10 +71,10 @@ class GPTQ(object):
         alpha = 2.0 / total_samples
 
         if self.H is None:
-            self.H = alpha*(X.transpose(0, 1)@X)
+            self.H = alpha*(X.transpose(-2, -1)@X)
         else:
             beta = num_samples / total_samples
-            self.H.addmm_(X.transpose(0, 1), X, alpha=alpha, beta=beta)
+            self.H.addmm_(X.transpose(-2, -1), X, alpha=alpha, beta=beta)
         
         self.num_samples.add_(new_samples)
     
@@ -125,9 +125,9 @@ class GPTQ(object):
         self._prep()
         scales, qzeros = self._quant_grid()
         A = self._h_factor()
-        W = self.W.transpose(-2, -1)[self.perm, :].contiguous()
+        W = self.W.transpose(-2, -1)[self.perm].contiguous()
         qweight = self._solver(A, W, scales, qzeros)
-        return qweight[self.perm_inv, :].transpose(-2, -1).contiguous(), scales, qzeros
+        return qweight[self.perm_inv].transpose(-2, -1).contiguous(), scales, qzeros
 
     @torch.no_grad()
     def _h_factor(self):
