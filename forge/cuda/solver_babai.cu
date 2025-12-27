@@ -206,8 +206,8 @@ __global__ void babai_quant_block_kernel_fast(
 torch::Tensor babai_solver_cuda(
     torch::Tensor weight,      // [C, R]
     torch::Tensor A,           // [C, C] upper-tri = chol(H)^T
-    torch::Tensor scales, // [R, G, 1] or [R*G, 1]
-    torch::Tensor qzeros, // [R, G, 1] or [R*G, 1]
+    torch::Tensor scales, // [G*R]
+    torch::Tensor qzeros, // [G*R]
     int64_t group_size,
     int64_t bits,
     int64_t block_size,
