@@ -182,9 +182,9 @@ class GPTQ(object):
 
         #R, G, g_size
         if pad:
-            W = torch.nn.functional.pad(W, (0, pad))
+            W = torch.nn.functional.pad(W, (0, int(pad)))
 
-        Wg = W.reshape(R*G, self.group_size).contiguous()
+        Wg = W.reshape(R*int(G), self.group_size).contiguous()
 
         scales, qzeros = kernels.build_group_meta_packed(
                 Wg.to(torch.float32).contiguous(),
