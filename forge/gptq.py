@@ -73,7 +73,7 @@ class GPTQ(object):
                 self.owner.H = torch.zeros((X.shape[-1], X.shape[-1]), device=self.owner.device, dtype=torch.complex64)
 
             beta = num_samples / total_samples
-            self.owner.H .addmm_(X.transpose(-2, -1).conj(), X, alpha=alpha, beta=beta)
+            self.owner.H .addmm_(X.transpose(-2, -1), X.conj(), alpha=alpha, beta=beta)
             self.owner.num_samples.add_(new_samples)
     
     @torch.no_grad()
@@ -147,9 +147,9 @@ class GPTQ(object):
         
 
         if self.algorithm == "babai":
-            H, info = torch.linalg.cholesky_ex(H.conj(), upper=True)  # A where H = A^T A
+            H, info = torch.linalg.cholesky_ex(H, upper=True)  # A where H = A^T A
         else:
-            H, info = torch.linalg.cholesky_ex(H.conj(), upper=False)
+            H, info = torch.linalg.cholesky_ex(H, upper=False)
             H = torch.cholesky_inverse(H, upper=False)    # H^{-1}
             H, info2 = torch.linalg.cholesky_ex(H, upper=True)
             info.add_(info2)
