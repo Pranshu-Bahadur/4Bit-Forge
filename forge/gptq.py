@@ -23,7 +23,7 @@ class GPTQ(object):
         
         self.layer = layer
         self.W = self.layer.weight.clone() #(R, C) => out_features, in_features
-        self.device = self.W.device
+        self.device = device
         self.H = None
         self.num_samples = torch.zeros((), device=self.device, dtype=torch.int64)
         self.bits = bits
