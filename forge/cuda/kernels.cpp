@@ -19,36 +19,44 @@
 
 
 
-std::tuple<torch::Tensor, torch::Tensor> build_group_meta_packed_cuda(
-    torch::Tensor x_groups,   // [G, group_size], any of {f32,f16,bf16,fp8_e4m3*}
+std::tuple<torch::Tensor, torch::Tensor> build_quantization_meta_cuda(
+    torch::Tensor X, //R*G, 128
     int64_t bit_width,
     bool symmetric
 );
 
-torch::Tensor mse_scale_groups_packed_cuda(
-        torch::Tensor x_groups,    // [G, group_size], same dtype set as above
-        torch::Tensor p,           // [P], float32 shrink factors
-        torch::Tensor qmeta_bytes, // [G, sizeof(QMetaPacked)], uint8
-        double maxq,
-        double norm
+std::tuple<torch::Tensor, torch::Tensor> mse_quantization_grid_cuda(
+    torch::Tensor X, //R*G, 128
+    torch::Tensor scales,
+    torch::Tensor qzeros,
+    torch::Tensor candidates,
+    float norm,
+    int64_t bit_width,
+    bool symmetric
 );
 
 torch::Tensor gptq_solver_cuda(
-    torch::Tensor weight,
-    torch::Tensor hessian_inv,
-    torch::Tensor qmeta_bytes,
+    torch::Tensor weight,       // [C, R]
+    torch::Tensor hessian_inv,  // [C, C]
+    torch::Tensor scales, 
+    torch::Tensor qzeros,
     int64_t group_size,
     int64_t bits,
-    int64_t block_size   // if <= 0, infer
+    int64_t block_size,
+    torch::Tensor g_idx,
+    int64_t G
 );
 
 torch::Tensor babai_solver_cuda(
-    torch::Tensor weight,        // [C, R]
-    torch::Tensor A_chol_t,      // [C, C] = Chol(H)^T (upper-tri)
-    torch::Tensor qmeta_bytes,   // [C, G, 4] or [C*G, 4]
+    torch::Tensor weight,      // [C, R]
+    torch::Tensor A,           // [C, C] upper-tri = chol(H)^T
+    torch::Tensor scales, // [R, G, 1] or [R*G, 1]
+    torch::Tensor qzeros, // [R, G, 1] or [R*G, 1]
     int64_t group_size,
     int64_t bits,
-    int64_t block_size
+    int64_t block_size,
+    torch::Tensor g_idx,
+    int G
 );
 
 
@@ -56,12 +64,12 @@ torch::Tensor babai_solver_cuda(
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def(
         "build_group_meta_packed",
-        &build_group_meta_packed_cuda,
+        &build_quantization_meta_cuda,
         "Build packed quantization metadata per group (scale, zero, flags)"
     );
     m.def(
         "mse_scale_groups_packed",
-        &mse_scale_groups_packed_cuda,
+        &mse_quantization_grid_cuda,
         "Refine packed scales per group using MSE search over shrink factors"
     );
 

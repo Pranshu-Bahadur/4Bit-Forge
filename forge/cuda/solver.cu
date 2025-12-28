@@ -158,77 +158,101 @@ template <typename scalar_t, int WARPS_PER_BLOCK, bool VECTORIZED>
 __global__ void gptq_quant_block_kernel(
     scalar_t* __restrict__ W,             // [C, R]
     uint8_t* __restrict__ qweight,        // [C, R]
-    const QMetaPacked* __restrict__ qmeta,// [C * G]
+    const float* __restrict__ scales,     // [R*G]
+    const float* __restrict__ qzeros,     // [R*G]
+    const int32_t* __restrict__ g_idx,    // [C] (optional), maps j -> group
     float* __restrict__ delta_block,      // [B, R]
     int64_t C, int64_t R, int64_t G,
     int64_t block_start, int64_t block_end,
     int64_t group_size,
     uint8_t bits
 ) {
-    const int B = static_cast<int>(block_end - block_start);
+    const int B = (int)(block_end - block_start);
     if (B <= 0) return;
 
-    const int row_in_block = blockIdx.x;
+    const int row_in_block = (int)blockIdx.x;
     if (row_in_block >= B) return;
 
-    const int tid = threadIdx.x;
-    const int j   = static_cast<int>(block_start) + row_in_block;
+    const int tid = (int)threadIdx.x;
+    const int j   = (int)block_start + row_in_block;   // C-index (column being quantized)
+    if (j < 0 || j >= (int)C) return;
 
-    scalar_t* W_row = W + j * R;
-    uint8_t*  Q_row = qweight + j * R;
-    float*    D_row = delta_block + row_in_block * R;
+    scalar_t* W_row = W + (int64_t)j * R;
+    uint8_t*  Q_row = qweight + (int64_t)j * R;
+    float*    D_row = delta_block + (int64_t)row_in_block * R;
 
-    if (VECTORIZED) {
-        const int R_vec          = static_cast<int>(R) / 4;
-        const int group_size_vec = static_cast<int>(group_size) / 4;
-        auto* Q_row_vec          = reinterpret_cast<uint32_t*>(Q_row);
-        auto* D_row_vec          = reinterpret_cast<float4*>(D_row);
+    // group id is a function of j (C-axis), not col (R-axis)
+    int g = g_idx ? (int)g_idx[j] : (j / (int)group_size);
+    if (g < 0) g = 0;
+    if (g >= (int)G) g = (int)G - 1;
+
+    const int maxq_i = (1 << bits) - 1;
+
+    if constexpr (VECTORIZED) {
+        // NOTE: with scales/qzeros laid out as [r*G + g], each of the 4 rows
+        // generally has DIFFERENT (s,q0). So you can't use a single (s,q0) for all 4.
+        // Easiest bring-up: set VECTORIZED=false until you rework the 4-pack path.
+
+        const int R_vec = (int)R / 4;
+        auto* Q_row_vec = reinterpret_cast<uint32_t*>(Q_row);
 
         for (int col_v = tid; col_v < R_vec; col_v += blockDim.x) {
-            const int g = col_v / group_size_vec;
-            const QMetaPacked m = qmeta[j * static_cast<int>(G) + g];
-            float s, inv_s, q0, maxq_g;
-            decode_qmeta(qmeta_to_u32(m), s, inv_s, q0, maxq_g, bits);
+            const int r0 = col_v * 4 + 0;
+            const int r1 = col_v * 4 + 1;
+            const int r2 = col_v * 4 + 2;
+            const int r3 = col_v * 4 + 3;
 
-            float x_vals[4];
-            load_4(W_row + col_v * 4, x_vals);
+            float x0 = (float)W_row[r0];
+            float x1 = (float)W_row[r1];
+            float x2 = (float)W_row[r2];
+            float x3 = (float)W_row[r3];
 
-            float delta_vals[4], deq_vals[4];
-            uint32_t q_packed;
+            // per-row meta: idx = r*G + g
+            float s0  = scales[r0 * (int)G + g], q00 = qzeros[r0 * (int)G + g];
+            float s1  = scales[r1 * (int)G + g], q01 = qzeros[r1 * (int)G + g];
+            float s2  = scales[r2 * (int)G + g], q02 = qzeros[r2 * (int)G + g];
+            float s3  = scales[r3 * (int)G + g], q03 = qzeros[r3 * (int)G + g];
 
-            quantize_process_4(
-                x_vals, inv_s, s, q0, static_cast<int>(maxq_g),
-                delta_vals, q_packed, deq_vals
-            );
+            float inv0 = 1.0f / s0, inv1 = 1.0f / s1, inv2 = 1.0f / s2, inv3 = 1.0f / s3;
 
-            store_4(W_row + col_v * 4, deq_vals);
-            Q_row_vec[col_v] = q_packed;
-            D_row_vec[col_v] = make_float4(
-                delta_vals[0], delta_vals[1],
-                delta_vals[2], delta_vals[3]
-            );
+            float d0, deq0; uint8_t q0;
+            float d1, deq1; uint8_t q1;
+            float d2, deq2; uint8_t q2;
+            float d3, deq3; uint8_t q3;
+
+            quantize_scalar(x0, inv0, s0, q00, maxq_i, d0, q0, deq0);
+            quantize_scalar(x1, inv1, s1, q01, maxq_i, d1, q1, deq1);
+            quantize_scalar(x2, inv2, s2, q02, maxq_i, d2, q2, deq2);
+            quantize_scalar(x3, inv3, s3, q03, maxq_i, d3, q3, deq3);
+
+            W_row[r0] = (scalar_t)deq0; D_row[r0] = d0;
+            W_row[r1] = (scalar_t)deq1; D_row[r1] = d1;
+            W_row[r2] = (scalar_t)deq2; D_row[r2] = d2;
+            W_row[r3] = (scalar_t)deq3; D_row[r3] = d3;
+
+            // pack 4x 8-bit into u32
+            Q_row_vec[col_v] = (uint32_t)q0 | ((uint32_t)q1 << 8) | ((uint32_t)q2 << 16) | ((uint32_t)q3 << 24);
         }
     } else {
-        for (int col = tid; col < static_cast<int>(R); col += blockDim.x) {
-            const int g = col / static_cast<int>(group_size);
-            const QMetaPacked m = qmeta[j * static_cast<int>(G) + g];
-            float s, inv_s, q0, maxq_g;
-            decode_qmeta(qmeta_to_u32(m), s, inv_s, q0, maxq_g, bits);
+        for (int col = tid; col < (int)R; col += blockDim.x) {
+            // idx = r*G + g
+            const int idx = col * (int)G + g;
+            float s  = scales[idx];
+            float q0 = qzeros[idx];
+            float inv_s = 1.0f / s;
 
             float delta, deq;
             uint8_t q_byte;
-            quantize_scalar(
-                static_cast<float>(W_row[col]),
-                inv_s, s, q0, static_cast<int>(maxq_g),
-                delta, q_byte, deq
-            );
 
-            W_row[col] = static_cast<scalar_t>(deq);
+            quantize_scalar((float)W_row[col], inv_s, s, q0, maxq_i, delta, q_byte, deq);
+
+            W_row[col] = (scalar_t)deq;
             Q_row[col] = q_byte;
             D_row[col] = delta;
         }
     }
 }
+
 
 // ----------------------------------------------------------------------------
 // Kernel 2: TRSM (Solve A * X = B)  with A lower-triangular
@@ -320,28 +344,24 @@ __global__ void update_tail_kernel(
 torch::Tensor gptq_solver_cuda(
     torch::Tensor weight,       // [C, R]
     torch::Tensor hessian_inv,  // [C, C]
-    torch::Tensor qmeta_bytes,  // [C, G, 4] or [C*G, 4]
+    torch::Tensor scales, 
+    torch::Tensor qzeros,
     int64_t group_size,
     int64_t bits,
-    int64_t block_size
+    int64_t block_size,
+    torch::Tensor g_idx,
+    int64_t G
 ) {
     TORCH_CHECK(weight.is_cuda(), "weight must be CUDA");
     TORCH_CHECK(hessian_inv.is_cuda(), "hessian_inv must be CUDA");
     
     weight      = weight.contiguous();
     hessian_inv = hessian_inv.contiguous();
-    qmeta_bytes = qmeta_bytes.contiguous();
+    scales = scales.contiguous();
+    qzeros = qzeros.contiguous();
 
     const int64_t C = weight.size(0);
     const int64_t R = weight.size(1);
-
-    // Determine G
-    int64_t G;
-    if (qmeta_bytes.dim() == 3) {
-        G = qmeta_bytes.size(1);
-    } else {
-        G = qmeta_bytes.size(0) / C;
-    }
 
     // Clamp block size
     constexpr int MAX_BLOCK_SIZE = 32;
@@ -351,8 +371,7 @@ torch::Tensor gptq_solver_cuda(
     auto qweight     = torch::empty({C, R}, torch::TensorOptions().dtype(torch::kUInt8).device(weight.device()));
     auto delta_block = torch::empty({block_size, R}, torch::TensorOptions().dtype(at::kFloat).device(weight.device()));
 
-    auto qmeta_flat =
-        (qmeta_bytes.dim() == 3) ? qmeta_bytes.view({C * G, 4}) : qmeta_bytes;
+    
 
     auto stream = at::cuda::getCurrentCUDAStream();
     const bool use_vectorized = (R % 4 == 0) && (group_size % 4 == 0);
@@ -366,7 +385,9 @@ torch::Tensor gptq_solver_cuda(
                 B, threads_quant, 0, stream>>>( \
                 weight.data_ptr<SCALAR_T>(), \
                 qweight.data_ptr<uint8_t>(), \
-                reinterpret_cast<const QMetaPacked*>(qmeta_flat.data_ptr<uint8_t>()), \
+                scales.data_ptr<float>(), \
+                qzeros.data_ptr<float>(), \
+                g_idx.data_ptr<int32_t>(), \
                 delta_block.data_ptr<float>(), \
                 C, R, G, \
                 block_start, block_end, \
@@ -377,7 +398,9 @@ torch::Tensor gptq_solver_cuda(
                 B, threads_quant, 0, stream>>>( \
                 weight.data_ptr<SCALAR_T>(), \
                 qweight.data_ptr<uint8_t>(), \
-                reinterpret_cast<const QMetaPacked*>(qmeta_flat.data_ptr<uint8_t>()), \
+                scales.data_ptr<float>(), \
+                qzeros.data_ptr<float>(), \
+                g_idx.data_ptr<int32_t>(), \
                 delta_block.data_ptr<float>(), \
                 C, R, G, \
                 block_start, block_end, \
@@ -462,7 +485,7 @@ torch::Tensor gptq_solver_cuda(
             W_tail.addmm_(
                 H_cross.t(),
                 E_J.to(weight.scalar_type()),
-                -1.0f, 1.0f
+                1.0f, -1.0f
             );
         }
     }
