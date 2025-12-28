@@ -102,7 +102,10 @@ class GPTQ(object):
 
     
         if self.owner.quantization_order == "activation": 
-            self.owner.perm = torch.argsort(self.owner.H.diag().to(device=self.owner.device)).to(device=self.owner.device) #Babai is back to front -> ascending order
+            if self.owner.algorithm == 'babai':
+                self.owner.perm = torch.argsort(self.owner.H.diag().to(device=self.owner.device), descending=False).to(device=self.owner.device) #Babai is back to front -> ascending order
+            else:
+                self.owner.perm = torch.argsort(self.owner.H.diag().to(device=self.owner.device), descending=True).to(device=self.owner.device)
         else:
             self.owner.perm = torch.arange(int(self.owner.W.shape[-1]), device=self.owner.device)
         self.owner.perm_inv = torch.argsort(self.owner.perm).to(device=self.owner.device)
