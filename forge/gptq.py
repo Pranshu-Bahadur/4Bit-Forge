@@ -61,7 +61,7 @@ class GPTQ(object):
     def update(self, X : Tensor):
         if self._is_owner():
             if isinstance(self.owner.layer, nn.Linear): #Only supports Linear
-                X = X.reshape(-1, X.shape[-1]).to(torch.float32) #@TODO if upcast needed? addmm might upcast to fp32
+                X = X.reshape(-1, X.shape[-1]).to(torch.complex64) #@TODO if upcast needed? addmm might upcast to fp32
             
             new_samples = int(X.shape[0])
             
@@ -70,52 +70,53 @@ class GPTQ(object):
             alpha = 2.0 / total_samples
 
             if self.owner.H is None:
-                self.owner.H = torch.zeros((X.shape[-1], X.shape[-1]), device=self.owner.device, dtype=torch.float32)
+                self.owner.H = torch.zeros((X.shape[-1], X.shape[-1]), device=self.owner.device, dtype=torch.complex64)
 
             beta = num_samples / total_samples
-            self.owner.H .addmm_(X.transpose(-2, -1), X, alpha=alpha, beta=beta)
+            self.owner.H .addmm_(X.transpose(-2, -1).conj(), X, alpha=alpha, beta=beta)
             self.owner.num_samples.add_(new_samples)
     
     @torch.no_grad()
     def _prep(self):
-        _owner = self.owner
-        if (not self._is_owner()) and _owner.prepared and (not self.prepared):
-            self.H = _owner.H#.clone() #For sanilty..not **really** needed
-            self.pruned_ids = _owner.pruned_ids
-            self.perm = _owner.perm
-            self.perm_inv = _owner.perm_inv
+        if self._is_owner() and self.prepared:
+            return
+        if (not self._is_owner()) and self.owner.prepared and (not self.prepared):
+            self.H = self.owner.H#.clone() #For sanilty..not **really** needed
+            self.pruned_ids = self.owner.pruned_ids
+            self.perm = self.owner.perm
+            self.perm_inv = self.owner.perm_inv
             self.W[:, self.pruned_ids] = 0
-            self.num_samples = _owner.num_samples.clone()
+            self.num_samples = self.owner.num_samples.clone()
             self.prepared = True
             return
         
-        if _owner.H is None or (int(_owner.num_samples.item()) == 0) or torch.isnan(_owner.H).any().item():
-            C = int(_owner.W.shape[-1])
-            _owner.H = torch.eye(C, device=_owner.device, dtype=torch.float32)
+        if self.owner.H is None or (int(self.owner.num_samples.item()) == 0) or torch.isnan(self.owner.H).any().item():
+            C = int(self.owner.W.shape[-1])
+            self.owner.H = torch.eye(C, device=self.owner.device, dtype=torch.complex64)
         
-        _owner.pruned_ids = (torch.diag(_owner.H) == 0)
-        _owner.H[_owner.pruned_ids, : ] = 0
-        _owner.H[:, _owner.pruned_ids] = 0
-        _owner.H[_owner.pruned_ids, _owner.pruned_ids] = 1
+        self.owner.pruned_ids = (torch.diag(self.owner.H) == 0)
+        self.owner.H[self.owner.pruned_ids, : ] = 0
+        self.owner.H[:, self.owner.pruned_ids] = 0
+        self.owner.H[self.owner.pruned_ids, self.owner.pruned_ids] = 1
 
     
-        if _owner.quantization_order == "activation":
-            _owner.perm = torch.argsort(torch.diag(_owner.H), descending=True)
+        if self.owner.quantization_order == "activation": 
+            self.owner.perm = torch.argsort(torch.diag(self.owner.H)) #Babai is back to front -> ascending order
         else:
-            _owner.perm = torch.arange(int(_owner.W.shape[-1]), device=_owner.device)
-        _owner.perm_inv = torch.argsort(_owner.perm)
+            self.owner.perm = torch.arange(int(self.owner.W.shape[-1]), device=self.owner.device)
+        self.owner.perm_inv = torch.argsort(self.owner.perm)
 
-        _owner.W[:, _owner.pruned_ids] = 0
-        _owner.prepared = True
-        _owner.H = _owner.H[_owner.perm][:,_owner.perm]
+        self.owner.W[:, self.owner.pruned_ids] = 0
+        self.owner.prepared = True
+        self.owner.H = self.owner.H[self.owner.perm][:,self.owner.perm]
 
-        if (not self._is_owner()) and _owner.prepared and (not self.prepared):
-            self.H = _owner.H#.clone() #For sanilty..not **really** needed
-            self.pruned_ids = _owner.pruned_ids
-            self.perm = _owner.perm
-            self.perm_inv = _owner.perm_inv
+        if (not self._is_owner()) and self.owner.prepared and (not self.prepared):
+            self.H = self.owner.H#.clone() #For sanilty..not **really** needed
+            self.pruned_ids = self.owner.pruned_ids
+            self.perm = self.owner.perm
+            self.perm_inv = self.owner.perm_inv
             self.W[:, self.pruned_ids] = 0
-            self.num_samples = _owner.num_samples.clone()
+            self.num_samples = self.owner.num_samples.clone()
             self.prepared = True
     
     @torch.no_grad()
@@ -131,34 +132,37 @@ class GPTQ(object):
     def _h_factor(self):
         H = self.H#.clone()
 
+        zero_cols = self.W.clone().eq(0).all(dim=0)
+        if zero_cols.any():
+            H[zero_cols, :] = 0
+            H[:, zero_cols] = 0
+            H[zero_cols, zero_cols] = 1.0
+
         if self._is_owner():
-            zero_cols = self.W.clone().eq(0).all(dim=0)
-            if zero_cols.any():
-                    H[zero_cols, :] = 0
-                    H[:, zero_cols] = 0
-                    H[zero_cols, zero_cols] = 1.0
+            
                 
             diag = torch.diagonal(self.H)
             damp = float(self.rel_damp) * diag.mean()
             self.H[range(self.W.shape[-1]), range(self.W.shape[-1])] += damp
-
         
 
-        try:
-            if self.algorithm == "babai":
-                torch.linalg.cholesky(H, upper=True, out=H)  # A where H = A^T A
-            else:
-                torch.linalg.cholesky(H, upper=False, out=H)     # L
-                torch.cholesky_inverse(H, upper=False, out=H)    # H^{-1}
-                torch.linalg.cholesky(H, upper=True, out=H)      # U where H^{-1}=U^T U
-        except RuntimeError as e:
+        if self.algorithm == "babai":
+            H, info = torch.linalg.cholesky_ex(H.conj(), upper=True)  # A where H = A^T A
+        else:
+            H, info = torch.linalg.cholesky_ex(H.conj(), upper=False)
+            H = torch.cholesky_inverse(H, upper=False)    # H^{-1}
+            H, info2 = torch.linalg.cholesky_ex(H, upper=True)
+            info.add_(info2)
+
+        if info.item() > 0:
             self.issue_non_invertible = True
             #print(f"[HESSIAN] factorization failed: {e}")  # enable during bring-up
-            H = torch.eye(self.W.shape[-1], device=self.device, dtype=torch.float32)
+            H = torch.eye(self.W.shape[-1], device=self.device, dtype=torch.complex64)
+        
 
         #H.div_(H.diag()[:, None])
 
-        return H
+        return H.to(torch.float32)
 
 
     @torch.no_grad()
