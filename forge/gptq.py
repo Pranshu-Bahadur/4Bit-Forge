@@ -177,14 +177,14 @@ class GPTQ(object):
         
         W = self.W.clone()
         R, C = W.shape
-        G = (C + self.group_size - 1) / self.group_size
+        G = (C + self.group_size - 1) // self.group_size
         pad = (G * self.group_size) - C
 
         #R, G, g_size
         if pad:
             W = torch.nn.functional.pad(W, (0, int(pad)))
 
-        Wg = W.reshape(R*int(G), self.group_size).contiguous()
+        Wg = W.reshape(R*G, self.group_size).contiguous()
 
         scales, qzeros = kernels.build_group_meta_packed(
                 Wg.to(torch.float32).contiguous(),
