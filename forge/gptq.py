@@ -82,10 +82,10 @@ class GPTQ(object):
         if self._is_owner() and self.prepared:
             return
         if (not self._is_owner()) and self.owner.prepared and (not self.prepared):
-            self.H = self.owner.H#.clone() #For sanilty..not **really** needed
-            self.pruned_ids = self.owner.pruned_ids
-            self.perm = self.owner.perm
-            self.perm_inv = self.owner.perm_inv
+            self.H = self.owner.H.clone() #For sanilty..not **really** needed
+            self.pruned_ids = self.owner.pruned_ids.clone()
+            self.perm = self.owner.perm.clone()
+            self.perm_inv = self.owner.perm_inv.clone()
             self.W[:, self.pruned_ids] = 0
             self.num_samples = self.owner.num_samples.clone()
             self.prepared = True
@@ -112,10 +112,10 @@ class GPTQ(object):
         self.owner.H = self.owner.H[self.owner.perm][:,self.owner.perm]
 
         if (not self._is_owner()) and self.owner.prepared and (not self.prepared):
-            self.H = self.owner.H#.clone() #For sanilty..not **really** needed
-            self.pruned_ids = self.owner.pruned_ids
-            self.perm = self.owner.perm
-            self.perm_inv = self.owner.perm_inv
+            self.H = self.owner.H.clone() #For sanilty..not **really** needed
+            self.pruned_ids = self.owner.pruned_ids.clone()
+            self.perm = self.owner.perm.clone()
+            self.perm_inv = self.owner.perm_inv.clone()
             self.W[:, self.pruned_ids] = 0
             self.num_samples = self.owner.num_samples.clone()
             self.prepared = True
@@ -131,7 +131,7 @@ class GPTQ(object):
 
     @torch.no_grad()
     def _h_factor(self):
-        H = self.H#.clone()
+        H = self.H.clone()
 
         zero_cols = self.W.clone().eq(0).all(dim=0)
         if zero_cols.any():
@@ -139,12 +139,11 @@ class GPTQ(object):
             H[:, zero_cols] = 0
             H[zero_cols, zero_cols] = 1.0
 
-        if self._is_owner():
             
                 
-            diag = torch.diag(self.H)
-            damp = float(self.rel_damp) * diag.mean()
-            self.H[range(self.W.shape[-1]), range(self.W.shape[-1])] += damp
+        diag = torch.diag(H)
+        damp = float(self.rel_damp) * diag.mean()
+        H[range(self.W.shape[-1]), range(self.W.shape[-1])] += damp
         
 
         if self.algorithm == "babai":
@@ -163,7 +162,7 @@ class GPTQ(object):
 
         #H.div_(H.diag()[:, None])
 
-        return H.to(torch.float32)
+        return H#.to(torch.float32)
 
 
     @torch.no_grad()
