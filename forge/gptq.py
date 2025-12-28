@@ -16,7 +16,7 @@ class GPTQ(object):
                  quantization_scale : str = "mse",
                  quantization_order : str = "activation",
                  rel_damp : float = 1e-2,
-                 algorithm : str = "babai",
+                 algorithm : str = "gptq", #@TODO Note babai is a WIP
                  owner = None,
                  device = None
                  ):
@@ -142,8 +142,7 @@ class GPTQ(object):
             H[:, zero_cols] = 0
             H[zero_cols, zero_cols] = 1.0
 
-            
-                
+        
         diag = torch.diag(H)
         damp = float(self.rel_damp) * diag.mean()
         H[range(self.W.shape[-1]), range(self.W.shape[-1])] += damp
