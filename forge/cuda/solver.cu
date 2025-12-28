@@ -485,7 +485,7 @@ torch::Tensor gptq_solver_cuda(
             W_tail.addmm_(
                 H_cross.t(),
                 E_J.to(weight.scalar_type()),
-                -1.0f, 1.0f
+                1.0f, -1.0f
             );
         }
     }

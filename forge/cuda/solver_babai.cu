@@ -193,7 +193,7 @@ __global__ void babai_quant_block_kernel_fast(
         #pragma unroll
         for (int i = 0; i < t; ++i) {
                 float alpha = S_sh[(i * MAX_B) + t];
-                x[i] = __fmaf_rn(alpha, err, x[i]);
+                x[i] = __fmaf_rn(-alpha, err, x[i]);
         }
     }
 }
@@ -313,7 +313,7 @@ torch::Tensor babai_solver_cuda(
 
             auto W_left = weight.narrow(0, 0, block_start);
             auto A_view = A_tmp.narrow(0, 0, block_start).narrow(1, 0, B_long);
-            W_left.addmm_(A_view, Eblk_view, /*beta=*/1.0, /*alpha=*/1.0);
+            W_left.addmm_(A_view, Eblk_view, /*beta=*/1.0, /*alpha=*/-1.0);
         }
     }
 

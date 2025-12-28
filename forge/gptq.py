@@ -177,12 +177,12 @@ class GPTQ(object):
         
         W = self.W.clone()
         R, C = W.shape
-        G = (C + self.group_size - 1) // self.group_size
+        G = (C + self.group_size - 1) / self.group_size
         pad = (G * self.group_size) - C
 
         #R, G, g_size
         if pad:
-            W = torch.nn.functional(W, (0, pad))
+            W = torch.nn.functional.pad(W, (0, pad))
 
         Wg = W.reshape(R*G, self.group_size).contiguous()
 
@@ -219,7 +219,7 @@ class GPTQ(object):
 
     @torch.no_grad()
     def _solver(self, A, W, scales, qzeros):
-        g_idx = (self.perm // self.group_size).to(torch.int32)
+        g_idx = (self.perm / self.group_size).to(torch.int32)
 
         if self.algorithm == 'babai':
             qw = kernels.babai_solver(
