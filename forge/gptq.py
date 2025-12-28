@@ -62,7 +62,7 @@ class GPTQ(object):
     def update(self, X : Tensor):
         if self._is_owner():
             if isinstance(self.owner.layer, nn.Linear): #Only supports Linear
-                X = X.reshape(-1, X.shape[-1]).to(device=self.owner.device, dtype=torch.complex64) #@TODO if upcast needed? addmm might upcast to fp32
+                X = X.reshape(-1, X.shape[-1]).to(device=self.owner.device, dtype=torch.float32) #@TODO if upcast needed? addmm might upcast to fp32
             
             new_samples = int(X.shape[0])
             
@@ -71,10 +71,10 @@ class GPTQ(object):
             alpha = 2.0 / total_samples
 
             if self.owner.H is None:
-                self.owner.H = torch.zeros((X.shape[-1], X.shape[-1]), device=self.owner.device, dtype=torch.complex64)
+                self.owner.H = torch.zeros((X.shape[-1], X.shape[-1]), device=self.owner.device, dtype=torch.float32)
 
             beta = num_samples / total_samples
-            self.owner.H .addmm_(X.transpose(-2, -1), X.conj(), alpha=alpha, beta=beta)
+            self.owner.H .addmm_(X.transpose(-2, -1), X, alpha=alpha, beta=beta)
             self.owner.num_samples.add_(new_samples)
     
     @torch.no_grad()
@@ -93,7 +93,7 @@ class GPTQ(object):
         
         if self.owner.H is None or (int(self.owner.num_samples.item()) == 0) or torch.isnan(self.owner.H).any().item():
             C = int(self.owner.W.shape[-1])
-            self.owner.H = torch.eye(C, device=self.owner.device, dtype=torch.complex64)
+            self.owner.H = torch.eye(C, device=self.owner.device, dtype=torch.float32)
         
         self.owner.pruned_ids = (torch.diag(self.owner.H) == 0)
         self.owner.H[self.owner.pruned_ids, : ] = 0
@@ -102,10 +102,10 @@ class GPTQ(object):
 
     
         if self.owner.quantization_order == "activation": 
-            self.owner.perm = torch.argsort(torch.diag(self.owner.H)) #Babai is back to front -> ascending order
+            self.owner.perm = torch.argsort(self.owner.H.diag().to(device=self.owner.device)).to(device=self.owner.device) #Babai is back to front -> ascending order
         else:
             self.owner.perm = torch.arange(int(self.owner.W.shape[-1]), device=self.owner.device)
-        self.owner.perm_inv = torch.argsort(self.owner.perm)
+        self.owner.perm_inv = torch.argsort(self.owner.perm).to(device=self.owner.device)
 
         self.owner.W[:, self.owner.pruned_ids] = 0
         self.owner.prepared = True
@@ -157,8 +157,8 @@ class GPTQ(object):
 
         if info.item() > 0:
             self.issue_non_invertible = True
-            #print(f"[HESSIAN] factorization failed: {e}")  # enable during bring-up
-            H = torch.eye(self.W.shape[-1], device=self.device, dtype=torch.complex64)
+            print(f"[HESSIAN] factorization failed at {self.layer.name}")  # enable during bring-up
+            H = torch.eye(self.W.shape[-1], device=self.device, dtype=torch.float32)
         
 
         #H.div_(H.diag()[:, None])
