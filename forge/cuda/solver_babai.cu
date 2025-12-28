@@ -193,7 +193,7 @@ __global__ void babai_quant_block_kernel_fast(
         #pragma unroll
         for (int i = 0; i < t; ++i) {
                 float alpha = S_sh[(i * MAX_B) + t];
-                x[i] = __fmaf_rn(alpha, err, x[i]);
+                x[i] = __fmaf_rn(-alpha, err, x[i]);
         }
     }
 }
