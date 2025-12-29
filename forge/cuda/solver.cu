@@ -123,7 +123,7 @@ torch::Tensor gptq_solver_cuda(
 
         gptq_f2b_intrablock_kernel<<<grid, threads, 0, stream>>>(
             W.data_ptr<float>(),
-            U.data_ptr<float(),
+            U.data_ptr<float>(),
             qweight.data_ptr<uint8_t>(),
             scales.data_ptr<float>(),
             qzeros.data_ptr<float>(),
@@ -136,7 +136,7 @@ torch::Tensor gptq_solver_cuda(
         );
         if (block_end < C) {
             auto U_cross = U.narrow(0, block_start, B_long).narrow(1, block_end, C - block_end);
-            auto E_j = Eblk.narrow(0, 0, B_long).contiguous();
+            auto E_J = Eblk.narrow(0, 0, B_long).contiguous();
             W.narrow(0, block_end, C - block_end).addmm_(
                 U_cross.t(),
                 E_J,
