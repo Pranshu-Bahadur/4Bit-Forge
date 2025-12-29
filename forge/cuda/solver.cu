@@ -29,9 +29,11 @@ __global__ void gptq_f2b_intrablock_kernel(
     uint8_t* __restrict__ qweight, // {C, R} qweight
     const float* __restrict__ scales, // {C, R} scales
     const float* __restrict__ qzeros, // {C, R} qzeros
+    const int32_t* __restrict__ g_idx,
     float* __restrict__  Eblk, // {B, R} error
     uint8_t bits,
-    int64_t R, int64_t C, int64_t B, 
+    int64_t R, int64_t C, int64_t B,  
+    int64_t G, int64_t group_size,
     int64_t start 
 ) {
 
@@ -66,10 +68,12 @@ __global__ void gptq_f2b_intrablock_kernel(
 
     for (int t = 0; t < B; ++t) {
         int cid = start + t;
+        int g = g_idx ? (int)g_idx[cif] : (cid / group_size);
+        if (g >= G) g = G - 1;
 
-        float s = scales[(cid * R) + rid];
+        float s = scales[(rid * G) + g];
         float inv_s = 1/(s + eps);
-        float q0 = qzeros[(cid * R) + rid];
+        float q0 = qzeros[(rid * G) + g];
 
         float error, deq;
         uint8_t qb;
@@ -93,7 +97,10 @@ torch::Tensor gptq_solver_cuda(
     torch::Tensor U,  // [C, C]
     torch::Tensor scales,  //{C, R}
     torch::Tensor qzeros, //{C, R}
-    int64_t bits
+    int64_t bits,
+    torch::Tensor g_idx,
+    int64_t G,
+    int64_t group_size
 ) {
 
     W      = W.contiguous();
@@ -103,6 +110,7 @@ torch::Tensor gptq_solver_cuda(
     U = U.contiguous();
     scales = scales.contiguous();
     qzeros = qzeros.contiguous();
+    g_idx = g_idx.contiguous();
 
     auto qweight     = torch::empty({C, R}, torch::TensorOptions().dtype(torch::kUInt8).device(W.device()));
 
@@ -130,11 +138,14 @@ torch::Tensor gptq_solver_cuda(
             qweight.data_ptr<uint8_t>(),
             scales.data_ptr<float>(),
             qzeros.data_ptr<float>(),
+            g_idx.data_ptr<int32_t>(),
             Eblk.data_ptr<float>(),
             (uint8_t)bits,
             (int64_t)R, 
             (int64_t)C,
             B_long,
+            (int64_t) G,
+            (int64_t) group_size,
             (int64_t) block_start
         );
         if (block_end < C) {
