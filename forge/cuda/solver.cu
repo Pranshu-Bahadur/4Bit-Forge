@@ -29,7 +29,7 @@ __global__ void gptq_f2b_intrablock_kernel(
     uint8_t* __restrict__ qweight, // {C, R} qweight
     const float* __restrict__ scales, // {C, R} scales
     const float* __restrict__ qzeros, // {C, R} qzeros
-    float* __restrict__  Dblk, // {B, R} error
+    float* __restrict__  Eblk, // {B, R} error
     uint8_t bits,
     int64_t R, int64_t C, int64_t B, 
     int64_t start 
