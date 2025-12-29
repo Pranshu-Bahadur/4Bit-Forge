@@ -38,7 +38,7 @@ __global__ void gptq_f2b_intrablock_kernel(
     int tid = threadIdx.x;
     int rid = (int64_t)blockIdx.x * blockDim.x + tid;
 
-    __shared__ float smem[32*32]; //Note block_size B = 32
+    __shared__ float smem[16*16]; //Note block_size B = 32
 
     float eps  = 1e-12f;
 
@@ -56,7 +56,7 @@ __global__ void gptq_f2b_intrablock_kernel(
 
     if (rid >= R) return;
 
-    float x[32];
+    float x[16];
 
     for (int i = 0; i < B; ++i) {
         x[i] = W[(start + i) * R + rid];
