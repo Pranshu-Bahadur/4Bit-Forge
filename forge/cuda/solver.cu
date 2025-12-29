@@ -161,11 +161,12 @@ torch::Tensor gptq_solver_cuda(
             dim3 grd((B + tx - 1) / tx, (C_tail + ty - 1) / ty);
 
             pack_U_cross_T<<<grd, blk, 0, stream>>>(
-                U_tmp.data_ptr<float>(),   // big buffer [C, block_size]
+                U_tmp.data_ptr<float>(),
                 U.data_ptr<float>(),
-                (int)C, (int)B,
+                (int)C, (int)B, (int)block_size,
                 (int)block_start, (int)block_end
             );
+
 
             auto U_view = U_tmp.narrow(0, 0, C_tail).narrow(1, 0, B_long); // [C_tail, B]
             auto W_tail = W.narrow(0, block_end, C_tail);                  // [C_tail, R]
