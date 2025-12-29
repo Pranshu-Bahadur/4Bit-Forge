@@ -65,7 +65,10 @@ class GPTQ(object):
                 X = X.reshape(-1, X.shape[-1]).to(device=self.owner.device, dtype=torch.float32) #@TODO if upcast needed? addmm might upcast to fp32
             
             new_samples = int(X.shape[0])
-            
+
+            if new_samples == 0:
+                return
+    
             num_samples = int(self.owner.num_samples.item()) #@TODO might cause CPU synch 
             total_samples = num_samples + new_samples
             alpha = 2.0 / total_samples
