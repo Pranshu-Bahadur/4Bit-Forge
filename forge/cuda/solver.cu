@@ -117,7 +117,7 @@ torch::Tensor gptq_solver_cuda(
     auto qweight     = torch::empty({C, R}, torch::TensorOptions().dtype(torch::kUInt8).device(W.device()));
 
     auto stream = at::cuda::getCurrentCUDAStream();
-    const int threads = 1024;
+    const int threads = 512;
     int64_t block_size = 32;
 
     auto Eblk = torch::empty({block_size, R}, torch::TensorOptions().dtype(at::kFloat).device(W.device()));
