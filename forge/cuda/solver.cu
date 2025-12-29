@@ -43,7 +43,7 @@ __global__ void gptq_f2b_intrablock_kernel(
     float eps  = 1e-12f;
 
     float y[32];
-    #pragma unroll
+
     for (int r = 0; r < 32; ++r) {
         float v = 0.f;
         if (r < B && lane < B && r <= lane) {
