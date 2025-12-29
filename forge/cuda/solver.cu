@@ -38,7 +38,7 @@ __global__ void gptq_f2b_intrablock_kernel(
     int tid = threadIdx.x;
     int rid = (int64_t)blockIdx.x * blockDim.x + tid;
 
-    __shared__ float smem[16*16]; //Note block_size B = 32
+    __shared__ float smem[32*32]; //Note block_size B = 32
 
     float eps  = 1e-12f;
 
@@ -56,7 +56,7 @@ __global__ void gptq_f2b_intrablock_kernel(
 
     if (rid >= R) return;
 
-    float x[16];
+    float x[32];
 
     for (int i = 0; i < B; ++i) {
         x[i] = W[(start + i) * R + rid];
@@ -107,8 +107,8 @@ torch::Tensor gptq_solver_cuda(
     auto qweight     = torch::empty({C, R}, torch::TensorOptions().dtype(torch::kUInt8).device(W.device()));
 
     auto stream = at::cuda::getCurrentCUDAStream();
-    const int threads = 512;
-    int64_t block_size = 16;
+    const int threads = 256;
+    int64_t block_size = 32;
 
     auto Eblk = torch::empty({block_size, R}, torch::TensorOptions().dtype(at::kFloat).device(W.device()));
     const int grid = (static_cast<int>(R) + threads - 1) / threads;
@@ -135,10 +135,10 @@ torch::Tensor gptq_solver_cuda(
         );
         if (block_end < C) {
             auto U_cross = U.narrow(0, block_start, B_long).narrow(1, block_end, C - block_end);
-            auto E_J = Eblk.narrow(0, 0, B_long).contiguous();
+            
             W.narrow(0, block_end, C - block_end).addmm_(
                 U_cross.t(),
-                E_J,
+                Eblk.narrow(0, 0, B_long),
                 1.0f, -1.0f
             );
         }
