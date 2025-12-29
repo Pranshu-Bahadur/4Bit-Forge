@@ -36,15 +36,11 @@ std::tuple<torch::Tensor, torch::Tensor> mse_quantization_grid_cuda(
 );
 
 torch::Tensor gptq_solver_cuda(
-    torch::Tensor weight,       // [C, R]
-    torch::Tensor hessian_inv,  // [C, C]
-    torch::Tensor scales, 
-    torch::Tensor qzeros,
-    int64_t group_size,
-    int64_t bits,
-    int64_t block_size,
-    torch::Tensor g_idx,
-    int64_t G
+    torch::Tensor W,       // [C, R]
+    torch::Tensor U,  // [C, C]
+    torch::Tensor scales,  //{C, R}
+    torch::Tensor qzeros, //{C, R}
+    int64_t bits
 );
 
 torch::Tensor babai_solver_cuda(

@@ -155,15 +155,13 @@ class GPTQ(object):
             H = torch.cholesky_inverse(H, upper=False)    # H^{-1}
             H, info2 = torch.linalg.cholesky_ex(H, upper=True)
             info.add_(info2)
+            H.div_(H.diag()[:, None])
 
         if info.item() > 0:
             self.issue_non_invertible = True
             print(f"[HESSIAN] factorization failed at {self.layer.name}")  # enable during bring-up
             H = torch.eye(self.W.shape[-1], device=self.device, dtype=torch.float32)
         
-
-        #H.div_(H.diag()[:, None])
-
         return H#.to(torch.float32)
 
 
@@ -236,16 +234,16 @@ class GPTQ(object):
             return qw
         
         if self.algorithm == 'gptq':
+            C, _ = W.shape
+
+            scales = scales.clone().reshape(-1).repeat_interleave(self.group_size, dim=1)[:, :C][:, self.perm].transpose(-2, -1)   # (C, R) fp32
+            qzeros = qzeros.clone().reshape(-1).repeat_interleave(self.group_size, dim=1)[:, :C][:, self.perm].transpose(-2, -1) 
             qw = kernels.gptq_solver(
                 W.to(torch.float32),
                 A.clone(),
                 scales.clone(),
                 qzeros.clone(),
-                self.group_size,
                 self.bits,
-                self.group_size // 4,
-                g_idx,
-                self.G
             )
 
             return qw
