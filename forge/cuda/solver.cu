@@ -38,7 +38,7 @@ __global__ void gptq_f2b_intrablock_kernel(
     int tid = threadIdx.x;
     int rid = (int64_t)blockIdx.x * blockDim.x + tid;
 
-    __shared__ float smem[32*32]; //Note block_size B = 32
+    __shared__ float smem[64*64]; //Note block_size B = 32
 
     float eps  = 1e-12f;
 
@@ -56,7 +56,7 @@ __global__ void gptq_f2b_intrablock_kernel(
 
     if (rid >= R) return;
 
-    float x[32];
+    float x[64];
 
     for (int i = 0; i < B; ++i) {
         x[i] = W[(start + i) * R + rid];
@@ -107,8 +107,8 @@ torch::Tensor gptq_solver_cuda(
     auto qweight     = torch::empty({C, R}, torch::TensorOptions().dtype(torch::kUInt8).device(W.device()));
 
     auto stream = at::cuda::getCurrentCUDAStream();
-    const int threads = 256;
-    int64_t block_size = 32;
+    const int threads = 128;
+    int64_t block_size = 64;
 
     auto Eblk = torch::empty({block_size, R}, torch::TensorOptions().dtype(at::kFloat).device(W.device()));
     const int grid = (static_cast<int>(R) + threads - 1) / threads;
