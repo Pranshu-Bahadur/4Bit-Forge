@@ -222,7 +222,7 @@ class GPTQ(object):
     def _solver(self, A, W, scales, qzeros):
         g_idx = (self.perm // self.group_size).to(torch.int32)
 
-        if self.algorithm == 'babai':
+        if self.algorithm == 'babai': #@TODO Fix babai kernel
             qw = kernels.babai_solver(
                     W.to(torch.float32),
                     A, #.clone(),
