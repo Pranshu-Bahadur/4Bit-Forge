@@ -68,7 +68,7 @@ __global__ void gptq_f2b_intrablock_kernel(
 
     for (int t = 0; t < B; ++t) {
         int cid = start + t;
-        int g = g_idx ? (int)g_idx[cif] : (cid / group_size);
+        int g = g_idx ? (int)g_idx[cid] : (cid / group_size);
         if (g >= G) g = G - 1;
 
         float s = scales[(rid * G) + g];
