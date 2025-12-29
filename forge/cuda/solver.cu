@@ -137,7 +137,6 @@ torch::Tensor gptq_solver_cuda(
             (uint8_t)bits,
             (int64_t)R, 
             (int64_t)C,
-            B_long,
             (int64_t) block_start
         );
         if (block_end < C) {
