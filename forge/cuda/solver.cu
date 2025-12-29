@@ -30,6 +30,8 @@ __global__ void gptq_f2b_intrablock_kernel(
     const float* __restrict__ scales, // {C, R} scales
     const float* __restrict__ qzeros, // {C, R} qzeros
     float* __restrict__  Eblk, // {B, R} error
+    const int32_t* __restrict__ g_idx,
+    int64_t G, int64_t group_size, 
     uint8_t bits,
     int64_t R, int64_t C, int64_t B, 
     int64_t start 
@@ -67,9 +69,11 @@ __global__ void gptq_f2b_intrablock_kernel(
     for (int t = 0; t < B; ++t) {
         int cid = start + t;
 
-        float s = scales[(cid * R) + rid];
+        int g = g_idx ? (int)g_idx[cid] : (cid / group_size);
+        if (g >= G) g = G - 1;
+        float s = scales[(rid * G) + g];
         float inv_s = 1/(s + eps);
-        float q0 = qzeros[(cid * R) + rid];
+        float q0 = qzeros[(rid * G) + g];
 
         float error, deq;
         uint8_t qb;
@@ -93,6 +97,9 @@ torch::Tensor gptq_solver_cuda(
     torch::Tensor U,  // [C, C]
     torch::Tensor scales,  //{C, R}
     torch::Tensor qzeros, //{C, R}
+    torch::Tensor g_idx,
+    int64_t G,
+    int64_t group_size,
     int64_t bits
 ) {
 
@@ -103,6 +110,7 @@ torch::Tensor gptq_solver_cuda(
     U = U.contiguous();
     scales = scales.contiguous();
     qzeros = qzeros.contiguous();
+    g_idx = g_idx.contiguous();
 
     auto qweight     = torch::empty({C, R}, torch::TensorOptions().dtype(torch::kUInt8).device(W.device()));
 
@@ -127,6 +135,9 @@ torch::Tensor gptq_solver_cuda(
             scales.data_ptr<float>(),
             qzeros.data_ptr<float>(),
             Eblk.data_ptr<float>(),
+            g_idx.data_ptr<int32_t>(),
+            G,
+            group_size,
             (uint8_t)bits,
             (int64_t)R, 
             (int64_t)C,
@@ -136,8 +147,8 @@ torch::Tensor gptq_solver_cuda(
         if (block_end < C) {
 
             W.narrow(0, block_end, C - block_end).addmm_(
-                U.narrow(0, block_start, B_long).narrow(1, block_end, C - block_end).t(),
-                Eblk.narrow(0, 0, B_long),
+                U.narrow(0, block_start, B_long).narrow(1, block_end, C - block_end).t().contiguous(),
+                Eblk.narrow(0, 0, B_long).contiguous(),
                 1.0f, -1.0f
             );
         }
