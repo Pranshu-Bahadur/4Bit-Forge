@@ -38,21 +38,25 @@ __global__ void gptq_f2b_intrablock_kernel(
     int tid = threadIdx.x;
     int rid = (int64_t)blockIdx.x * blockDim.x + tid;
     int lane = tid & 31;
+    unsigned mask = __ballot_sync(__activemask(), true);
+
 
     float eps  = 1e-12f;
-
-    float y[32];
-
-    for (int r = 0; r < 32; ++r) {
-        if (r <= lane) {
-            y[r] = U[(start + r) * C + (start + lane)];
-        } else {
-            y[r] = 0.0f;
-        }
-    }
-    float x[32];
-
     if (rid < R) {
+        float y[32];
+
+        #pragma unroll
+        for (int r = 0; r < 32; ++r) {
+            float v = 0.f;
+            if (r < B && lane < B && r <= lane) {
+                v = U[(start + r) * C + (start + lane)];
+            }
+            y[r] = v;
+        }
+
+        float x[32];
+
+
         for (int i = 0; i < B; ++i) x[i] = W[(start + i) * R + rid];
 
         const int maxq_i = (1 << bits) - 1;
@@ -73,7 +77,7 @@ __global__ void gptq_f2b_intrablock_kernel(
             W[(cid * R) + rid]       = deq;
             Eblk[(t * R) + rid]      = error;
             for (int k = t+1; k < B; ++k) {
-                float alpha = __shfl_sync(__ballot_sync(__activemask(), true), y[t], k);
+                float alpha = __shfl_sync(mask, y[t], k);
                 x[k] = __fmaf_rn(-alpha, error, x[k]);
             }
         }
