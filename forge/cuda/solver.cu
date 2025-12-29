@@ -88,24 +88,6 @@ __global__ void gptq_f2b_intrablock_kernel(
 }
 
 
-__global__ void pack_U_cross_T(
-    float* __restrict__ U_packed,   // [C_tail, ld]
-    const float* __restrict__ U,    // [C, C]
-    int C, int B, int ld,
-    int start, int end
-) {
-    int k        = blockIdx.x * blockDim.x + threadIdx.x;
-    int tail_row = blockIdx.y * blockDim.y + threadIdx.y;
-    int C_tail   = C - end;
-    if (k >= B || tail_row >= C_tail) return;
-
-    float a = U[(start + k) * C + (end + tail_row)];
-    U_packed[tail_row * ld + k] = a;   
-}
-
-
-
-
 torch::Tensor gptq_solver_cuda(
     torch::Tensor W,       // [C, R]
     torch::Tensor U,  // [C, C]
@@ -129,8 +111,6 @@ torch::Tensor gptq_solver_cuda(
     int64_t block_size = 32;
 
     auto Eblk = torch::empty({block_size, R}, torch::TensorOptions().dtype(at::kFloat).device(W.device()));
-    auto U_tmp = torch::empty({C, block_size},
-        torch::TensorOptions().dtype(at::kFloat).device(W.device()));
     const int grid = (static_cast<int>(R) + threads - 1) / threads;
 
     for (int64_t block_start = 0; block_start < C; block_start += block_size) {
@@ -154,24 +134,12 @@ torch::Tensor gptq_solver_cuda(
             (int64_t) block_start
         );
         if (block_end < C) {
-            int C_tail = (int)C - (int)block_end;
 
-            const int tx = 16, ty = 16;
-            dim3 blk(tx, ty);
-            dim3 grd((B + tx - 1) / tx, (C_tail + ty - 1) / ty);
-
-            pack_U_cross_T<<<grd, blk, 0, stream>>>(
-                U_tmp.data_ptr<float>(),
-                U.data_ptr<float>(),
-                (int)C, (int)B, (int)block_size,
-                (int)block_start, (int)block_end
+            W.narrow(0, block_end, C - block_end).addmm_(
+                U.narrow(0, block_start, B_long).narrow(1, block_end, C - block_end).t().contiguous(),
+                Eblk.narrow(0, 0, B_long).contiguous(),
+                1.0f, -1.0f
             );
-
-
-            auto U_view = U_tmp.narrow(0, 0, C_tail).narrow(1, 0, B_long); // [C_tail, B]
-            auto E_view = Eblk.narrow(0, 0, B_long);                       // [B, R]
-
-            W.narrow(0, block_end, C_tail).addmm_(U_view, E_view, 1.0f, -1.0f);
         }
     }
     return qweight;
