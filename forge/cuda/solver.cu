@@ -42,9 +42,9 @@ __global__ void gptq_f2b_intrablock_kernel(
 
     float eps  = 1e-12f;
 
- 
-    float x[32];
     bool active = (rid < R); 
+    float x[32];
+
 
     if (active) {
         for (int i = 0; i < B; ++i) x[i] = W[(start + i) * R + rid];
