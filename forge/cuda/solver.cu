@@ -71,9 +71,9 @@ __global__ void gptq_f2b_intrablock_kernel(
 
         int g = g_idx ? (int)g_idx[cid] : (cid / group_size);
         if (g >= G) g = G - 1;
-        float s = scales[(rid * G) + g];
+        float s = scales[(G * rid) + g];
         float inv_s = 1/(s + eps);
-        float q0 = qzeros[(rid * G) + g];
+        float q0 = qzeros[(G * rid) + g];
 
         float error, deq;
         uint8_t qb;
@@ -148,7 +148,7 @@ torch::Tensor gptq_solver_cuda(
 
             W.narrow(0, block_end, C - block_end).addmm_(
                 U.narrow(0, block_start, B_long).narrow(1, block_end, C - block_end).t().contiguous(),
-                Eblk.narrow(0, 0, B_long).contiguous(),
+                Eblk.narrow(0, 0, B_long),//.contiguous(),
                 1.0f, -1.0f
             );
         }
