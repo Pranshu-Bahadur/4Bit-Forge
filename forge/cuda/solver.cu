@@ -69,6 +69,7 @@ __global__ void gptq_f2b_intrablock_kernel(
 
     for (int t = 0; t < B; ++t) {
         int cid = start + t;
+        if (cid >= C) break;
 
         float s = scales[(cid * R) + rid];
         float inv_s = 1/(s + eps);
@@ -125,7 +126,7 @@ torch::Tensor gptq_solver_cuda(
         const int B             = static_cast<int>(B_long);
         const int N             = static_cast<int>(R);
 
-        gptq_f2b_intrablock_kernel<B><<<grid, threads, 0, stream>>>(
+        gptq_f2b_intrablock_kernel<32><<<grid, threads, 0, stream>>>(
             W.data_ptr<float>(),
             U.data_ptr<float>(),
             qweight.data_ptr<uint8_t>(),
