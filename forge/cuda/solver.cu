@@ -23,7 +23,6 @@ __device__ __forceinline__ void quantize_scalar(
 
 
 // (GPTQ F2B OG)
-template<int B>
 __global__ void gptq_f2b_intrablock_kernel(
     float* __restrict__ W, // {C, R} mutated W
     float* __restrict__ U, //Unorm
@@ -32,18 +31,17 @@ __global__ void gptq_f2b_intrablock_kernel(
     const float* __restrict__ qzeros, // {C, R} qzeros
     float* __restrict__  Eblk, // {B, R} error
     uint8_t bits,
-    int64_t R, int64_t C,
+    int64_t R, int64_t C, int64_t B, 
     int64_t start 
 ) {
 
     int tid = threadIdx.x;
     int rid = (int64_t)blockIdx.x * blockDim.x + tid;
 
-    __shared__ float smem[B*B]; //Note block_size B = 32
+    __shared__ float smem[32*32]; //Note block_size B = 32
 
     float eps  = 1e-12f;
 
-    #pragma unroll
     for (int idx = tid; idx < B * B; idx += blockDim.x) {
         int i = idx / (int)B;
         int k = idx - i * (int)B;
@@ -58,23 +56,16 @@ __global__ void gptq_f2b_intrablock_kernel(
 
     if (rid >= R) return;
 
-    float x[B];
-    
-    #pragma unroll
+    float x[32];
+
     for (int i = 0; i < B; ++i) {
-        if (start + i < C) {
-            x[i] = W[(start + i) * R + rid];
-        } else {
-            x[i] = 0.0f;
-        }
+        x[i] = W[(start + i) * R + rid];
     }
 
     const int maxq_i = (1 << bits) - 1;
 
-    #pragma unroll
     for (int t = 0; t < B; ++t) {
         int cid = start + t;
-        if (cid >= C) break;
 
         float s = scales[(cid * R) + rid];
         float inv_s = 1/(s + eps);
@@ -88,8 +79,7 @@ __global__ void gptq_f2b_intrablock_kernel(
         qweight[(cid * R) + rid] = qb;
         W[(cid * R) + rid]       = deq;
         Eblk[(t * R) + rid]      = error;
-        
-        #pragma unroll
+
         for (int k = t+1; k < B; ++k) {
             float alpha = smem[(t * B) + k];
             x[k] = __fmaf_rn(-alpha, error, x[k]);
@@ -130,7 +120,7 @@ torch::Tensor gptq_solver_cuda(
         const int B             = static_cast<int>(B_long);
         const int N             = static_cast<int>(R);
 
-        gptq_f2b_intrablock_kernel<32><<<grid, threads, 0, stream>>>(
+        gptq_f2b_intrablock_kernel<<<grid, threads, 0, stream>>>(
             W.data_ptr<float>(),
             U.data_ptr<float>(),
             qweight.data_ptr<uint8_t>(),
@@ -140,6 +130,7 @@ torch::Tensor gptq_solver_cuda(
             (uint8_t)bits,
             (int64_t)R, 
             (int64_t)C,
+            B_long,
             (int64_t) block_start
         );
         if (block_end < C) {
