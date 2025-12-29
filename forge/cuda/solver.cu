@@ -23,27 +23,27 @@ __device__ __forceinline__ void quantize_scalar(
 
 
 // (GPTQ F2B OG)
+template<int B=32>
 __global__ void gptq_f2b_intrablock_kernel(
     float* __restrict__ W, // {C, R} mutated W
     float* __restrict__ U, //Unorm
     uint8_t* __restrict__ qweight, // {C, R} qweight
     const float* __restrict__ scales, // {C, R} scales
     const float* __restrict__ qzeros, // {C, R} qzeros
-    const int32_t* __restrict__ g_idx,
     float* __restrict__  Eblk, // {B, R} error
     uint8_t bits,
-    int64_t R, int64_t C, int64_t B,  
-    int64_t G, int64_t group_size,
+    int64_t R, int64_t C,
     int64_t start 
 ) {
 
     int tid = threadIdx.x;
     int rid = (int64_t)blockIdx.x * blockDim.x + tid;
 
-    __shared__ float smem[32*32]; //Note block_size B = 32
+    __shared__ float smem[B*B]; //Note block_size B = 32
 
     float eps  = 1e-12f;
 
+    #pragma unroll
     for (int idx = tid; idx < B * B; idx += blockDim.x) {
         int i = idx / (int)B;
         int k = idx - i * (int)B;
@@ -58,8 +58,9 @@ __global__ void gptq_f2b_intrablock_kernel(
 
     if (rid >= R) return;
 
-    float x[32];
-
+    float x[B];
+    
+    #pragma unroll
     for (int i = 0; i < B; ++i) {
         x[i] = W[(start + i) * R + rid];
     }
@@ -68,12 +69,10 @@ __global__ void gptq_f2b_intrablock_kernel(
 
     for (int t = 0; t < B; ++t) {
         int cid = start + t;
-        int g = g_idx ? (int)g_idx[cid] : (cid / group_size);
-        if (g >= G) g = G - 1;
 
-        float s = scales[(rid * G) + g];
+        float s = scales[(cid * R) + rid];
         float inv_s = 1/(s + eps);
-        float q0 = qzeros[(rid * G) + g];
+        float q0 = qzeros[(cid * R) + rid];
 
         float error, deq;
         uint8_t qb;
@@ -83,7 +82,8 @@ __global__ void gptq_f2b_intrablock_kernel(
         qweight[(cid * R) + rid] = qb;
         W[(cid * R) + rid]       = deq;
         Eblk[(t * R) + rid]      = error;
-
+        
+        #pragma unroll
         for (int k = t+1; k < B; ++k) {
             float alpha = smem[(t * B) + k];
             x[k] = __fmaf_rn(-alpha, error, x[k]);
@@ -98,9 +98,7 @@ torch::Tensor gptq_solver_cuda(
     torch::Tensor scales,  //{C, R}
     torch::Tensor qzeros, //{C, R}
     int64_t bits,
-    torch::Tensor g_idx,
-    int64_t G,
-    int64_t group_size
+    torch::Tensor g_idx
 ) {
 
     W      = W.contiguous();
@@ -110,7 +108,6 @@ torch::Tensor gptq_solver_cuda(
     U = U.contiguous();
     scales = scales.contiguous();
     qzeros = qzeros.contiguous();
-    g_idx = g_idx.contiguous();
 
     auto qweight     = torch::empty({C, R}, torch::TensorOptions().dtype(torch::kUInt8).device(W.device()));
 
@@ -127,25 +124,18 @@ torch::Tensor gptq_solver_cuda(
         const int64_t B_long    = block_end - block_start;
         const int B             = static_cast<int>(B_long);
         const int N             = static_cast<int>(R);
-        
-        if (B!=32)  {
-            auto Eblk = torch::empty({B, R}, torch::TensorOptions().dtype(at::kFloat).device(W.device()));
-        }
 
-        gptq_f2b_intrablock_kernel<<<grid, threads, 0, stream>>>(
+        gptq_f2b_intrablock_kernel<B><<<grid, threads, 0, stream>>>(
             W.data_ptr<float>(),
             U.data_ptr<float>(),
             qweight.data_ptr<uint8_t>(),
             scales.data_ptr<float>(),
             qzeros.data_ptr<float>(),
-            g_idx.data_ptr<int32_t>(),
             Eblk.data_ptr<float>(),
             (uint8_t)bits,
             (int64_t)R, 
             (int64_t)C,
             B_long,
-            (int64_t) G,
-            (int64_t) group_size,
             (int64_t) block_start
         );
         if (block_end < C) {
