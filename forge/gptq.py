@@ -234,7 +234,7 @@ class GPTQ(object):
             return qw
         
         if self.algorithm == 'gptq':
-            C, _ = W.shape
+            C, R = W.shape
 
             scales = scales.clone().view(R, self.G).repeat_interleave(self.group_size, dim=1)[:, :C][:, self.perm].transpose(-2, -1)   # (C, R) fp32
             qzeros = qzeros.clone().view(R, self.G).repeat_interleave(self.group_size, dim=1)[:, :C][:, self.perm].transpose(-2, -1) 
