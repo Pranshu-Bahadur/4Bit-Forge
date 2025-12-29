@@ -169,10 +169,9 @@ torch::Tensor gptq_solver_cuda(
 
 
             auto U_view = U_tmp.narrow(0, 0, C_tail).narrow(1, 0, B_long); // [C_tail, B]
-            auto W_tail = W.narrow(0, block_end, C_tail);                  // [C_tail, R]
             auto E_view = Eblk.narrow(0, 0, B_long);                       // [B, R]
 
-            W_tail.addmm_(U_view, E_view, 1.0f, -1.0f);
+            W.narrow(0, block_end, C_tail).addmm_(U_view, E_view, 1.0f, -1.0f);
         }
     }
     return qweight;
