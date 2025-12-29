@@ -239,16 +239,13 @@ class GPTQ(object):
         if self.algorithm == 'gptq':
             C, R = W.shape
 
-            #scales = scales.clone().view(R, self.G).repeat_interleave(self.group_size, dim=1)[:, :C].transpose(-2, -1)[self.perm]   # (C, R) fp32
-            #qzeros = qzeros.clone().view(R, self.G).repeat_interleave(self.group_size, dim=1)[:, :C].transpose(-2, -1)[self.perm]
+            scales = scales.clone().view(R, self.G).repeat_interleave(self.group_size, dim=1)[:, :C].transpose(-2, -1)[self.perm]   # (C, R) fp32
+            qzeros = qzeros.clone().view(R, self.G).repeat_interleave(self.group_size, dim=1)[:, :C].transpose(-2, -1)[self.perm]
             qw = kernels.gptq_solver(
                 W.to(torch.float32),
                 A,
                 scales,
                 qzeros,
-                g_idx,
-                self.G,
-                self.group_size,
                 self.bits
             )
 

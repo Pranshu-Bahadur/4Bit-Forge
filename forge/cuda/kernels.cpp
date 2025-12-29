@@ -40,9 +40,6 @@ torch::Tensor gptq_solver_cuda(
     torch::Tensor U,  // [C, C]
     torch::Tensor scales,  //{C, R}
     torch::Tensor qzeros, //{C, R}
-    torch::Tensor g_idx,
-    int64_t G,
-    int64_t group_size,
     int64_t bits
 );
 

@@ -30,8 +30,6 @@ __global__ void gptq_f2b_intrablock_kernel(
     const float* __restrict__ scales, // {C, R} scales
     const float* __restrict__ qzeros, // {C, R} qzeros
     float* __restrict__  Eblk, // {B, R} error
-    const int32_t* __restrict__ g_idx,
-    int64_t G, int64_t group_size, 
     uint8_t bits,
     int64_t R, int64_t C, int64_t B, 
     int64_t start 
@@ -39,54 +37,45 @@ __global__ void gptq_f2b_intrablock_kernel(
 
     int tid = threadIdx.x;
     int rid = (int64_t)blockIdx.x * blockDim.x + tid;
-
-    __shared__ float smem[32*32]; //Note block_size B = 32
+    int lane = tid & 31;
 
     float eps  = 1e-12f;
 
-    for (int idx = tid; idx < B * B; idx += blockDim.x) {
-        int i = idx / (int)B;
-        int k = idx - i * (int)B;
+    float y[32];
 
-        float v = 0.0f;
-        if (k > i) {
-            v = U[(start + i) * C + start + k];
+    for (int r = 0; r < 32; ++r) {
+        if (r <= lane) {
+            y[r] = U[(start + r) * C + (start + lane)];
+        } else {
+            y[r] = 0.0f;
         }
-        smem[i * B + k] = v;
     }
-    __syncthreads();
-
-    if (rid >= R) return;
-
     float x[32];
 
-    for (int i = 0; i < B; ++i) {
-        x[i] = W[(start + i) * R + rid];
-    }
+    if (rid < R) {
+        for (int i = 0; i < B; ++i) x[i] = W[(start + i) * R + rid];
 
-    const int maxq_i = (1 << bits) - 1;
+        const int maxq_i = (1 << bits) - 1;
 
-    for (int t = 0; t < B; ++t) {
-        int cid = start + t;
+        for (int t = 0; t < B; ++t) {
+            int cid = start + t;
 
-        int g = g_idx ? (int)g_idx[cid] : (cid / group_size);
-        if (g >= G) g = G - 1;
-        float s = scales[(G * rid) + g];
-        float inv_s = 1/(s + eps);
-        float q0 = qzeros[(G * rid) + g];
+            float s = scales[(cid * R) + rid];
+            float inv_s = 1/(s + eps);
+            float q0 = qzeros[(cid * R) + rid];
 
-        float error, deq;
-        uint8_t qb;
+            float error, deq;
+            uint8_t qb;
 
-        quantize_scalar(x[t], inv_s, s, q0, maxq_i, error, qb, deq);
+            quantize_scalar(x[t], inv_s, s, q0, maxq_i, error, qb, deq);
 
-        qweight[(cid * R) + rid] = qb;
-        W[(cid * R) + rid]       = deq;
-        Eblk[(t * R) + rid]      = error;
-
-        for (int k = t+1; k < B; ++k) {
-            float alpha = smem[(t * B) + k];
-            x[k] = __fmaf_rn(-alpha, error, x[k]);
+            qweight[(cid * R) + rid] = qb;
+            W[(cid * R) + rid]       = deq;
+            Eblk[(t * R) + rid]      = error;
+            for (int k = t+1; k < B; ++k) {
+                float alpha = __shfl_sync(__ballot_sync(__activemask(), true), y[t], k);
+                x[k] = __fmaf_rn(-alpha, error, x[k]);
+            }
         }
     }
 }
@@ -97,9 +86,6 @@ torch::Tensor gptq_solver_cuda(
     torch::Tensor U,  // [C, C]
     torch::Tensor scales,  //{C, R}
     torch::Tensor qzeros, //{C, R}
-    torch::Tensor g_idx,
-    int64_t G,
-    int64_t group_size,
     int64_t bits
 ) {
 
@@ -110,7 +96,6 @@ torch::Tensor gptq_solver_cuda(
     U = U.contiguous();
     scales = scales.contiguous();
     qzeros = qzeros.contiguous();
-    g_idx = g_idx.contiguous();
 
     auto qweight     = torch::empty({C, R}, torch::TensorOptions().dtype(torch::kUInt8).device(W.device()));
 
@@ -135,9 +120,6 @@ torch::Tensor gptq_solver_cuda(
             scales.data_ptr<float>(),
             qzeros.data_ptr<float>(),
             Eblk.data_ptr<float>(),
-            g_idx.data_ptr<int32_t>(),
-            G,
-            group_size,
             (uint8_t)bits,
             (int64_t)R, 
             (int64_t)C,
@@ -147,8 +129,8 @@ torch::Tensor gptq_solver_cuda(
         if (block_end < C) {
 
             W.narrow(0, block_end, C - block_end).addmm_(
-                U.narrow(0, block_start, B_long).narrow(1, block_end, C - block_end).t().contiguous(),
-                Eblk.narrow(0, 0, B_long),//.contiguous(),
+                U.narrow(0, block_start, B_long).narrow(1, block_end, C - block_end).t(),
+                Eblk.narrow(0, 0, B_long),
                 1.0f, -1.0f
             );
         }
