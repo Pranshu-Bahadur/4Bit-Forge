@@ -67,6 +67,7 @@ __global__ void gptq_f2b_intrablock_kernel(
 
     const int maxq_i = (1 << bits) - 1;
 
+    #pragma unroll
     for (int t = 0; t < B; ++t) {
         int cid = start + t;
         if (cid >= C) break;
