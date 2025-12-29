@@ -136,7 +136,7 @@ torch::Tensor gptq_solver_cuda(
         if (block_end < C) {
 
             W.narrow(0, block_end, C - block_end).addmm_(
-                U.narrow(0, block_start, B_long).narrow(1, block_end, C - block_end).t(),
+                U.narrow(0, block_start, B_long).narrow(1, block_end, C - block_end).t().contiguous(),
                 Eblk.narrow(0, 0, B_long),
                 1.0f, -1.0f
             );
