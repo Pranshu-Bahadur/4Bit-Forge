@@ -244,7 +244,9 @@ class GPTQ(object):
                 scales.clone(),
                 qzeros.clone(),
                 self.bits,
-                g_idx
+                g_idx,
+                self.G,
+                self.group_size
             )
 
             return qw
