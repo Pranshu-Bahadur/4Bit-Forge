@@ -89,20 +89,20 @@ __global__ void gptq_f2b_intrablock_kernel(
 
 
 __global__ void pack_U_cross_T(
-    float* __restrict__ U_packed,   // [C_tail, B] row-major
-    const float* __restrict__ U,       // [C, C] row-major
-    int C, int B,
-    int start, int end                 // block [start, end)
+    float* __restrict__ U_packed,   // [C_tail, ld]
+    const float* __restrict__ U,    // [C, C]
+    int C, int B, int ld,
+    int start, int end
 ) {
-    int k        = blockIdx.x * blockDim.x + threadIdx.x;   // 0..B-1
-    int tail_row = blockIdx.y * blockDim.y + threadIdx.y;   // 0..C_tail-1
+    int k        = blockIdx.x * blockDim.x + threadIdx.x;
+    int tail_row = blockIdx.y * blockDim.y + threadIdx.y;
     int C_tail   = C - end;
-
     if (k >= B || tail_row >= C_tail) return;
 
     float a = U[(start + k) * C + (end + tail_row)];
-    U_packed[tail_row * B + k] = a;
+    U_packed[tail_row * ld + k] = a;   
 }
+
 
 
 
