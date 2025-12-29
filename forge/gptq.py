@@ -236,8 +236,8 @@ class GPTQ(object):
         if self.algorithm == 'gptq':
             C, _ = W.shape
 
-            scales = scales.clone().reshape(-1).repeat_interleave(self.group_size, dim=1)[:, :C][:, self.perm].transpose(-2, -1)   # (C, R) fp32
-            qzeros = qzeros.clone().reshape(-1).repeat_interleave(self.group_size, dim=1)[:, :C][:, self.perm].transpose(-2, -1) 
+            scales = scales.clone().view(R, self.G).repeat_interleave(self.group_size, dim=1)[:, :C][:, self.perm].transpose(-2, -1)   # (C, R) fp32
+            qzeros = qzeros.clone().view(R, self.G).repeat_interleave(self.group_size, dim=1)[:, :C][:, self.perm].transpose(-2, -1) 
             qw = kernels.gptq_solver(
                 W.to(torch.float32),
                 A.clone(),
