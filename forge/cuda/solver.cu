@@ -42,16 +42,6 @@ __global__ void gptq_f2b_intrablock_kernel(
 
     float eps  = 1e-12f;
 
-    float y[32];
-
-    for (int r = 0; r < 32; ++r) {
-        float v = 0.f;
-        if (r < B && lane < B && r <= lane) {
-            v = U[(start + r) * C + (start + lane)];
-        }
-        y[r] = v;
-    }
-
  
     float x[32];
     bool active = (rid < R); 
@@ -66,6 +56,9 @@ __global__ void gptq_f2b_intrablock_kernel(
     const int maxq_i = (1 << bits) - 1;
 
     for (int t = 0; t < B; ++t) {
+        float y_lane = 0.f;
+        if (lane < B && lane >= t) y_lane = U[(start + t) * C + (start + lane)];  // Unorm[t, lane]
+
         int cid = start + t;
         float s = 1.0f; 
         float q0 = 0.0f;
@@ -89,7 +82,7 @@ __global__ void gptq_f2b_intrablock_kernel(
 
         
         for (int k = t + 1; k < B; ++k) {
-            float alpha = __shfl_sync(mask, y[t], k);
+            float alpha = __shfl_sync(0xffffffff, y_lane, k); // alpha = Unorm[t,k]
             x[k] = __fmaf_rn(-alpha, error, x[k]);
         }
     }
