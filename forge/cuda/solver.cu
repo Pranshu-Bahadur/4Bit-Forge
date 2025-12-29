@@ -24,62 +24,73 @@ __device__ __forceinline__ void quantize_scalar(
 
 // (GPTQ F2B OG)
 __global__ void gptq_f2b_intrablock_kernel(
-    float* __restrict__ W, // {C, R} mutated W
-    float* __restrict__ U, //Unorm
-    uint8_t* __restrict__ qweight, // {C, R} qweight
-    const float* __restrict__ scales, // {C, R} scales
-    const float* __restrict__ qzeros, // {C, R} qzeros
-    float* __restrict__  Eblk, // {B, R} error
+    float* __restrict__ W, 
+    const float* __restrict__ U, 
+    uint8_t* __restrict__ qweight, 
+    const float* __restrict__ scales, 
+    const float* __restrict__ qzeros, 
+    float* __restrict__  Eblk, 
     uint8_t bits,
     int64_t R, int64_t C, int64_t B, 
     int64_t start 
 ) {
-
     int tid = threadIdx.x;
     int rid = (int64_t)blockIdx.x * blockDim.x + tid;
     int lane = tid & 31;
-    unsigned mask = __ballot_sync(__activemask(), true);
-
+    
+    unsigned mask = 0xffffffff; 
 
     float eps  = 1e-12f;
-    if (rid < R) {
-        float y[32];
 
-        #pragma unroll
-        for (int r = 0; r < 32; ++r) {
-            float v = 0.f;
-            if (r < B && lane < B && r <= lane) {
-                v = U[(start + r) * C + (start + lane)];
-            }
-            y[r] = v;
+    float y[32];
+    #pragma unroll
+    for (int r = 0; r < 32; ++r) {
+        float v = 0.f;
+        if (r < B && lane < B && r <= lane) {
+            v = U[(start + r) * C + (start + lane)];
         }
+        y[r] = v;
+    }
 
-        float x[32];
+ 
+    float x[32];
+    bool active = (rid < R); 
 
-
+    if (active) {
         for (int i = 0; i < B; ++i) x[i] = W[(start + i) * R + rid];
+    } else {
+        
+        for (int i = 0; i < B; ++i) x[i] = 0.0f;
+    }
 
-        const int maxq_i = (1 << bits) - 1;
+    const int maxq_i = (1 << bits) - 1;
 
-        for (int t = 0; t < B; ++t) {
-            int cid = start + t;
+    for (int t = 0; t < B; ++t) {
+        int cid = start + t;
+        float s = 1.0f; 
+        float q0 = 0.0f;
+        
+        if (active) {
+            s = scales[(cid * R) + rid];
+            q0 = qzeros[(cid * R) + rid];
+        }
+        
+        float inv_s = 1.0f / (s + eps);
+        float error = 0.f, deq = 0.f;
+        uint8_t qb = 0;
 
-            float s = scales[(cid * R) + rid];
-            float inv_s = 1/(s + eps);
-            float q0 = qzeros[(cid * R) + rid];
+        quantize_scalar(x[t], inv_s, s, q0, maxq_i, error, qb, deq);
 
-            float error, deq;
-            uint8_t qb;
-
-            quantize_scalar(x[t], inv_s, s, q0, maxq_i, error, qb, deq);
-
+        if (active) {
             qweight[(cid * R) + rid] = qb;
             W[(cid * R) + rid]       = deq;
             Eblk[(t * R) + rid]      = error;
-            for (int k = t+1; k < B; ++k) {
-                float alpha = __shfl_sync(mask, y[t], k);
-                x[k] = __fmaf_rn(-alpha, error, x[k]);
-            }
+        }
+
+        
+        for (int k = t + 1; k < B; ++k) {
+            float alpha = __shfl_sync(mask, y[t], k);
+            x[k] = __fmaf_rn(-alpha, error, x[k]);
         }
     }
 }
