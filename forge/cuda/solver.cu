@@ -39,11 +39,11 @@ __global__ void gptq_f2b_intrablock_kernel(
     int tid = threadIdx.x;
     int rid = (int64_t)blockIdx.x * blockDim.x + tid;
 
-    __shared__ float smem[B*B]; //Note block_size B = 32
+    __shared__ float smem[B*B];
 
     float eps  = 1e-12f;
 
-    #pragma unroll
+    //#pragma unroll
     for (int idx = tid; idx < B * B; idx += blockDim.x) {
         int i = idx / (int)B;
         int k = idx - i * (int)B;
@@ -60,14 +60,14 @@ __global__ void gptq_f2b_intrablock_kernel(
 
     float x[B];
     
-    #pragma unroll
+    //#pragma unroll
     for (int i = 0; i < B; ++i) {
         x[i] = W[(start + i) * R + rid];
     }
 
     const int maxq_i = (1 << bits) - 1;
 
-    #pragma unroll
+    //#pragma unroll
     for (int t = 0; t < B; ++t) {
         int cid = start + t;
         if (cid >= C) break;
@@ -85,7 +85,7 @@ __global__ void gptq_f2b_intrablock_kernel(
         W[(cid * R) + rid]       = deq;
         Eblk[(t * R) + rid]      = error;
         
-        #pragma unroll
+        //#pragma unroll
         for (int k = t+1; k < B; ++k) {
             float alpha = smem[(t * B) + k];
             x[k] = __fmaf_rn(-alpha, error, x[k]);
@@ -115,7 +115,7 @@ torch::Tensor gptq_solver_cuda(
 
     auto stream = at::cuda::getCurrentCUDAStream();
     const int threads = 128;
-    int64_t block_size = 32;
+    int64_t block_size = 128;
 
     auto Eblk = torch::empty({block_size, R}, torch::TensorOptions().dtype(at::kFloat).device(W.device()));
     const int grid = (static_cast<int>(R) + threads - 1) / threads;
@@ -127,7 +127,7 @@ torch::Tensor gptq_solver_cuda(
         const int B             = static_cast<int>(B_long);
         const int N             = static_cast<int>(R);
 
-        gptq_f2b_intrablock_kernel<32><<<grid, threads, 0, stream>>>(
+        gptq_f2b_intrablock_kernel<128><<<grid, threads, 0, stream>>>(
             W.data_ptr<float>(),
             U.data_ptr<float>(),
             qweight.data_ptr<uint8_t>(),
