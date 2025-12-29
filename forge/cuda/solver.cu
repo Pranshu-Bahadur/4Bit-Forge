@@ -110,7 +110,7 @@ torch::Tensor gptq_solver_cuda(
     const int threads = 128;
     int64_t block_size = 32;
 
-    auto Eblk = torch::empty({B, R}, torch::TensorOptions().dtype(at::kFloat).device(W.device()));
+    auto Eblk = torch::empty({block_size, R}, torch::TensorOptions().dtype(at::kFloat).device(W.device()));
     const int grid = (static_cast<int>(R) + threads - 1) / threads;
 
     for (int64_t block_start = 0; block_start < C; block_start += block_size) {
@@ -119,6 +119,10 @@ torch::Tensor gptq_solver_cuda(
         const int64_t B_long    = block_end - block_start;
         const int B             = static_cast<int>(B_long);
         const int N             = static_cast<int>(R);
+        
+        if (B!=32)  {
+            auto Eblk = torch::empty({B, R}, torch::TensorOptions().dtype(at::kFloat).device(W.device()));
+        }
 
         gptq_f2b_intrablock_kernel<<<grid, threads, 0, stream>>>(
             W.data_ptr<float>(),
