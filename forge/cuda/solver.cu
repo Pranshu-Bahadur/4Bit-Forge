@@ -134,10 +134,9 @@ torch::Tensor gptq_solver_cuda(
             (int64_t) block_start
         );
         if (block_end < C) {
-            auto U_cross = U.narrow(0, block_start, B_long).narrow(1, block_end, C - block_end);
-            
+
             W.narrow(0, block_end, C - block_end).addmm_(
-                U_cross.t(),
+                U.narrow(0, block_start, B_long).narrow(1, block_end, C - block_end).t(),
                 Eblk.narrow(0, 0, B_long),
                 1.0f, -1.0f
             );

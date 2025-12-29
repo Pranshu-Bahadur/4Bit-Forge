@@ -71,7 +71,7 @@ class GPTQ(object):
             alpha = 2.0 / total_samples
 
             if self.owner.H is None:
-                self.owner.H = torch.zeros((X.shape[-1], X.shape[-1]), device=self.owner.device, dtype=torch.float32)
+                self.owner.H = X.T@(alpha*X)
 
             beta = num_samples / total_samples
             self.owner.H .addmm_(X.transpose(-2, -1), X, alpha=alpha, beta=beta)
@@ -134,7 +134,7 @@ class GPTQ(object):
 
     @torch.no_grad()
     def _h_factor(self):
-        H = self.H.clone()
+        H = self.H#.clone()
 
         zero_cols = self.W.clone().eq(0).all(dim=0)
         if zero_cols.any():
@@ -222,9 +222,9 @@ class GPTQ(object):
         if self.algorithm == 'babai':
             qw = kernels.babai_solver(
                     W.to(torch.float32),
-                    A.clone(),
-                    scales.clone(),
-                    qzeros.clone(),
+                    A, #.clone(),
+                    scales, #.clone(),
+                    qzeros, #.clone(),
                     self.group_size,
                     self.bits,
                     self.group_size // 4,
@@ -236,13 +236,13 @@ class GPTQ(object):
         if self.algorithm == 'gptq':
             C, R = W.shape
 
-            scales = scales.clone().view(R, self.G).repeat_interleave(self.group_size, dim=1)[:, :C][:, self.perm].transpose(-2, -1)   # (C, R) fp32
-            qzeros = qzeros.clone().view(R, self.G).repeat_interleave(self.group_size, dim=1)[:, :C][:, self.perm].transpose(-2, -1) 
+            scales = scales.clone().view(R, self.G).repeat_interleave(self.group_size, dim=1)[:, :C].transpose(-2, -1)[self.perm]   # (C, R) fp32
+            qzeros = qzeros.clone().view(R, self.G).repeat_interleave(self.group_size, dim=1)[:, :C].transpose(-2, -1)[self.perm]
             qw = kernels.gptq_solver(
                 W.to(torch.float32),
-                A.clone(),
-                scales.clone(),
-                qzeros.clone(),
+                A,
+                scales,
+                qzeros,
                 self.bits
             )
 
