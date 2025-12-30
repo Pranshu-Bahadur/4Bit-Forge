@@ -4,7 +4,7 @@ from torch import Tensor
 import math
 import uuid
 
-from forge.cuda import kernels 
+from forge.backend.cuda import kernels 
 
 
 class GPTQ(object):
