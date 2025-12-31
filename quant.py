@@ -246,7 +246,7 @@ def main():
         for layer_name, layer in layers.items():
             if args.quantize_only_routed_experts and re.search(ROUTED_EXPERTS_REGEX, layer_name) is None:
                 continue
-
+            print(layer_name, layer)
             owner = None
             if args.owner_gptq_handles and layer_name.endswith("up_proj"):
                 parent_name, _ = layer_name.rsplit(".", 1)
