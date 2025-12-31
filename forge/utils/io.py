@@ -433,6 +433,20 @@ def _get_submodule(root: nn.Module, path: str) -> nn.Module:
     return mod
 
 
+def assign_param_(layer: nn.Module, name: str, value: torch.Tensor):
+    """Safe assignment for meta/uninitialized params created under init_empty_weights()."""
+    assert hasattr(layer, name)
+    p = getattr(layer, name)
+    v = value.detach()
+
+    # meta / uninitialized → replace the Parameter
+    if getattr(p, "is_meta", False) or (hasattr(p, "device") and p.device.type == "meta"):
+        setattr(layer, name, nn.Parameter(v, requires_grad=False))
+        return
+
+    # normal tensor → copy into existing storage
+    p.copy_(v)
+
 def materialize_block_weights_to_fp(block, state_tensors: dict, *, dtype):
     """
     block: the actual module with nn.Linear layers already created (meta -> real tensors once assigned)
@@ -442,9 +456,14 @@ def materialize_block_weights_to_fp(block, state_tensors: dict, *, dtype):
     layers = list_layers(block)  # your existing layer enumerator
     if not layers:
         return
+    og_dtype = dtype
 
     for lname, layer in layers.items():
         w_key = f"{lname}.weight"
+        if state_tensors[w_key].dtype in (torch.float16, torch.bfloat16, torch.float32):
+            dtype = state_tensors[w_key].dtype
+        else:
+            dtype = og_dtype
 
         if w_key in state_tensors and state_tensors[w_key].dtype:
             scale_key = f"{lname}.weight_scales"
@@ -457,7 +476,8 @@ def materialize_block_weights_to_fp(block, state_tensors: dict, *, dtype):
                     w_fp = (w_int - z) * s
                 else:
                     w_fp = w_int * s
-                layer.weight.data = w_fp.to(dtype=dtype, device="cpu")
+                w_fp = w_fp.to(dtype=dtype, device="cpu")
+                assign_param_(layer, "weight", w_fp)
                 continue
         
         if w_key in state_tensors and state_tensors[w_key].dtype:
@@ -471,7 +491,8 @@ def materialize_block_weights_to_fp(block, state_tensors: dict, *, dtype):
                     w_fp = (w_int - z) * s
                 else:
                     w_fp = w_int * s
-                layer.weight.data = w_fp.to(dtype=dtype, device="cpu")
+                w_fp = w_fp.to(dtype=dtype, device="cpu")
+                assign_param_(layer, "weight", w_fp)
                 continue
 
         if w_key in state_tensors and state_tensors[w_key].dtype:
@@ -485,11 +506,13 @@ def materialize_block_weights_to_fp(block, state_tensors: dict, *, dtype):
                         w_fp = (w_int - z) * (1/s)
                     else:
                         w_fp = w_int * (1/s)
-                    layer.weight.data = w_fp.to(dtype=dtype, device="cpu")
+                    w_fp = w_fp.to(dtype=dtype, device="cpu")
+                    assign_param_(layer, "weight", w_fp)
                     continue
 
         if w_key in state_tensors and isinstance(state_tensors[w_key], torch.Tensor):
-            layer.weight.data = state_tensors[w_key].to(dtype=dtype, device="cpu")
+            w_fp = state_tensors[w_key].to(dtype=dtype, device="cpu")
+            assign_param_(layer, "weight", w_fp)
             continue
 
         raise RuntimeError(f"Don't know how to materialize weight for layer {lname} (missing/unknown format).")

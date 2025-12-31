@@ -69,7 +69,7 @@ def parse_args():
     parser.add_argument("--resume", action="store_true")
     parser.add_argument("--seed", default=0, type=int)
     parser.add_argument(
-        "--dtype", default="float16", type=str, choices=["float16", "bfloat16"])
+        "--dtype", default="bfloat16", type=str, choices=["float16", "bfloat16"])
     
 
     parser.add_argument("--jit_stream", action="store_true",
