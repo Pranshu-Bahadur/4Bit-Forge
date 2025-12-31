@@ -68,7 +68,6 @@ def get_position_embeddings(rotary_emb: nn.Module, hidden_states: torch.Tensor, 
 @torch.no_grad()
 def dequantize_forge_full(dtype, qweight, scales, qzeros, group_size, device):
 
-
     if qweight.dim() != 2:
         raise ValueError(f"Expected qweight (R,C) unpacked, got shape={tuple(qweight.shape)}")
 
@@ -138,7 +137,6 @@ def ensure_rotary_emb(model, config, device):
     if rotary is None:
         return None
 
-    """
     # If init_empty_weights put buffers on meta, regenerate them on real device.
     inv = getattr(rotary, "inv_freq", None)
     if inv is None or getattr(inv, "is_meta", False):
@@ -161,7 +159,6 @@ def ensure_rotary_emb(model, config, device):
         for k in ("cos_cached", "sin_cached", "_cos_cached", "_sin_cached"):
             if hasattr(rotary, k):
                 setattr(rotary, k, None)
-    """
 
     rotary.to(device)
     return rotary
