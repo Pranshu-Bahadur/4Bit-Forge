@@ -299,10 +299,10 @@ def main():
             for handle_name, handle in handles.items():
                 if handle._is_owner():
                     qweight, scales, qzeros = handle.quantize()
-                    deq, scales, qzeros = forge.utils.engine.dequantize_layer(qweight, scales, qzeros,
+                    deq, scales, qzeros = forge.utils.engine.dequantize_forge_full(handle.layer.weight.dtype, dtype, qweight, scales, qzeros,
                                                                 int(args.group_size), int(args.bits),
                                                                 )
-                    handle.layer.weight.copy_(deq.to(handle.layer.weight.dtype))
+                    handle.layer.weight.copy_(deq)
                     if args.save_dir:
                         os.makedirs(os.path.join(args.save_dir, handle_name), exist_ok=True)
                         torch.save(
@@ -313,10 +313,10 @@ def main():
             for handle_name, handle in handles.items():
                 if not handle._is_owner():
                     qweight, scales, qzeros = handle.quantize()
-                    deq, scales, qzeros = forge.utils.engine.dequantize_layer(qweight, scales, qzeros,
+                    deq, scales, qzeros = forge.utils.engine.dequantize_forge_full(handle.layer.weight.dtype, qweight, scales, qzeros,
                                                                 int(args.group_size), int(args.bits),
                                                                 )
-                    handle.layer.weight.copy_(deq.to(handle.layer.weight.dtype))
+                    handle.layer.weight.copy_(deq)
                     if args.save_dir:
                         os.makedirs(os.path.join(args.save_dir, handle_name), exist_ok=True)
                         torch.save(
