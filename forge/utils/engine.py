@@ -8,16 +8,24 @@ import torch
 import torch.nn as nn
 from typing import Dict, Any
 
-
 class ParamSliceProxy:
-    """Expose a 2D .weight view into a 3D fused expert Parameter."""
-    def __init__(self, p3d: torch.Tensor, expert_idx: int):
-        self._p3d = p3d
-        self._e = expert_idx
+    def __init__(self, parent: torch.nn.Module, param_name: str, expert_id: int, *, transpose: bool = True):
+        self.parent = parent
+        self.param_name = param_name
+        self.expert_id = expert_id
+        self.transpose = transpose
 
     @property
     def weight(self) -> torch.Tensor:
-        return self._p3d[self._e]  # [*, *] view
+        p = getattr(self.parent, self.param_name)      # e.g. [E, in, out]
+        w = p[self.expert_id]                          # [in, out]
+        return w.transpose(0, 1) if self.transpose else w   # => [out, in] for GPTQ
+
+    @property
+    def dtype(self): return self.weight.dtype
+
+    @property
+    def device(self): return self.weight.device
 
 
 def list_layers(block: nn.Module) -> Dict[str, Union[nn.Linear, ParamSliceProxy]]:

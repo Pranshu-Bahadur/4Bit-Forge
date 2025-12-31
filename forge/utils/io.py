@@ -38,14 +38,23 @@ def _now() -> float:
 
 
 class ParamSliceProxy:
-    """Expose a 2D .weight view into a 3D fused expert Parameter."""
-    def __init__(self, p3d: torch.Tensor, expert_idx: int):
-        self._p3d = p3d
-        self._e = expert_idx
+    def __init__(self, parent: torch.nn.Module, param_name: str, expert_id: int, *, transpose: bool = True):
+        self.parent = parent
+        self.param_name = param_name
+        self.expert_id = expert_id
+        self.transpose = transpose
 
     @property
     def weight(self) -> torch.Tensor:
-        return self._p3d[self._e]  # [*, *] view
+        p = getattr(self.parent, self.param_name)      # e.g. [E, in, out]
+        w = p[self.expert_id]                          # [in, out]
+        return w.transpose(0, 1) if self.transpose else w   # => [out, in] for GPTQ
+
+    @property
+    def dtype(self): return self.weight.dtype
+
+    @property
+    def device(self): return self.weight.device
 
 
 def list_layers(block: nn.Module) -> Dict[str, Union[nn.Linear, ParamSliceProxy]]:
@@ -518,7 +527,7 @@ def _dequant_mxfp4_blocks_to_fp(blocks_u8: torch.Tensor, scales_u8: torch.Tensor
 
     scale = _e8m0_to_scale_fp32(scales_u8).unsqueeze(-1)  # [..., NB, 1]
     out = (vals * scale).reshape(*vals.shape[:-2], vals.shape[-2] * vals.shape[-1])  # [..., NB*32]
-    return out  # fp32
+    return out.transpose(-2, -1)  # fp32
 
 def _apply_block_scale_inv_2d(w_fp32: torch.Tensor, s_inv_2d: torch.Tensor) -> torch.Tensor:
     # w: [O, I], s_inv: [O/128, I/128]
