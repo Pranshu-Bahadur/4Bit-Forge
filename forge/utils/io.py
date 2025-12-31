@@ -56,17 +56,30 @@ class ParamSliceProxy:
     @property
     def device(self): return self.weight.device
 
-
-def list_layers(block: nn.Module) -> Dict[str, Union[nn.Module, ParamSliceProxy]]:
-    layers: Dict[str, Union[nn.Module, ParamSliceProxy]] = {}
+def list_layers(block: nn.Module) -> Dict[str, Union[nn.Linear, ParamSliceProxy]]:
+    layers: Dict[str, Union[nn.Linear, ParamSliceProxy]] = {}
 
     # Normal path: nn.Linear modules (DeepSeek-style experts are nn.Linear)
+    detect_experts = False
     for n, m in block.named_modules():
-        if isinstance(m, nn.Module):
+        if isinstance(m, nn.Linear):
             layers[n] = m
+        
+    # GPT-OSS path: fused expert weights as Parameters on block.mlp.experts
+    mlp = getattr(block, "mlp", None)
+    experts = getattr(mlp, "experts", None) if mlp is not None else None
+    
+    if experts is not None:
+        gu = getattr(experts, "gate_up_proj", None)   # [E,H,2D]
+        dn = getattr(experts, "down_proj", None)      # [E,D,H]
+
+        if isinstance(gu, nn.Parameter) and gu.ndim == 3 and isinstance(dn, nn.Parameter) and dn.ndim == 3:
+            E = gu.shape[0]
+            for e in range(E):
+                layers[f"mlp.experts.{e}.gate_up_proj"] = ParamSliceProxy(experts, "gate_up_proj", e)
+                layers[f"mlp.experts.{e}.down_proj"]    = ParamSliceProxy(experts, "down_proj", e)
 
     return layers
-
 # -----------------------------
 # set_module_tensor_to_device (fallback)
 # -----------------------------
