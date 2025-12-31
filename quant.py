@@ -108,7 +108,7 @@ def main():
         ).eval()
         model.config.use_cache = False
     ROUTED_EXPERTS_REGEX = r".*mlp\.experts\.\d+\.(down|gate|up|gate_up)_proj$"
-    ROUTED_EXPERTS_REGEX = ROUTED_EXPERTS_REGEX if "deepseek" in str(args.model_name_or_path).lower() else r".*mlp\.experts\.(down|gate|up|gate_up)_proj$"
+    ROUTED_EXPERTS_REGEX = ROUTED_EXPERTS_REGEX if "deepseek" in str(args.model_name_or_path).lower() else r".*mlp\.experts\.(down|gate|up|gate_up)_proj.*"
     shard_ids = forge.utils.io.load_safetensors_index(args.model_name_or_path, tmp_dir=args.hf_tmp_dir)
     weight_map = shard_ids["weight_map"]
     num_shards = len(set(weight_map.values()))
@@ -164,6 +164,10 @@ def main():
     if args.offload:
         embed.to("cpu")
         forge.utils.io.metaize_module_(embed)
+
+    if offload_device == "cpu":
+        X = [t.to("cpu", non_blocking=True) for t in X]
+        torch.cuda.empty_cache()
     position_ids = torch.arange(0, T, dtype=torch.long, device=device).unsqueeze(0)
 
     rotary_emb = getattr(model.model, "rotary_emb", None)
