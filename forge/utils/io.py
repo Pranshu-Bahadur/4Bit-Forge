@@ -229,6 +229,7 @@ class ShardDiskWindow:
                     "Increase disk or reduce reserve/lookahead."
                 )
 
+
     def download_shard(
         self,
         repo_id: str,
@@ -353,20 +354,11 @@ def load_safetensors_index(model_name_or_path: str, tmp_dir: str = "/tmp/hf_jit"
 # -----------------------------
 # Tensor injection / metaization
 # -----------------------------
-def _walk_module_path(root: nn.Module, parts: List[str]) -> nn.Module:
-    """
-    Walk a dotted module path where numeric segments index into ModuleList/Sequential/etc.
-    Example: ["model","layers","12","mlp","experts","0","up_proj"].
-    """
+def _walk_module_path(root: nn.Module, parts: list[str]) -> nn.Module:
     mod: Any = root
     for p in parts:
         if p.isdigit():
-            idx = int(p)
-            # Prefer indexing for ModuleList/Sequential; fallback to getattr if needed.
-            try:
-                mod = mod[idx]  # type: ignore[index]
-            except Exception:
-                mod = getattr(mod, p)
+            mod = mod[int(p)]  # ModuleList / list-like
         else:
             mod = getattr(mod, p)
     return mod
@@ -374,31 +366,24 @@ def _walk_module_path(root: nn.Module, parts: List[str]) -> nn.Module:
 
 def inject_tensor_by_name(model: nn.Module, name: str, tensor: torch.Tensor, device: str = "cpu") -> None:
     """
-    Inject a tensor into model by dotted name.
-    Supports parameters (weight/bias) and buffers.
-    Handles ModuleList indices in the path (e.g. layers.12, experts.0).
+    Inject a tensor into model by dotted name. Handles ModuleList indices.
     """
     parts = name.split(".")
     attr = parts[-1]
-    module_parts = parts[:-1]
+    module_path = parts[:-1]
 
     try:
-        mod = _walk_module_path(model, module_parts) if module_parts else model
+        mod = _walk_module_path(model, module_path) if module_path else model
     except Exception:
-        # If you want strict behavior during debugging, replace with: raise
         return
 
     # If already registered, overwrite
-    if (
-        hasattr(mod, attr)
-        or attr in getattr(mod, "_parameters", {})
-        or attr in getattr(mod, "_buffers", {})
-    ):
+    if hasattr(mod, attr) or attr in getattr(mod, "_parameters", {}) or attr in getattr(mod, "_buffers", {}):
         set_module_tensor_to_device(mod, attr, device=device, value=tensor)
         return
 
     # Register placeholder then set
-    if attr in ("weight", "bias"):
+    if attr in ("weight", "bias") or attr in getattr(mod, "_parameters", {}):
         placeholder = nn.Parameter(
             torch.empty(tensor.shape, device="meta", dtype=tensor.dtype),
             requires_grad=False,
@@ -412,11 +397,7 @@ def inject_tensor_by_name(model: nn.Module, name: str, tensor: torch.Tensor, dev
 
 
 def metaize_module_(module: nn.Module) -> None:
-    """
-    Move params/buffers back to META to free CPU RAM after a block is done.
-    Handles ModuleList indices in parameter/buffer names.
-    """
-    # Parameters
+    """Move params/buffers back to META to free CPU RAM."""
     for n, p in list(module.named_parameters(recurse=True)):
         if p is None:
             continue
@@ -429,7 +410,6 @@ def metaize_module_(module: nn.Module) -> None:
         except Exception:
             pass
 
-    # Buffers
     for n, b in list(module.named_buffers(recurse=True)):
         if b is None:
             continue
@@ -441,6 +421,7 @@ def metaize_module_(module: nn.Module) -> None:
             set_module_tensor_to_device(mod, attr, device="meta", value=meta)
         except Exception:
             pass
+
 
 # -----------------------------
 # Main: prefix streaming loader
@@ -465,92 +446,156 @@ def assign_param_(layer: nn.Module, name: str, value: torch.Tensor):
     # normal tensor → copy into existing storage
     p.copy_(v)
 
-def materialize_block_weights_to_fp(block, state_tensors: dict, *, dtype):
-    """
-    block: the actual module with nn.Linear layers already created (meta -> real tensors once assigned)
-    state_tensors: loaded tensors for this prefix from the source checkpoint
-    goal: write float weights into block's nn.Linear.weight (CPU), so the block can run forward.
-    """
-    layers = list_layers(block)  # your existing layer enumerator
-    if not layers:
-        return
-    og_dtype = dtype
-
-    for lname, layer in layers.items():
-        w_key = f"{lname}.weight"
-        if state_tensors[w_key].dtype in (torch.float16, torch.bfloat16, torch.float32):
-            dtype = state_tensors[w_key].dtype
-        else:
-            dtype = og_dtype
-
-        if w_key in state_tensors and state_tensors[w_key].dtype:
-            scale_key = f"{lname}.weight_scales"
-            zero_key  = f"{lname}.weight_zero"  # optional
-            if scale_key in state_tensors:
-                w_int = state_tensors[w_key].to(torch.float32)
-                s = state_tensors[scale_key].to(torch.float32)
-                if zero_key in state_tensors:
-                    z = state_tensors[zero_key].to(torch.float32)
-                    w_fp = (w_int - z) * s
-                else:
-                    w_fp = w_int * s
-                w_fp = w_fp.to(dtype=dtype, device="cpu")
-                assign_param_(layer, "weight", w_fp)
-                continue
-        
-        if w_key in state_tensors and state_tensors[w_key].dtype:
-            scale_key = f"{lname}.weight_scale"
-            zero_key  = f"{lname}.weight_zero"  # optional
-            if scale_key in state_tensors:
-                w_int = state_tensors[w_key].to(torch.float32)
-                s = state_tensors[scale_key].to(torch.float32)
-                if zero_key in state_tensors:
-                    z = state_tensors[zero_key].to(torch.float32)
-                    w_fp = (w_int - z) * s
-                else:
-                    w_fp = w_int * s
-                w_fp = w_fp.to(dtype=dtype, device="cpu")
-                assign_param_(layer, "weight", w_fp)
-                continue
-
-        if w_key in state_tensors and state_tensors[w_key].dtype:
-                scale_key = f"{lname}.weight_scale_inv"
-                zero_key  = f"{lname}.weight_zero"  # optional
-                if scale_key in state_tensors:
-                    w_int = state_tensors[w_key].to(torch.float32)
-                    s = state_tensors[scale_key].to(torch.float32)
-                    if zero_key in state_tensors:
-                        z = state_tensors[zero_key].to(torch.float32)
-                        w_fp = (w_int - z) * (1/s)
-                    else:
-                        w_fp = w_int * (1/s)
-                    w_fp = w_fp.to(dtype=dtype, device="cpu")
-                    assign_param_(layer, "weight", w_fp)
-                    continue
-
-        if w_key in state_tensors and isinstance(state_tensors[w_key], torch.Tensor):
-            w_fp = state_tensors[w_key].to(dtype=dtype, device="cpu")
-            assign_param_(layer, "weight", w_fp)
-            continue
-
-        raise RuntimeError(f"Don't know how to materialize weight for layer {lname} (missing/unknown format).")
 
 # Keys used only for materialization; don't inject these into the model.
 _MATERIALIZE_SIDECAR_SUFFIXES = (
     ".weight_scale", ".weight_scales", ".weight_scale_inv", ".weight_zero",
     ".qweight", ".qzeros", ".scales", ".g_idx", ".perm",
+    "_blocks", "_scales",   # NOTE: do NOT include "_bias"
 )
 
 
-def _walk_module_path(root: nn.Module, parts: List[str]) -> nn.Module:
-    mod = root
-    for p in parts:
-        if p.isdigit():
-            # ModuleList / Sequential / list-like
-            mod = mod[int(p)]
-        else:
-            mod = getattr(mod, p)
-    return mod
+
+def _fp8_dtypes() -> set[torch.dtype]:
+    out = set()
+    for name in ("float8_e4m3fn", "float8_e4m3fnuz", "float8_e5m2", "float8_e5m2fnuz"):
+        if hasattr(torch, name):
+            out.add(getattr(torch, name))
+    return out
+
+_FP8_DTYPES = _fp8_dtypes()
+
+# MXFP4 mag table (E2M1) used by gpt-oss MXFP4
+_MXFP4_MAG = torch.tensor([0.0, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0], dtype=torch.float32)
+
+def _e8m0_to_scale_fp32(e_u8: torch.Tensor) -> torch.Tensor:
+    e = e_u8.to(torch.int16)
+    return torch.where(
+        e == 0,
+        torch.tensor(2.0 ** -23, dtype=torch.float32),
+        torch.pow(torch.tensor(2.0, dtype=torch.float32), (e.to(torch.float32) - 127.0)),
+    )
+
+def _dequant_mxfp4_blocks_to_fp(blocks_u8: torch.Tensor, scales_u8: torch.Tensor) -> torch.Tensor:
+    # blocks: [..., NB, 16] bytes -> 32 fp4 codes
+    b = blocks_u8.to(torch.uint8)
+    lo = b & 0x0F
+    hi = (b >> 4) & 0x0F
+    codes = torch.stack([lo, hi], dim=-1).reshape(*b.shape[:-1], 32)  # [..., NB, 32]
+
+    mag = (codes & 0x7).to(torch.long)
+    sign = ((codes & 0x8) != 0)
+    vals = _MXFP4_MAG[mag]
+    vals = torch.where(sign, -vals, vals)
+
+    scale = _e8m0_to_scale_fp32(scales_u8).unsqueeze(-1)  # [..., NB, 1]
+    out = (vals * scale).reshape(*vals.shape[:-2], vals.shape[-2] * vals.shape[-1])  # [..., NB*32]
+    return out  # fp32
+
+def _apply_block_scale_inv_2d(w_fp32: torch.Tensor, s_inv_2d: torch.Tensor) -> torch.Tensor:
+    # w: [O, I], s_inv: [O/128, I/128]
+    O, I = w_fp32.shape
+    so, si = s_inv_2d.shape
+    assert O % so == 0 and I % si == 0, (w_fp32.shape, s_inv_2d.shape)
+
+    br = O // so
+    bc = I // si
+    w4 = w_fp32.reshape(so, br, si, bc)
+    s = s_inv_2d.to(torch.float32)
+    w4 = w4 * (1.0 / s).reshape(so, 1, si, 1)
+    return w4.reshape(O, I)
+
+def _maybe_materialize_gptoss_expert_params(block: nn.Module, state_tensors: dict[str, torch.Tensor], dtype: torch.dtype) -> None:
+    # gpt-oss pattern: mlp.experts.{gate_up_proj,down_proj}_{blocks,scales} -> mlp.experts.{gate_up_proj,down_proj}
+    for proj in ("gate_up_proj", "down_proj"):
+        bk = f"mlp.experts.{proj}_blocks"
+        sk = f"mlp.experts.{proj}_scales"
+        if bk not in state_tensors or sk not in state_tensors:
+            continue
+
+        try:
+            experts_mod = _walk_module_path(block, ["mlp", "experts"])
+        except Exception:
+            continue
+
+        w_fp32 = _dequant_mxfp4_blocks_to_fp(state_tensors[bk], state_tensors[sk])  # fp32
+        w = w_fp32.to(dtype=dtype, device="cpu")
+
+        # IMPORTANT: set as a PARAM on experts_mod (proj is the attribute name)
+        set_module_tensor_to_device(experts_mod, proj, device="cpu", value=w)
+
+        # consume sidecars so we never inject them
+        state_tensors.pop(bk, None)
+        state_tensors.pop(sk, None)
+
+def materialize_block_weights_to_fp(
+    block: nn.Module,
+    state_tensors: dict[str, torch.Tensor],
+    *,
+    group_size: int,
+    bits: int,
+    dtype: torch.dtype,
+    list_layers_fn=None,
+) -> None:
+    # gpt-oss fused expert params (if present in this checkpoint)
+    _maybe_materialize_gptoss_expert_params(block, state_tensors, dtype)
+
+    if list_layers_fn is None:
+        list_layers_fn = list_layers
+
+    layers = list_layers_fn(block)
+    if isinstance(layers, dict):
+        items = layers.items()
+    else:
+        items = layers  # assume iterable of (name, layer)
+
+    for lname, layer in items:
+        w_key = f"{lname}.weight"
+        if w_key not in state_tensors:
+            continue
+
+        w_raw = state_tensors[w_key]
+
+        # DeepSeek FP8: float8 weight + weight_scale_inv (2D blockwise)
+        if w_raw.dtype in _FP8_DTYPES:
+            w_fp32 = w_raw.to(torch.float32)
+            inv_key = f"{lname}.weight_scale_inv"
+            if inv_key in state_tensors and state_tensors[inv_key].ndim == 2 and w_fp32.ndim == 2:
+                w_fp32 = _apply_block_scale_inv_2d(w_fp32, state_tensors[inv_key])
+                state_tensors.pop(inv_key, None)
+
+            w = w_fp32.to(dtype=dtype, device="cpu")
+            set_module_tensor_to_device(layer, "weight", device="cpu", value=w)
+            state_tensors.pop(w_key, None)
+            continue
+
+        # Normal float weights
+        if w_raw.dtype in (torch.float16, torch.bfloat16, torch.float32):
+            w = w_raw.to(dtype=dtype, device="cpu")
+            set_module_tensor_to_device(layer, "weight", device="cpu", value=w)
+            state_tensors.pop(w_key, None)
+            continue
+
+        # Fallback: int + scale-ish (optional)
+        w_fp32 = w_raw.to(torch.float32)
+        for scale_key in (f"{lname}.weight_scales", f"{lname}.weight_scale"):
+            if scale_key in state_tensors:
+                s = state_tensors[scale_key].to(torch.float32)
+                w_fp32 = w_fp32 * s
+                state_tensors.pop(scale_key, None)
+                break
+        inv_key = f"{lname}.weight_scale_inv"
+        if inv_key in state_tensors:
+            s = state_tensors[inv_key].to(torch.float32)
+            w_fp32 = w_fp32 * (1.0 / s)
+            state_tensors.pop(inv_key, None)
+
+        w = w_fp32.to(dtype=dtype, device="cpu")
+        set_module_tensor_to_device(layer, "weight", device="cpu", value=w)
+        state_tensors.pop(w_key, None)
+
+
+
 
 def jit_load_prefix_to_cpu(
     model: nn.Module,
@@ -643,7 +688,14 @@ def jit_load_prefix_to_cpu(
             if k.startswith(pfx):
                 rel[k[len(pfx):]] = v  # strip "model.layers.i." prefix
 
-        materialize_fn(materialize_block, rel, dtype=dtype)
+        materialize_fn(
+            materialize_block,
+            rel,
+            group_size=group_size,
+            bits=bits,
+            dtype=dtype,
+            list_layers_fn=list_layers_fn
+        )
 
     # 5) inject everything else (skip linear weights + sidecars)
     bytes_loaded = 0

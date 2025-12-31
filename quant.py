@@ -102,10 +102,13 @@ def main():
 
     with init_empty_weights():
         model = AutoModelForCausalLM.from_config(
-            config=config, trust_remote_code=True, attn_implementation=str(args.attn_implementation), dtype=str(args.dtype)
+            config=config, trust_remote_code=True, 
+            attn_implementation=str(args.attn_implementation), 
+            dtype=dtype
         ).eval()
         model.config.use_cache = False
-
+    ROUTED_EXPERTS_REGEX = r".*mlp\.experts\.\d+\.(down|gate|up|gate_up)_proj$"
+    ROUTED_EXPERTS_REGEX = ROUTED_EXPERTS_REGEX if "deepseek" in str(args.model_name_or_path).lower() else r".*mlp\.experts\.(down|gate|up|gate_up)_proj$"
     shard_ids = forge.utils.io.load_safetensors_index(args.model_name_or_path, tmp_dir=args.hf_tmp_dir)
     weight_map = shard_ids["weight_map"]
     num_shards = len(set(weight_map.values()))
@@ -253,7 +256,7 @@ def main():
                     if args.save_dir:
                         os.makedirs(os.path.join(args.save_dir, handle_name), exist_ok=True)
                         torch.save(
-                                {"qweight": qweight.to(torch.int8), "scale": scales.to(handle.layer.weight.dtype), "zero": qzeros.to(torch.int8)},
+                                {"qweight": qweight.to(torch.int8), "scale": scales.to(dtype), "zero": qzeros.to(torch.int8)},
                                 os.path.join(args.save_dir, handle_name, f"quantized_weight.pt"),
                             )
 
@@ -267,7 +270,7 @@ def main():
                     if args.save_dir:
                         os.makedirs(os.path.join(args.save_dir, handle_name), exist_ok=True)
                         torch.save(
-                                {"qweight": qweight.to(torch.int8), "scale": scales.to(handle.layer.weight.dtype), "zero": qzeros.to(torch.int8)},
+                                {"qweight": qweight.to(torch.int8), "scale": scales.to(dtype), "zero": qzeros.to(torch.int8)},
                                 os.path.join(args.save_dir, handle_name, f"quantized_weight.pt"),
                             )
 
