@@ -76,3 +76,101 @@ def forward(block, X, position_ids, N, bs, device, offload_device, act_update=Fa
         return X
     else:
         return None
+    
+
+def ensure_rotary_ready(rotary_emb, config, *, device, max_seq_len: int, dtype: torch.dtype):
+    """
+    Fix RoPE modules that were created under init_empty_weights() and ended up with
+    meta/None inv_freq or stale caches. Works for GPT-OSS + generally safe for DeepSeek.
+    """
+    if rotary_emb is None:
+        return None
+
+    # move module (best-effort; some RoPE modules have no params/buffers anyway)
+    try:
+        rotary_emb.to(device)
+    except Exception:
+        # if it ever complains about meta, we'll still overwrite inv_freq below
+        pass
+
+    if hasattr(rotary_emb, "inv_freq"):
+        inv = getattr(rotary_emb, "inv_freq", None)
+        bad = (inv is None) or (getattr(inv, "is_meta", False)) or (getattr(inv, "device", None) != torch.device(device))
+
+        if bad:
+            dim = getattr(rotary_emb, "dim", None)
+            if dim is None:
+                # common fallbacks
+                dim = getattr(config, "rope_dim", None)
+            if dim is None:
+                dim = getattr(config, "head_dim", None)
+            if dim is None:
+                # last resort: hidden_size / num_attention_heads
+                hs = getattr(config, "hidden_size", None)
+                nh = getattr(config, "num_attention_heads", None)
+                if hs is not None and nh is not None:
+                    dim = hs // nh
+            if dim is None:
+                raise RuntimeError("Could not infer RoPE dim (rotary_emb.dim / config.head_dim / hidden_size//n_heads).")
+
+            base = getattr(rotary_emb, "base", None)
+            if base is None:
+                base = getattr(config, "rope_theta", 10000.0)
+
+            inv_freq = 1.0 / (float(base) ** (torch.arange(0, dim, 2, device=device).float() / float(dim)))
+
+            # IMPORTANT: don't re-register if you can avoid it; just overwrite the buffer attr.
+            rotary_emb.inv_freq = inv_freq
+
+        # nuke caches so they regenerate correctly on first real forward
+        if hasattr(rotary_emb, "cos_cached"):
+            rotary_emb.cos_cached = None
+        if hasattr(rotary_emb, "sin_cached"):
+            rotary_emb.sin_cached = None
+
+        # optional warmup (cheap-ish, but you can skip)
+        try:
+            L = min(int(max_seq_len), 2048)
+            dummy_pos = torch.arange(0, L, device=device).unsqueeze(0)
+            dummy_x = torch.zeros(1, L, int(getattr(rotary_emb, "dim", dummy_pos.numel())), device=device, dtype=dtype)
+            _ = rotary_emb(dummy_x, dummy_pos)
+        except Exception:
+            pass
+
+    return rotary_emb
+
+
+def find_rotary_emb(model):
+    # common roots
+    roots = [
+        model,
+        getattr(model, "model", None),
+        getattr(getattr(model, "model", None), "model", None),
+        getattr(model, "transformer", None),
+    ]
+
+    for r in roots:
+        if r is None:
+            continue
+        rot = getattr(r, "rotary_emb", None)
+        if rot is not None:
+            return rot
+
+    # fallback: look inside first layer attention modules
+    for r in roots:
+        if r is None:
+            continue
+        layers = getattr(r, "layers", None) or getattr(r, "h", None)
+        if layers is None:
+            continue
+        for i in range(min(len(layers), 2)):
+            blk = layers[i]
+            sa = getattr(blk, "self_attn", None) or getattr(blk, "attn", None)
+            if sa is None:
+                continue
+            rot = getattr(sa, "rotary_emb", None)
+            if rot is not None:
+                return rot
+
+    return None
+

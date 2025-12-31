@@ -166,9 +166,9 @@ def main():
         forge.utils.io.metaize_module_(embed)
     position_ids = torch.arange(0, T, dtype=torch.long, device=device).unsqueeze(0)
 
-    rotary_embed = getattr(model.model, "rotary_emb", None)
+    rotary_emb = getattr(model.model, "rotary_emb", None)
 
-    if rotary_embed:
+    if rotary_emb:
         forge.utils.io.jit_load_prefix_to_cpu(
             model,
             args.model_name_or_path,
@@ -180,30 +180,32 @@ def main():
             disk_window=disk_window,
         )
         
-        if hasattr(rotary_embed, "inv_freq"):
-            # 1. Regenerate inv_freq
-            dim = getattr(rotary_embed, "dim", None)
-            if dim is None:
-                dim = getattr(config, "rope_dim", None) or getattr(config, "head_dim", None)
-            
-            base = getattr(rotary_embed, "base", 10000.0)
-            inv_freq = 1.0 / (base ** (torch.arange(0, dim, 2, device=device).float() / dim))
-            rotary_embed.register_buffer("inv_freq", inv_freq, persistent=False)
-            
-            # 2. Kill cached buffers so they regenerate on first forward
-            if hasattr(rotary_embed, "cos_cached"):
-                rotary_embed.cos_cached = None
-            if hasattr(rotary_embed, "sin_cached"):
-                rotary_embed.sin_cached = None
-                
-            # 3. (Optional) Pre-compute them now to ensure they exist on GPU
-            # This triggers the model's internal cache update logic
-            try:
-                # Dummy forward to force cache generation
-                dummy_pos = torch.arange(0, args.max_sequence_length, device=device).unsqueeze(0)
-                rotary_embed(torch.zeros(1, args.max_sequence_length, dim, device=device, dtype=dtype), dummy_pos)
-            except Exception as e:
-                pass # Some models accept different signatures, it's fine
+        rotary_emb = forge.utils.engine.ensure_rotary_ready(
+            rotary_emb, config,
+            device=device,
+            max_seq_len=int(args.max_sequence_length),
+            dtype=dtype,
+        )
+    else:
+        rotary_emb = forge.utils.engine.find_rotary_emb(model)
+        forge.utils.io.jit_load_prefix_to_cpu(
+            model,
+            args.model_name_or_path,
+            weight_map,
+            ["model.rotary_emb."],
+            args.hf_tmp_dir,
+            lru,
+            reserve_bytes=0,
+            disk_window=disk_window,
+        )
+        rotary_emb = forge.utils.engine.ensure_rotary_ready(
+            rotary_emb, config,
+            device=device,
+            max_seq_len=int(args.max_sequence_length),
+            dtype=dtype,
+        )
+
+
 
     
     blocks = model.model.layers
@@ -266,7 +268,7 @@ def main():
                 hooks[layer_name] = layer.register_forward_hook(update_handle_hook(layer_name))
 
         with torch.no_grad():
-            _ = forge.utils.engine.forward(block, X, position_ids, N, B, device, offload_device, rotary_embed)
+            _ = forge.utils.engine.forward(block, X, position_ids, N, B, device, offload_device, rotary_emb)
             
             for _, h in hooks.items():
                 h.remove()
@@ -309,7 +311,7 @@ def main():
 
         #Activation Update
         with torch.inference_mode():
-            X = forge.utils.engine.forward(block, X, position_ids, N, B, device, offload_device, True, rotary_embed)
+            X = forge.utils.engine.forward(block, X, position_ids, N, B, device, offload_device, True, rotary_emb)
 
         if args.offload:
             block.to("cpu")
