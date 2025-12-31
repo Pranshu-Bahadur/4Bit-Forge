@@ -14,7 +14,7 @@ import forge.utils
 
 from forge.gptq import GPTQ
 
-ROUTED_EXPERTS_REGEX = r".*mlp\.experts\.\d+\.(down|gate|up|gate_up)_proj$"
+ROUTED_EXPERTS_REGEX = r".*\.experts\.\d+\.(down|gate|up|gate_up)_proj$"
 
 def parse_args():
     parser = argparse.ArgumentParser()
