@@ -114,9 +114,7 @@ def main():
     # --- IO objects (create once) ---
     lru = forge.utils.io.ShardLRU(max_bytes=int(args.lru_ram_gb * (1024**3)))
 
-    # If you know shard size (you mentioned ~5.36GB), set shard_bytes for reserve-aware cap.
-    # Else set shard_bytes=0 to use a fixed-count window (max_shards).
-    assumed_shard_bytes = int(5.36 * (1024**3)) if args.jit_stream else 0
+    assumed_shard_bytes = int(4.63 * (1024**3)) if args.jit_stream else 0
 
     disk_cfg = forge.utils.io.DiskWindowConfig(
         shard_bytes=assumed_shard_bytes,
@@ -129,8 +127,11 @@ def main():
 
     tokenizer = AutoTokenizer.from_pretrained(args.model_name_or_path, trust_remote_code=True)
 
-    calibration_dataset = forge.utils.preprocess.prepare_dataset(args.dataset_name_or_path, tokenizer, 
-                                                              int(args.max_sequence_length), int(args.num_calibration_samples))
+    #Assumptions: your model has a chat template & your dataset contains instruction & output columns & contains split=train
+    calibration_dataset = forge.utils.preprocess.prepare_dataset(str(args.dataset_name_or_path),
+                                                                tokenizer, 
+                                                                int(args.max_sequence_length), 
+                                                                int(args.num_calibration_samples))
 
     del tokenizer
     gc.collect()
@@ -156,7 +157,7 @@ def main():
 
 
     embed.to(device)
-    X = forge.utils.preprocess.prepare_embeddings(embed, X, N, T, B)
+    X = forge.utils.preprocess.prepare_embeddings(embed, calibration_dataset, X, N, B, device, offload_device)
     if args.offload:
         embed.to("cpu")
         embed.to(device="meta")
@@ -176,10 +177,6 @@ def main():
             disk_window=disk_window,
         )
 
-
-
-    torch.cuda.empty_cache()
-    gc.collect()
     
     blocks = model.model.layers
 
@@ -240,7 +237,7 @@ def main():
                 hooks[layer_name] = layer.register_forward_hook(update_handle_hook(layer_name))
 
         with torch.no_grad():
-            forge.utils.engine.forward(block, X, position_ids, N, T, B)
+            _ = forge.utils.engine.forward(block, X, position_ids, N, B, device, offload_device, rotary_embed)
             
             for _, h in hooks.items():
                 h.remove()
@@ -255,7 +252,7 @@ def main():
                     if args.save_dir:
                         os.makedirs(os.path.join(args.save_dir, handle_name), exist_ok=True)
                         torch.save(
-                                {"qweight": qweight.to(torch.int8), "scale": scales, "zero": qzeros.to(torch.int8)},
+                                {"qweight": qweight.to(torch.int8), "scale": scales.to(handle.layer.weight.dtype), "zero": qzeros.to(torch.int8)},
                                 os.path.join(args.save_dir, handle_name, f"quantized_weight.pt"),
                             )
 
@@ -269,7 +266,7 @@ def main():
                     if args.save_dir:
                         os.makedirs(os.path.join(args.save_dir, handle_name), exist_ok=True)
                         torch.save(
-                                {"qweight": qweight.to(torch.int8), "scale": scales, "zero": qzeros.to(torch.int8)},
+                                {"qweight": qweight.to(torch.int8), "scale": scales.to(handle.layer.weight.dtype), "zero": qzeros.to(torch.int8)},
                                 os.path.join(args.save_dir, handle_name, f"quantized_weight.pt"),
                             )
 
@@ -283,7 +280,7 @@ def main():
 
         #Activation Update
         with torch.inference_mode():
-            X = forge.utils.engine.forward(block, X, position_ids, N, T, B)
+            X = forge.utils.engine.forward(block, X, position_ids, N, B, device, offload_device, True, rotary_embed)
 
         if args.offload:
             block.to("cpu")
@@ -291,6 +288,16 @@ def main():
 
         torch.cuda.empty_cache()
         gc.collect()
+
+    if args.save_dir:
+        torch.save(
+            {
+                "bits": int(args.bits),
+                "group_size": int(args.group_size),
+                "quantize_only_experts": bool(args.quantize_only_experts)
+            },
+            os.path.join(args.save_dir, "metadata.pt")
+        )
 
 if __name__ == "__main__":
     main()
