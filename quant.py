@@ -89,7 +89,7 @@ def main():
     rank = 0 #TODO multigpu
     device = "cuda"
     torch.set_grad_enabled(False)
-    torch.cuda.set_device(device)
+    #torch.cuda.set_device(device)
     dtype = getattr(torch, str(args.dtype))
 
     os.environ.setdefault("HF_HOME", args.hf_tmp_dir)
