@@ -606,7 +606,10 @@ def materialize_block_weights_to_fp(
         for scale_key in (f"{lname}.weight_scales", f"{lname}.weight_scale"):
             if scale_key in state_tensors:
                 s = state_tensors[scale_key].to(torch.float32)
-                w_fp32 = w_fp32 * s
+                if s.shape[1] != w_fp32.shape[1]:
+                    w_fp32 = w_fp32.transpose(-2, -1) * s
+                else:
+                    w_fp32 = w_fp32 * s
                 state_tensors.pop(scale_key, None)
                 break
         inv_key = f"{lname}.weight_scale_inv"

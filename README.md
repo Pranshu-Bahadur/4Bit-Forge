@@ -1,12 +1,13 @@
 ![4Bit-Forge logo](assets/4Bit-Forge.png)
 
 This repo builds upon the solid foundation laid in MoE-Quant. Thank you for your amazing work!
-Supports: MiniMax, DeepSeek, Kimi K2, GPT-OSS
+Supports: MiniMax M2.1, DeepSeek V3.2, Kimi K2, GPT-OSS-120B (Prolly more models)
+Runs GPTQ quantization on a Single A100!
+
 Todo(s):
-- [x] engine.py
-- [x] preprocess.py (openplatypus)
+
 - [ ] pack uint8 <- int4?
-- [ ] formatting for vllm
+- [ ] save final model checkpoint for formatting for vllm compatibility
 - [ ] sparsegptq 2:4 vllm inference compatible format
     - [ ] build interblock Mask update sparsegptq 2:4 kernel
     - [ ] Test sparsegptq on gpt 120B oss ("mvp")
@@ -21,3 +22,5 @@ Todo(s):
 
 - [x] io.py + handle quantized layers
 - [x] scaffold initial quant.py
+- [x] engine.py
+- [x] preprocess.py (openplatypus)
