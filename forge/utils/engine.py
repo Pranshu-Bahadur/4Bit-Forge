@@ -96,9 +96,6 @@ def ensure_rotary_emb(model, config, device):
         except Exception:
             rotary = None
 
-    if rotary is None:
-        return None
-
     # If init_empty_weights put buffers on meta, regenerate them on real device.
     inv = getattr(rotary, "inv_freq", None)
     if inv is None or getattr(inv, "is_meta", False):

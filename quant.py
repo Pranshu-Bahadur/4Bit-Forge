@@ -226,6 +226,7 @@ def main():
         meta_names = [n for n, p in block.named_parameters(recurse=True) if getattr(p, "is_meta", False)]
         assert not meta_names, f"Still meta params in block {block_id}: {meta_names[:10]}"
         block.to(device)
+        
 
         #Calibration Pass
         layers = forge.utils.engine.list_layers(block) #TODO sort
