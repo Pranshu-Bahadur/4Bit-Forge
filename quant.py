@@ -129,6 +129,10 @@ def main():
 
 
     tokenizer = AutoTokenizer.from_pretrained(args.model_name_or_path, trust_remote_code=True)
+    if tokenizer.pad_token_id is None:
+                print("[WARN] Tokenizer has no pad_token_id! Using eos_token_id as pad_token.")
+                tokenizer.pad_token = tokenizer.eos_token
+                tokenizer.pad_token_id = tokenizer.eos_token_id
 
     #Assumptions: your model has a chat template & your dataset contains instruction & output columns & contains split=train
     calibration_dataset = forge.utils.preprocess.prepare_dataset(str(args.dataset_name_or_path),
