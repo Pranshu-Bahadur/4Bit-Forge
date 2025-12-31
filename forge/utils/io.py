@@ -594,13 +594,6 @@ def materialize_block_weights_to_fp(
             state_tensors.pop(w_key, None)
             continue
 
-        # Normal float weights
-        if w_raw.dtype in (torch.float16, torch.bfloat16, torch.float32):
-            w = w_raw.to(dtype=dtype, device="cpu")
-            set_module_tensor_to_device(layer, "weight", device="cpu", value=w)
-            state_tensors.pop(w_key, None)
-            continue
-
         # Fallback: int + scale-ish (optional)
         w_fp32 = w_raw.to(torch.float32)
         for scale_key in (f"{lname}.weight_scales", f"{lname}.weight_scale"):
@@ -610,8 +603,10 @@ def materialize_block_weights_to_fp(
                 if shape_key in state_tensors:
                     _shape = state_tensors[shape_key]
                     print(_shape)
-                    print(_shape.shape)
-                    w_fp32 = w_fp32.reshape(*_shape.shape) * s
+                    try:
+                        w_fp32 = w_fp32 * s.reshape(-1, *_shape.detach.tolist())
+                    except:
+                        w_fp32 = w_fp32.reshape(-1, *_shape.detach.tolist()) * s
                 else:
                     w_fp32 = w_fp32 * s
                 state_tensors.pop(scale_key, None)
@@ -622,9 +617,17 @@ def materialize_block_weights_to_fp(
             w_fp32 = w_fp32 * (1.0 / s)
             state_tensors.pop(inv_key, None)
 
+        if w_raw.dtype in (torch.float16, torch.bfloat16, torch.float32):
+            w = w_raw.to(dtype=dtype, device="cpu")
+            set_module_tensor_to_device(layer, "weight", device="cpu", value=w)
+            state_tensors.pop(w_key, None)
+            continue
+
         w = w_fp32.to(dtype=dtype, device="cpu")
         set_module_tensor_to_device(layer, "weight", device="cpu", value=w)
         state_tensors.pop(w_key, None)
+
+
 
 
 
