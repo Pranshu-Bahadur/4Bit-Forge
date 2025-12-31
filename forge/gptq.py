@@ -61,8 +61,7 @@ class GPTQ(object):
     @torch.no_grad()
     def update(self, X : Tensor):
         if self._is_owner():
-            if isinstance(self.owner.layer, nn.Linear): #Only supports Linear
-                X = X.reshape(-1, X.shape[-1]).to(device=self.owner.device, dtype=torch.float32) #@TODO if upcast needed? addmm might upcast to fp32
+            X = X.reshape(-1, X.shape[-1]).to(device=self.owner.device, dtype=torch.float32) #@TODO if upcast needed? addmm might upcast to fp32
             
             new_samples = int(X.shape[0])
 
