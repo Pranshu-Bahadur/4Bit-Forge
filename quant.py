@@ -240,10 +240,8 @@ def main():
         hooks  = {}
         layers = forge.utils.engine.list_layers(block) #TODO sort
 
-        if hasattr(block, "mlp") and hasattr(block.mlp, "experts"):
-            experts = block.mlp.experts
-            if hasattr(experts, "gate_up_proj") and hasattr(experts, "down_proj"):
-                
+        if hasattr(block, "mlp") and hasattr(block.mlp, "experts") and hasattr(block.mlp.experts, "gate_up_proj") and hasattr(block.mlp.experts, "down_proj"):
+                experts = block.mlp.experts
                 for layer_name, layer in layers.items():
                     if args.quantize_only_routed_experts and re.search(ROUTED_EXPERTS_REGEX, layer_name) is None:
                         continue
