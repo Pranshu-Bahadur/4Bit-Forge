@@ -599,16 +599,27 @@ def materialize_block_weights_to_fp(
                 if inv_key in state_tensors and state_tensors[inv_key].ndim == 2 and w_fp32.ndim == 2:
                     w_fp32 = _apply_block_scale_inv_2d(w_fp32, state_tensors[inv_key])
                     state_tensors.pop(inv_key, None)
+                elif f"{lname}.weight_scale" in state_tensors:
+                    inv_key = f"{lname}.weight_scale"
+                    w_fp32 = _apply_block_scale_inv_2d(w_fp32, 1/state_tensors[inv_key])
+                    state_tensors.pop(inv_key, None)
+                elif f"{lname}.weight_scales" in state_tensors:
+                    inv_key = f"{lname}.weight_scales"
+                    w_fp32 = _apply_block_scale_inv_2d(w_fp32, 1/state_tensors[inv_key])
+                    state_tensors.pop(inv_key, None)
+                else:
+                    print(f"{state_tensors} deq not support or is fused moe model.")
+
 
                 w = w_fp32.to(dtype=dtype, device="cpu")
-                set_module_tensor_to_device(layer, "weight", device="cpu", value=w)
+                layer.weight.copy_(w)
                 state_tensors.pop(w_key, None)
                 continue
 
             # Normal float weights
             if w_raw.dtype in (torch.float16, torch.bfloat16, torch.float32):
                 w = w_raw.to(dtype=dtype, device="cpu")
-                set_module_tensor_to_device(layer, "weight", device="cpu", value=w)
+                layer.weight.copy_(w)
                 state_tensors.pop(w_key, None)
                 continue
 
@@ -618,6 +629,7 @@ def materialize_block_weights_to_fp(
                 if scale_key in state_tensors:
                     s = state_tensors[scale_key].to(torch.float32)
                     w_fp32 = w_fp32 * s
+                    
                     state_tensors.pop(scale_key, None)
                     break
             inv_key = f"{lname}.weight_scale_inv"
@@ -627,7 +639,7 @@ def materialize_block_weights_to_fp(
                 state_tensors.pop(inv_key, None)
 
             w = w_fp32.to(dtype=dtype, device="cpu")
-            set_module_tensor_to_device(layer, "weight", device="cpu", value=w)
+            layer.weight.copy_(w)
             state_tensors.pop(w_key, None)
     except:
         _maybe_materialize_gptoss_expert_params(block, state_tensors, dtype)
