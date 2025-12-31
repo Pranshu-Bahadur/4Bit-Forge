@@ -25,7 +25,7 @@ def prepare_dataset(
     def tokenize(sample):
         return tokenizer(
             sample["text"], 
-            padding='do_not_pad', 
+            padding='max_length', 
             max_length=max_sequence_length, 
             truncation=True, 
             add_special_tokens=False,
