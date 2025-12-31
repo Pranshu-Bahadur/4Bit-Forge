@@ -262,7 +262,7 @@ def main():
                 hooks[layer_name] = layer.register_forward_hook(update_handle_hook(layer_name))
 
         with torch.no_grad():
-            _ = forge.utils.engine.forward(block, X, position_ids, N, B, device, offload_device, rotary_emb)
+            _ = forge.utils.engine.forward(block, X, position_ids, N, B, device, offload_device, False, rotary_emb)
             
             for _, h in hooks.items():
                 h.remove()
