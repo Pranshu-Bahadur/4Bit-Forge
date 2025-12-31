@@ -179,6 +179,31 @@ def main():
             reserve_bytes=0,
             disk_window=disk_window,
         )
+        
+        if hasattr(rotary_embed, "inv_freq"):
+            # 1. Regenerate inv_freq
+            dim = getattr(rotary_embed, "dim", None)
+            if dim is None:
+                dim = getattr(config, "rope_dim", None) or getattr(config, "head_dim", None)
+            
+            base = getattr(rotary_embed, "base", 10000.0)
+            inv_freq = 1.0 / (base ** (torch.arange(0, dim, 2, device=device).float() / dim))
+            rotary_embed.register_buffer("inv_freq", inv_freq, persistent=False)
+            
+            # 2. Kill cached buffers so they regenerate on first forward
+            if hasattr(rotary_embed, "cos_cached"):
+                rotary_embed.cos_cached = None
+            if hasattr(rotary_embed, "sin_cached"):
+                rotary_embed.sin_cached = None
+                
+            # 3. (Optional) Pre-compute them now to ensure they exist on GPU
+            # This triggers the model's internal cache update logic
+            try:
+                # Dummy forward to force cache generation
+                dummy_pos = torch.arange(0, args.max_sequence_length, device=device).unsqueeze(0)
+                rotary_embed(torch.zeros(1, args.max_sequence_length, dim, device=device, dtype=dtype), dummy_pos)
+            except Exception as e:
+                pass # Some models accept different signatures, it's fine
 
     
     blocks = model.model.layers
