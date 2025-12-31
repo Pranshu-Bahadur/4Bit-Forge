@@ -181,7 +181,7 @@ def main():
         )
         
         rotary_emb = forge.utils.engine.ensure_rotary_emb(
-            rotary_emb, config,
+            model, config,
             device=device
         )
     else:
@@ -197,7 +197,7 @@ def main():
             disk_window=disk_window,
         )
         rotary_emb = forge.utils.engine.ensure_rotary_emb(
-            rotary_emb, config,
+            model, config,
             device=device
         )
     
