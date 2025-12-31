@@ -76,8 +76,8 @@ def list_layers(block: nn.Module) -> Dict[str, Union[nn.Linear, ParamSliceProxy]
         if isinstance(gu, nn.Parameter) and gu.ndim == 3 and isinstance(dn, nn.Parameter) and dn.ndim == 3:
             E = gu.shape[0]
             for e in range(E):
-                layers[f"mlp.experts.{e}.gate_up_proj"] = ParamSliceProxy(gu, "gate_up_proj", e)
-                layers[f"mlp.experts.{e}.down_proj"]    = ParamSliceProxy(dn, "down_proj", e)
+                layers[f"mlp.experts.{e}.gate_up_proj"] = ParamSliceProxy(experts, "gate_up_proj", e)
+                layers[f"mlp.experts.{e}.down_proj"]    = ParamSliceProxy(experts, "down_proj", e)
 
     return layers
 
