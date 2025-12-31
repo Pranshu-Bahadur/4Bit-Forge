@@ -575,7 +575,9 @@ def materialize_block_weights_to_fp(
     for lname, layer in items:
         w_key = f"{lname}.weight"
         if w_key not in state_tensors:
-            continue
+            w_key = f"{lname}.weight_packed"
+            if w_key not in state_tensors:
+                    continue
 
         w_raw = state_tensors[w_key]
 
