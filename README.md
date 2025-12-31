@@ -24,6 +24,7 @@ Todo(s):
     - [ ] Custom Sparse 1:8 Kernels for inference
     - [ ] Monkey patch with transformers/torch nn.Linear
     - [ ] Explore monkey patching with vllm
+- [ ] improve cpu offloading for the gpu poor
 
 - [x] io.py + handle quantized layers
 - [x] scaffold initial quant.py
