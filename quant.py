@@ -160,7 +160,7 @@ def main():
     X = forge.utils.preprocess.prepare_embeddings(embed, calibration_dataset, X, N, B, device, offload_device)
     if args.offload:
         embed.to("cpu")
-        embed.to(device="meta")
+        forge.utils.io.metaize_module_(embed)
     position_ids = torch.arange(0, T, dtype=torch.long, device=device).unsqueeze(0)
 
     rotary_embed = getattr(model.model, "rotary_emb", None)
@@ -284,7 +284,7 @@ def main():
 
         if args.offload:
             block.to("cpu")
-            block.to("meta")
+            forge.utils.io.metaize_module_(block)
 
         torch.cuda.empty_cache()
         gc.collect()

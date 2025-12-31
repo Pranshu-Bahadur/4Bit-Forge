@@ -362,10 +362,9 @@ def inject_tensor_by_name(model: nn.Module, name: str, tensor: torch.Tensor, dev
     mod = model
     if module_path:
         try:
-            for p in module_path.split("."):
-                mod = getattr(mod, p)
-        except AttributeError:
-            return  # silently ignore missing paths
+            mod = _walk_module_path(model, module_path.split("."))
+        except Exception:
+            return  # (or raise, if you want strict)
 
     # If already registered, overwrite
     if hasattr(mod, attr) or attr in getattr(mod, "_parameters", {}) or attr in getattr(mod, "_buffers", {}):
@@ -426,11 +425,8 @@ def metaize_module_(module: nn.Module) -> None:
 # -----------------------------
 
 def _get_submodule(root: nn.Module, path: str) -> nn.Module:
-    mod = root
-    if path:
-        for p in path.split("."):
-            mod = getattr(mod, p)
-    return mod
+    return _walk_module_path(root, path.split(".")) if path else root
+
 
 
 def assign_param_(layer: nn.Module, name: str, value: torch.Tensor):
@@ -522,6 +518,17 @@ _MATERIALIZE_SIDECAR_SUFFIXES = (
     ".weight_scale", ".weight_scales", ".weight_scale_inv", ".weight_zero",
     ".qweight", ".qzeros", ".scales", ".g_idx", ".perm",
 )
+
+
+def _walk_module_path(root: nn.Module, parts: List[str]) -> nn.Module:
+    mod = root
+    for p in parts:
+        if p.isdigit():
+            # ModuleList / Sequential / list-like
+            mod = mod[int(p)]
+        else:
+            mod = getattr(mod, p)
+    return mod
 
 def jit_load_prefix_to_cpu(
     model: nn.Module,
