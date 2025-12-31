@@ -12,7 +12,7 @@ Todo(s):
 - [ ] save final model checkpoint for formatting for vllm compatibility
 - [ ] confirm frontend didnt break quantization...
 - [ ] test inference
-- [ ] fp8, fp16, bf16 kernel dispatcher
+- [ ] fp8, fp16, bf16 kernel dispatcher (important for speed and efficieny.)
 - [ ] sparsegptq 2:4 vllm inference compatible format
     - [ ] build interblock Mask update sparsegptq 2:4 kernel
     - [ ] Test sparsegptq on gpt 120B oss ("mvp")
