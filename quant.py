@@ -104,7 +104,7 @@ def main():
         model = AutoModelForCausalLM.from_config(
             config=config, trust_remote_code=True, 
             attn_implementation=str(args.attn_implementation), 
-            dtype=dtype
+            torch_dtype=dtype
         ).eval()
         model.config.use_cache = False
     ROUTED_EXPERTS_REGEX = r".*mlp\.experts\.\d+\.(down|gate|up|gate_up)_proj$"
@@ -204,10 +204,8 @@ def main():
             max_seq_len=int(args.max_sequence_length),
             dtype=dtype,
         )
-
-
-
     
+
     blocks = model.model.layers
 
     for block_id, block in tqdm(enumerate(blocks)):
