@@ -483,15 +483,12 @@ def assign_param_(layer: nn.Module, name: str, value: torch.Tensor):
     # normal tensor → copy into existing storage
     p.copy_(v)
 
-
 # Keys used only for materialization; don't inject these into the model.
 _MATERIALIZE_SIDECAR_SUFFIXES = (
     ".weight_scale", ".weight_scales", ".weight_scale_inv", ".weight_zero",
     ".qweight", ".qzeros", ".scales", ".g_idx", ".perm",
     "_blocks", "_scales",   # NOTE: do NOT include "_bias"
 )
-
-
 
 def _fp8_dtypes() -> set[torch.dtype]:
     out = set()
@@ -516,6 +513,11 @@ def _e8m0_to_scale_fp32(e_u8: torch.Tensor) -> torch.Tensor:
 def _dequant_mxfp4_blocks_to_fp(blocks_u8: torch.Tensor, scales_u8: torch.Tensor) -> torch.Tensor:
     # blocks: [..., NB, 16] bytes -> 32 fp4 codes
     b = blocks_u8.to(torch.uint8)
+    
+    # Validation
+    if b.shape[-1] != 16:
+        raise ValueError(f"MXFP4 blocks last dim must be 16, got {b.shape[-1]}")
+
     lo = b & 0x0F
     hi = (b >> 4) & 0x0F
     codes = torch.stack([lo, hi], dim=-1).reshape(*b.shape[:-1], 32)  # [..., NB, 32]
@@ -526,122 +528,221 @@ def _dequant_mxfp4_blocks_to_fp(blocks_u8: torch.Tensor, scales_u8: torch.Tensor
     vals = torch.where(sign, -vals, vals)
 
     scale = _e8m0_to_scale_fp32(scales_u8).unsqueeze(-1)  # [..., NB, 1]
-    out = (vals * scale).reshape(*vals.shape[:-2], vals.shape[-2] * vals.shape[-1])  # [..., NB*32]
-    return out#.transpose(-2, -1)  # fp32
+    
+    # Combine and flatten the packed dimension
+    out = (vals * scale).reshape(*vals.shape[:-2], -1)  # [..., NB*32]
+    return out
 
 def _apply_block_scale_inv_2d(w_fp32: torch.Tensor, s_inv_2d: torch.Tensor) -> torch.Tensor:
-    # w: [O, I], s_inv: [O/128, I/128]
+    # w: [O, I], s_inv: [O/block_size, I/block_size]
     O, I = w_fp32.shape
     so, si = s_inv_2d.shape
-    assert O % so == 0 and I % si == 0, (w_fp32.shape, s_inv_2d.shape)
+
+    # Handle edge cases (e.g. empty weights)
+    if O == 0 or I == 0: 
+        return w_fp32
+
+    # Validate divisibility
+    if O % so != 0 or I % si != 0:
+        # Fallback: Attempt simple broadcast or return as-is if shapes are incompatible
+        # (This protects against crashes if padding was handled strangely upstream)
+        try:
+            return w_fp32 * (1.0 / s_inv_2d)
+        except RuntimeError:
+            return w_fp32
 
     br = O // so
     bc = I // si
+    
+    # Reshape W to [blocks_O, block_size_O, blocks_I, block_size_I]
     w4 = w_fp32.reshape(so, br, si, bc)
     s = s_inv_2d.to(torch.float32)
+    
+    # Reshape scale to [blocks_O, 1, blocks_I, 1] for broadcasting
     w4 = w4 * (1.0 / s).reshape(so, 1, si, 1)
+    
     return w4.reshape(O, I)
 
+def _get_submodule(module, path):
+    """Helper to safely access submodules via dot notation."""
+    if not path: return module
+    current = module
+    try:
+        for name in path.split('.'):
+            current = getattr(current, name)
+        return current
+    except AttributeError:
+        return None
+
 def _maybe_materialize_gptoss_expert_params(block: nn.Module, state_tensors: dict[str, torch.Tensor], dtype: torch.dtype) -> None:
-    # gpt-oss pattern: mlp.experts.{gate_up_proj,down_proj}_{blocks,scales} -> mlp.experts.{gate_up_proj,down_proj}
-    for proj in ("gate_up_proj", "down_proj"):
-        bk = f"mlp.experts.{proj}_blocks"
-        sk = f"mlp.experts.{proj}_scales"
-        if bk not in state_tensors or sk not in state_tensors:
+    # Scan for GPT-OSS MoE tensors: usually end in _blocks/_scales
+    # Pattern: mlp.experts.{gate_up_proj,down_proj}_{blocks,scales}
+    
+    # We collect relevant keys first to avoid modifying dict while iterating
+    keys_to_process = []
+    for k in state_tensors:
+        if k.endswith("_blocks") and "experts" in k:
+            keys_to_process.append(k)
+
+    for bk in keys_to_process:
+        sk = bk.replace("_blocks", "_scales")
+        if sk not in state_tensors:
             continue
 
+        # Extract projection name and path
+        # Example bk: "mlp.experts.gate_up_proj_blocks"
         try:
-            experts_mod = _walk_module_path(block, ["mlp", "experts"])
-        except Exception:
+            # Split by rightmost dot to get "mlp.experts" and "gate_up_proj_blocks"
+            path_prefix, param_name = bk.rsplit(".", 1)
+            proj_name = param_name.replace("_blocks", "") # "gate_up_proj"
+            
+            # Locate the module
+            experts_mod = _get_submodule(block, path_prefix)
+            if experts_mod is None:
+                continue
+
+            w_fp32 = _dequant_mxfp4_blocks_to_fp(state_tensors[bk], state_tensors[sk])  # fp32
+            w = w_fp32.to(dtype=dtype, device="cpu")
+
+            # IMPORTANT: set as a PARAM/Buffer on experts_mod
+            set_module_tensor_to_device(experts_mod, proj_name, device="cpu", value=w)
+
+            # Consume sidecars
+            state_tensors.pop(bk, None)
+            state_tensors.pop(sk, None)
+
+        except Exception as e:
+            print(f"Warning: Failed to materialize MoE param {bk}: {e}")
             continue
-
-        w_fp32 = _dequant_mxfp4_blocks_to_fp(state_tensors[bk], state_tensors[sk])  # fp32
-        w = w_fp32.to(dtype=dtype, device="cpu")
-
-        # IMPORTANT: set as a PARAM on experts_mod (proj is the attribute name)
-        set_module_tensor_to_device(experts_mod, proj, device="cpu", value=w)
-
-        # consume sidecars so we never inject them
-        state_tensors.pop(bk, None)
-        state_tensors.pop(sk, None)
 
 def materialize_block_weights_to_fp(
     block: nn.Module,
     state_tensors: dict[str, torch.Tensor],
     *,
-    group_size: int,
-    bits: int,
-    dtype: torch.dtype,
-    list_layers_fn=None,
+    group_size: int = 128,
+    bits: int = 16,
+    dtype: torch.dtype = torch.float16,
+    list_layers_fn = None,
 ) -> None:
-    # gpt-oss fused expert params (if present in this checkpoint)
-    try:
-        if list_layers_fn is None:
-            list_layers_fn = list_layers
+    
+    # 1. Handle GPT-OSS Fused MoE params (Special Case)
+    _maybe_materialize_gptoss_expert_params(block, state_tensors, dtype)
 
-        layers = list_layers_fn(block)
-        if isinstance(layers, dict):
-            items = layers.items()
-        else:
-            items = layers  # assume iterable of (name, layer)
+    # 2. Setup Layer Iterator
+    if list_layers_fn is None:
+        def default_list_layers(m): return m.named_modules()
+        list_layers_fn = default_list_layers
 
-        for lname, layer in items:
-            w_key = f"{lname}.weight"
-            if w_key not in state_tensors:
-                continue
+    layers = list_layers_fn(block)
+    
+    # Normalize layers to a list of (name, layer) tuples
+    if isinstance(layers, dict):
+        layer_items = list(layers.items())
+    else:
+        layer_items = list(layers) # Handle iterators
 
-            w_raw = state_tensors[w_key]
+    # 3. Iterate Standard Layers
+    for lname, layer in layer_items:
+        w_key = f"{lname}.weight"
+        
+        # Skip if the weight isn't in our state dict (already loaded or missing)
+        if w_key not in state_tensors:
+            continue
 
-            # DeepSeek FP8: float8 weight + weight_scale_inv (2D blockwise)
-            if w_raw.dtype in _FP8_DTYPES:
-                w_fp32 = w_raw.to(torch.float32)
-                inv_key = f"{lname}.weight_scale_inv"
-                if inv_key in state_tensors and state_tensors[inv_key].ndim == 2 and w_fp32.ndim == 2:
-                    w_fp32 = _apply_block_scale_inv_2d(w_fp32, state_tensors[inv_key])
-                    state_tensors.pop(inv_key, None)
-                elif f"{lname}.weight_scale" in state_tensors:
-                    inv_key = f"{lname}.weight_scale"
-                    w_fp32 = _apply_block_scale_inv_2d(w_fp32, 1/state_tensors[inv_key])
-                    state_tensors.pop(inv_key, None)
-                elif f"{lname}.weight_scales" in state_tensors:
-                    inv_key = f"{lname}.weight_scales"
-                    w_fp32 = _apply_block_scale_inv_2d(w_fp32, 1/state_tensors[inv_key])
-                    state_tensors.pop(inv_key, None)
-                else:
-                    print(f"{state_tensors} deq not support or is fused moe model.")
+        w_raw = state_tensors[w_key]
 
-
-                w = w_fp32.to(dtype=dtype, device="cpu")
-                set_module_tensor_to_device(layer, "weight", device="cpu", value=w)
-                state_tensors.pop(w_key, None)
-                continue
-
-            # Normal float weights
-            if w_raw.dtype in (torch.float16, torch.bfloat16, torch.float32):
-                w = w_raw.to(dtype=dtype, device="cpu")
-                set_module_tensor_to_device(layer, "weight", device="cpu", value=w)
-                state_tensors.pop(w_key, None)
-                continue
-
-            # Fallback: int + scale-ish (optional)
+        # --- Case A: DeepSeek / FP8 Weights ---
+        if w_raw.dtype in _FP8_DTYPES:
             w_fp32 = w_raw.to(torch.float32)
-            for scale_key in (f"{lname}.weight_scales", f"{lname}.weight_scale"):
-                if scale_key in state_tensors:
-                    s = state_tensors[scale_key].to(torch.float32)
-                    w_fp32 = w_fp32 * s
-                    state_tensors.pop(scale_key, None)
-                    break
+            
+            # Try to find scaling factors
             inv_key = f"{lname}.weight_scale_inv"
+            scale_key = f"{lname}.weight_scale"
+            scales_key = f"{lname}.weight_scales" # Plural variant
+            
             if inv_key in state_tensors:
-                s = state_tensors[inv_key].to(torch.float32)
-                w_fp32 = w_fp32 * (1.0 / s)
+                s_inv = state_tensors[inv_key]
+                # DeepSeek V3 2D Blockwise Scaling
+                if s_inv.ndim == 2 and w_fp32.ndim == 2:
+                    w_fp32 = _apply_block_scale_inv_2d(w_fp32, s_inv)
+                else:
+                    # Standard scalar/vector inverse scale
+                    w_fp32 = w_fp32 * (1.0 / s_inv.to(torch.float32))
                 state_tensors.pop(inv_key, None)
+                
+            elif scale_key in state_tensors:
+                # Direct scaling (sometimes inverted in different frameworks, assuming direct here)
+                w_fp32 = w_fp32 * state_tensors[scale_key].to(torch.float32)
+                state_tensors.pop(scale_key, None)
+                
+            elif scales_key in state_tensors:
+                w_fp32 = w_fp32 * state_tensors[scales_key].to(torch.float32)
+                state_tensors.pop(scales_key, None)
 
+            # Assign to layer
             w = w_fp32.to(dtype=dtype, device="cpu")
-            set_module_tensor_to_device(layer, "weight", device="cpu", value=w)
+            if hasattr(layer, 'weight'):
+                # Handle potential transpose needed for Linear layers
+                if layer.weight.shape != w.shape and w.T.shape == layer.weight.shape:
+                    w = w.T
+                
+                if layer.weight.shape != w.shape:
+                    set_module_tensor_to_device(layer, "weight", device="cpu", value=w)
+                else:
+                    layer.weight.data.copy_(w)
+            
             state_tensors.pop(w_key, None)
-    except:
-        _maybe_materialize_gptoss_expert_params(block, state_tensors, dtype)
+            continue
+
+        # --- Case B: Standard Float Weights (FP16/BF16/FP32) ---
+        if w_raw.dtype in (torch.float16, torch.bfloat16, torch.float32):
+            w = w_raw.to(dtype=dtype, device="cpu")
+            if hasattr(layer, 'weight'):
+                if layer.weight.shape != w.shape:
+                    set_module_tensor_to_device(layer, "weight", device="cpu", value=w)
+                else:
+                    layer.weight.data.copy_(w)
+            state_tensors.pop(w_key, None)
+            continue
+
+        # --- Case C: Quantized Fallback (Int + Scale) ---
+        # Handles generic int quantization that requires immediate dequantization
+        w_fp32 = w_raw.to(torch.float32)
+        
+        # Apply scales
+        for s_suffix in [".weight_scales", ".weight_scale", ".scales"]:
+            s_key = f"{lname}{s_suffix}"
+            if s_key in state_tensors:
+                s = state_tensors[s_key].to(torch.float32)
+                # Auto-reshape for broadcasting if necessary
+                if s.ndim == 1 and w_fp32.ndim == 2:
+                    if s.numel() == w_fp32.shape[0]: s = s.view(-1, 1)
+                    elif s.numel() == w_fp32.shape[1]: s = s.view(1, -1)
+                
+                w_fp32 = w_fp32 * s
+                state_tensors.pop(s_key, None)
+                break 
+
+        # Apply inverse scales
+        inv_key = f"{lname}.weight_scale_inv"
+        if inv_key in state_tensors:
+            s = state_tensors[inv_key].to(torch.float32)
+            w_fp32 = w_fp32 * (1.0 / s)
+            state_tensors.pop(inv_key, None)
+
+        w = w_fp32.to(dtype=dtype, device="cpu")
+        
+        if hasattr(layer, 'weight'):
+            # Check for Transposition (e.g. GPTQ/AWQ sometimes pack differently)
+            if layer.weight.shape != w.shape and w.T.shape == layer.weight.shape:
+                w = w.T
+            
+            if layer.weight.shape != w.shape:
+                set_module_tensor_to_device(layer, "weight", device="cpu", value=w)
+            else:
+                layer.weight.data.copy_(w)
+
+        state_tensors.pop(w_key, None)
 
 
 
