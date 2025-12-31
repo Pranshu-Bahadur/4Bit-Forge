@@ -3,7 +3,7 @@ import json
 import shutil
 import time
 from dataclasses import dataclass
-from typing import Dict, List, Tuple, Optional, Any, Set
+from typing import Dict, List, Tuple, Optional, Any, Set, Union
 from collections import defaultdict, OrderedDict, deque
 
 import torch
@@ -37,17 +37,43 @@ def _now() -> float:
     return time.time()
 
 
-def list_layers(block: nn.Module) -> Dict[str, nn.Linear]:
-    layers = {}
-    for n, m in block.named_modules():
-        if 'experts' in n.lower():
-            if isinstance(m, nn.Linear):
-                layers[n] = m
-            else: #GPT OSS
-                layers[n+'.gate_up_proj'] = m.gate_up_proj
-                layers[n+'.down_proj'] = m.down_proj
-    return layers
+class ParamSliceProxy:
+    """Expose a 2D .weight view into a 3D fused expert Parameter."""
+    def __init__(self, p3d: torch.Tensor, expert_idx: int):
+        self._p3d = p3d
+        self._e = expert_idx
 
+    @property
+    def weight(self) -> torch.Tensor:
+        return self._p3d[self._e]  # [*, *] view
+
+
+def list_layers(block: nn.Module) -> Dict[str, Union[nn.Linear, ParamSliceProxy]]:
+    layers: Dict[str, Union[nn.Linear, ParamSliceProxy]] = {}
+
+    # Normal path: nn.Linear modules (DeepSeek-style experts are nn.Linear)
+    for n, m in block.named_modules():
+        if isinstance(m, nn.Linear):
+            layers[n] = m
+
+    # GPT-OSS path: fused expert weights as Parameters on block.mlp.experts
+    mlp = getattr(block, "mlp", None)
+    experts = getattr(mlp, "experts", None) if mlp is not None else None
+    
+    if experts is not None:
+        gu = getattr(experts, "gate_up_proj", None)   # [E,H,2D]
+        dn = getattr(experts, "down_proj", None)      # [E,D,H]
+
+        print(gu.shape)
+        
+
+        if isinstance(gu, nn.Parameter) and gu.ndim == 3 and isinstance(dn, nn.Parameter) and dn.ndim == 3:
+            E = gu.shape[0]
+            for e in range(E):
+                layers[f"mlp.experts.{e}.gate_up_proj"] = ParamSliceProxy(gu, e)
+                layers[f"mlp.experts.{e}.down_proj"]    = ParamSliceProxy(dn, e)
+
+    return layers
 
 # -----------------------------
 # set_module_tensor_to_device (fallback)
