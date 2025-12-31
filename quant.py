@@ -14,7 +14,6 @@ import forge.utils
 
 from forge.gptq import GPTQ
 
-ROUTED_EXPERTS_REGEX = r".*\.experts\.\d+\.(down|gate|up|gate_up)(_proj|w\d+)$"
 
 def parse_args():
     parser = argparse.ArgumentParser()
@@ -107,7 +106,8 @@ def main():
             torch_dtype=dtype
         ).eval()
         model.config.use_cache = False
-    ROUTED_EXPERTS_REGEX = r".*mlp\.experts\.\d+\.(down|gate|up|gate_up)_proj$"
+    ROUTED_EXPERTS_REGEX = r".*\.experts\.\d+\.(down|gate|up|gate_up)(_proj|w\d+)$"
+
     #ROUTED_EXPERTS_REGEX = ROUTED_EXPERTS_REGEX if "deepseek" in str(args.model_name_or_path).lower() else r".*mlp\.experts\.(down|gate|up|gate_up)_proj.*"
     shard_ids = forge.utils.io.load_safetensors_index(args.model_name_or_path, tmp_dir=args.hf_tmp_dir)
     weight_map = shard_ids["weight_map"]
