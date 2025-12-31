@@ -3,7 +3,7 @@ import json
 import shutil
 import time
 from dataclasses import dataclass
-from typing import Dict, List, Tuple, Optional, Any, Set, Union
+from typing import Dict, List, Tuple, Optional, Any, Set, Union, Sequence
 from collections import defaultdict, OrderedDict, deque
 
 import torch
@@ -528,40 +528,94 @@ def _apply_block_scale_inv_2d(w_fp32: torch.Tensor, s_inv_2d: torch.Tensor) -> t
     w4 = w4 * (1.0 / s).reshape(so, 1, si, 1)
     return w4.reshape(O, I)
 
-def _apply_block_scale(w: torch.Tensor, s: torch.Tensor, weight_shape: list) -> torch.Tensor:
+
+def _apply_block_scale(
+    w: torch.Tensor,
+    s: torch.Tensor,
+    weight_shape: Union[Sequence[int], torch.Tensor],
+    *,
+    bits: int = 4,
+    symmetric: bool = True,
+    scale_is_inv: bool = False,   # set True if the tensor is weight_scale_inv
+) -> torch.Tensor:
     """
-    Applies block-wise scaling to flattened weights and reshapes to original dimensions.
-    
-    Args:
-        w: Flattened weight tensor (likely 1D).
-        s: Flattened scale tensor (1D), one scale per block.
-        weight_shape: The target logical shape of the weight matrix [out_features, in_features].
+    Kimi-style: int4 packed into int32 + per-(group_size) scale.
+
+    Inputs
+      w: packed int32 (or already-dense float/int tensor)
+      s: scales tensor (per group)
+      weight_shape: [O, I] (dense target)
+
+    Returns
+      dense fp32 weight of shape [O, I]
     """
-    # 1. Flatten inputs to ensure we are working with raw streams of elements
-    w_flat = w.flatten()
-    s_flat = s.flatten()
-    
-    # 2. Derive the block size (number of weights sharing a single scale)
-    #    Common sizes are 32, 64, or 128 depending on the specific Kimi layer
-    num_weights = w_flat.numel()
-    num_scales = s_flat.numel()
-    
-    if num_weights % num_scales != 0:
-        raise ValueError(f"Weight size ({num_weights}) is not divisible by scale size ({num_scales}).")
-        
-    block_size = num_weights // num_scales
-    
-    # 3. Reshape weights into [num_blocks, block_size]
-    # 4. Reshape scales into  [num_blocks, 1] for broadcasting
-    w_blocked = w_flat.view(num_scales, block_size)
-    s_blocked = s_flat.view(num_scales, 1)
-    
-    # 5. Apply the scales (broadcast multiply)
-    #    Ensure types match (e.g., if w is int8 and s is fp16, result should be fp16)
-    w_dequant = w_blocked * s_blocked.to(w_blocked.dtype)
-    
-    # 6. Reshape to the final target shape
-    return w_dequant.view(weight_shape)
+    if torch.is_tensor(weight_shape):
+        weight_shape = [int(x) for x in weight_shape.flatten().tolist()]
+    else:
+        weight_shape = [int(x) for x in list(weight_shape)]
+    assert len(weight_shape) == 2, f"Expected 2D weight_shape, got {weight_shape}"
+    O, I = weight_shape
+    dense_numel = O * I
+
+    # scale handling
+    sf = s.to(dtype=torch.float32, device=w.device)
+    if scale_is_inv:
+        sf = 1.0 / sf
+
+    # infer group_size from counts (works for your numbers)
+    if sf.numel() == dense_numel:
+        group_size = 1
+        sf2 = sf.view(O, I)
+    else:
+        # group_size = dense_numel / num_scales
+        assert dense_numel % sf.numel() == 0, (
+            f"Cannot infer group_size: dense_numel={dense_numel} not divisible by scales.numel={sf.numel()}"
+        )
+        group_size = dense_numel // sf.numel()
+
+        # expect scales shaped [O, I/group_size] (or broadcastable to it)
+        I_groups = I // group_size
+        if sf.numel() == O * I_groups:
+            sf2 = sf.view(O, I_groups).repeat_interleave(group_size, dim=1)
+        else:
+            # last-resort broadcast: try to reshape to [O, I_groups]
+            sf2 = sf.reshape(O, I_groups).repeat_interleave(group_size, dim=1)
+
+    # If already dense, just apply scales
+    if w.numel() == dense_numel:
+        w_fp = w.to(dtype=torch.float32).view(O, I)
+        return w_fp * sf2
+
+    # Packed int32 path: infer values_per_word
+    assert dense_numel % w.numel() == 0, (
+        f"Packed weight numel doesn't divide dense numel: dense={dense_numel}, packed={w.numel()}"
+    )
+    vals_per = dense_numel // w.numel()
+    # For int32 packing, vals_per should be 32/bits (=8 when bits=4)
+    expected = 32 // bits
+    assert vals_per == expected, f"Unexpected packing: vals_per={vals_per}, expected={expected} (bits={bits})"
+
+    # reshape packed to [O, I/vals_per]
+    assert I % vals_per == 0, f"I={I} not divisible by vals_per={vals_per}"
+    I_packed = I // vals_per
+    wp = w.to(device=w.device)
+    wp = wp.view(O, I_packed).to(torch.int32)
+
+    mask = (1 << bits) - 1
+    # unpack to uint4 values in [0..15]
+    # shape: [O, I_packed, vals_per] -> [O, I]
+    parts = []
+    for i in range(vals_per):
+        parts.append(((wp >> (i * bits)) & mask).to(torch.int16))
+    u = torch.stack(parts, dim=-1).reshape(O, I)  # uint4
+
+    if symmetric:
+        # map uint4 -> signed int4 via two's complement
+        sign_bit = 1 << (bits - 1)  # 8
+        u = torch.where(u >= sign_bit, u - (1 << bits), u)  # [-8..7]
+
+    w_fp = u.to(torch.float32) * sf2
+    return w_fp
 
 def _maybe_materialize_gptoss_expert_params(block: nn.Module, state_tensors: dict[str, torch.Tensor], dtype: torch.dtype) -> None:
     # gpt-oss pattern: mlp.experts.{gate_up_proj,down_proj}_{blocks,scales} -> mlp.experts.{gate_up_proj,down_proj}
@@ -637,7 +691,11 @@ def materialize_block_weights_to_fp(
                 shape_key = f"{lname}.weight_shape"
                 if shape_key in state_tensors:
                     _shape = state_tensors[shape_key]
-                    w_fp32 = _apply_block_scale(w_fp32, s, _shape.detach().tolist())
+                    try:
+                        w_fp32 = _apply_block_scale(w_fp32, s, _shape.detach().tolist(), symmetric=True)
+                    except:
+                        w_fp32 = _apply_block_scale(w_fp32, s, _shape.detach().tolist(), symmetric=False)
+
                 else:
                     w_fp32 = w_fp32 * s
                 state_tensors.pop(scale_key, None)
@@ -645,7 +703,15 @@ def materialize_block_weights_to_fp(
         inv_key = f"{lname}.weight_scale_inv"
         if inv_key in state_tensors:
             s = state_tensors[inv_key].to(torch.float32)
-            w_fp32 = w_fp32 * (1.0 / s)
+            shape_key = f"{lname}.weight_shape"
+            if shape_key in state_tensors:
+                    _shape = state_tensors[shape_key]
+                    try:
+                        w_fp32 = _apply_block_scale(w_fp32, s, _shape.detach().tolist(), symmetric=True, scale_is_inv=True)
+                    except:
+                        w_fp32 = _apply_block_scale(w_fp32, s, _shape.detach().tolist(), symmetric=False, scale_is_inv=True)
+            else:
+                w_fp32 = w_fp32 * (1.0 / s)
             state_tensors.pop(inv_key, None)
 
         if w_raw.dtype in (torch.float16, torch.bfloat16, torch.float32):
