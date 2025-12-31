@@ -194,3 +194,54 @@ def find_rotary_emb(model):
 
     return None
 
+
+
+def fused_expert_hooks(block, handles):
+            expert_hook = None
+            # only GPT-OSS fused experts have these as Parameters
+            def _experts_hook(mod, args, kwargs, out):
+                hs = args[0]                      # [B,S,H]
+                ri = kwargs.get("router_indices") # [tokens, top_k] (or flattenable)
+                rw = kwargs.get("routing_weights")
+
+                if ri is None or rw is None:
+                    return
+
+                H = mod.hidden_size
+                x = hs.reshape(-1, H)  # [tokens, H]
+
+                ri2 = ri.reshape(-1, ri.shape[-1] if ri.ndim > 1 else 1)
+                rw2 = rw.reshape(-1, rw.shape[-1] if rw.ndim > 1 else 1)
+
+                # iterate hit experts
+                for e_t in torch.unique(ri2):
+                    e = int(e_t.item())
+                    if e < 0 or e >= mod.num_experts:
+                        continue
+
+                    tok_idx, k_idx = (ri2 == e).nonzero(as_tuple=True)
+                    if tok_idx.numel() == 0:
+                        continue
+
+                    w = rw2[tok_idx, k_idx].to(x.dtype)      # [n]
+                    x_e = x[tok_idx]                          # [n, H]
+                    x_e_w = x_e * w.unsqueeze(-1)
+
+                    h_gu = handles.get(f"mlp.experts.{e}.gate_up_proj")
+                    if h_gu is not None:
+                        h_gu.update(x_e_w)
+
+                    # gated intermediate -> down_proj input
+                    gate_up = x_e @ mod.gate_up_proj[e] + mod.gate_up_proj_bias[e]  # [n,2D]
+                    gate, up = gate_up[..., ::2], gate_up[..., 1::2]                # [n,D]
+                    gate = gate.clamp(max=mod.limit)
+                    up   = up.clamp(min=-mod.limit, max=mod.limit)
+                    glu  = gate * torch.sigmoid(gate * mod.alpha)
+                    gated = (up + 1) * glu
+                    gated_w = gated * w.unsqueeze(-1)
+
+                    h_dn = handles.get(f"mlp.experts.{e}.down_proj")
+                    if h_dn is not None:
+                        h_dn.update(gated_w)
+            expert_hook = _experts_hook
+            return expert_hook

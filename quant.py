@@ -231,40 +231,66 @@ def main():
         assert not meta_names, f"Still meta params in block {block_id}: {meta_names[:10]}"
         block.to(device)
         
-
         #Calibration Pass
-        layers = forge.utils.engine.list_layers(block) #TODO sort
         handles = {}
-        hooks = {}
+        layers = forge.utils.engine.list_layers(block) #TODO sort
 
-        def update_handle_hook(name):
-            def _hook(_, inp, out):
-                x = inp[0] if isinstance(inp, (tuple, list)) else inp
-                handles[name].update(x)                
-            return _hook
-            
-        for layer_name, layer in layers.items():
-            if args.quantize_only_routed_experts and re.search(ROUTED_EXPERTS_REGEX, layer_name) is None:
-                continue
-            print(layer_name, layer)
-            owner = None
-            if args.owner_gptq_handles and layer_name.endswith("up_proj"):
-                parent_name, _ = layer_name.rsplit(".", 1)
-                owner = handles.get(f"{parent_name}.gate_proj", None)
+        if hasattr(block, "mlp") and hasattr(block.mlp, "experts"):
+            experts = block.mlp.experts
+            if hasattr(experts, "gate_up_proj") and hasattr(experts, "down_proj"):
+                
+                for layer_name, layer in layers.items():
+                    if args.quantize_only_routed_experts and re.search(ROUTED_EXPERTS_REGEX, layer_name) is None:
+                        continue
+                    owner = None
+                    if args.owner_gptq_handles and layer_name.endswith("up_proj"):
+                        parent_name, _ = layer_name.rsplit(".", 1)
+                        owner = handles.get(f"{parent_name}.gate_proj", None)
 
-            handles[layer_name] = GPTQ(
-                    layer=layer,
-                    group_size=args.group_size,
-                    symmetric=bool(args.sym),
-                    rel_damp=args.rel_damp,
-                    quantization_order=args.quantization_order,
-                    quantization_scale=args.quantization_scale,
-                    owner=owner,
-                    algorithm="gptq",
-                    device = device
-                )
-            if owner is None:
-                hooks[layer_name] = layer.register_forward_hook(update_handle_hook(layer_name))
+                    handles[layer_name] = GPTQ(
+                            layer=layer,
+                            group_size=args.group_size,
+                            symmetric=bool(args.sym),
+                            rel_damp=args.rel_damp,
+                            quantization_order=args.quantization_order,
+                            quantization_scale=args.quantization_scale,
+                            owner=owner,
+                            algorithm="gptq",
+                            device = device
+                        )
+                experts_hook = forge.utils.engine.fused_expert_hooks(block, handles)
+                hooks['fused_experts'] = experts.register_forward_hook(experts_hook, with_kwargs=True)
+                
+        else:
+
+            def update_handle_hook(name):
+                def _hook(_, inp, out):
+                    x = inp[0] if isinstance(inp, (tuple, list)) else inp
+                    handles[name].update(x)                
+                return _hook
+        
+            for layer_name, layer in layers.items():
+                if args.quantize_only_routed_experts and re.search(ROUTED_EXPERTS_REGEX, layer_name) is None:
+                    continue
+                owner = None
+                if args.owner_gptq_handles and layer_name.endswith("up_proj"):
+                    parent_name, _ = layer_name.rsplit(".", 1)
+                    owner = handles.get(f"{parent_name}.gate_proj", None)
+
+                handles[layer_name] = GPTQ(
+                        layer=layer,
+                        group_size=args.group_size,
+                        symmetric=bool(args.sym),
+                        rel_damp=args.rel_damp,
+                        quantization_order=args.quantization_order,
+                        quantization_scale=args.quantization_scale,
+                        owner=owner,
+                        algorithm="gptq",
+                        device = device
+                    )
+                if owner is None:
+                    hooks[layer_name] = layer.register_forward_hook(update_handle_hook(layer_name))
+
 
         with torch.no_grad():
             _ = forge.utils.engine.forward(block, X, position_ids, N, B, device, offload_device, False, rotary_emb)
