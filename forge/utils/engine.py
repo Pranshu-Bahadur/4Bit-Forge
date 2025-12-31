@@ -55,7 +55,7 @@ def dequantize_forge_full(dtype, qweight, scales, qzeros, group_size, device):
     return w.to(dtype), scale, qzero
 
 
-def forward(block, X, position_ids, N, bs, device, offload_device, act_update=False, rotary_embed=None):
+def forward(block, X, position_ids, N, bs, device, offload_device, act_update=False, rotary_emb=None):
     for s in range(0, N, bs):
         e = min(N, s + bs)
 
@@ -63,8 +63,8 @@ def forward(block, X, position_ids, N, bs, device, offload_device, act_update=Fa
         x = torch.cat([X[i] for i in range(s, e)], dim=0).to(device, non_blocking=True)
         B = x.size(0)
         pos = position_ids.expand(B, -1)
-        out = block(x, position_ids=pos) if rotary_embed is None else block(x, position_ids=pos, 
-                                                                            position_embeddings=get_position_embeddings(rotary_embed, x, pos))
+        out = block(x, position_ids=pos) if rotary_emb is None else block(x, position_ids=pos, 
+                                                                            position_embeddings=get_position_embeddings(rotary_emb, x, pos))
         out = out[0] if isinstance(out, (tuple, list)) else out
         out = out.to(offload_device) if offload_device is not None else out
         if act_update:
