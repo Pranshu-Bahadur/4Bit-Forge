@@ -40,8 +40,12 @@ def _now() -> float:
 def list_layers(block: nn.Module) -> Dict[str, nn.Linear]:
     layers = {}
     for n, m in block.named_modules():
-        if isinstance(m, nn.Linear):
-            layers[n] = m
+        if 'experts' in n.lower():
+            if isinstance(m, nn.Linear):
+                layers[n] = m
+            else: #GPT OSS
+                layers[n+'.gate_up_proj'] = m.gate_up_proj
+                layers[n+'.down_proj'] = m.down_proj
     return layers
 
 

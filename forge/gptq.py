@@ -48,7 +48,7 @@ class GPTQ(object):
 
     @torch.no_grad()
     def reset(self):
-        self.W = self.layer.weight.clone()
+        self.W = self.layer.weight.clone() if getattr(self.layer, "weight", None) else self.layer
         self.H = None
         self.num_samples = torch.zeros((), device=self.device, dtype=torch.int64)
         self.prepared = False
