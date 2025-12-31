@@ -36,18 +36,17 @@ def _is_local_dir(repo_id: str) -> bool:
 def _now() -> float:
     return time.time()
 
-def list_layers(block: nn.Module) -> Dict[str, nn.Linear]:
+def list_layers(block: nn.Module) -> Dict[str, nn.Linear | nn.Module]:
     layers = {}
     for n, m in block.named_modules():
-        if (isinstance(m, nn.Module) and re.search(r'.*(gate|up|down)_proj$', n)) or isinstance(m, nn.Linear):
+        if isinstance(m, nn.Module) or isinstance(m, nn.Linear):
             layers[n] = m
         else:
              sub = getattr(m, "named_modules", None)
-             _layers = list_layers(sub)
+             _layers = list_layers(m)
              if _layers:
-                 return _layers
+                 layers |= _layers
     return layers
-
 
 # -----------------------------
 # set_module_tensor_to_device (fallback)
