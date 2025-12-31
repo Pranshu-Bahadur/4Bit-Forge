@@ -14,6 +14,10 @@ from typing import List
 import torch
 import torch.nn as nn
 from accelerate.utils import set_module_tensor_to_device
+from dataclasses import dataclass
+from typing import Dict, Union
+import torch
+import torch.nn as nn
 
 
 # -----------------------------
@@ -36,11 +40,33 @@ def _is_local_dir(repo_id: str) -> bool:
 def _now() -> float:
     return time.time()
 
-def list_layers(block: nn.Module) -> Dict[str, nn.Linear]:
-    layers = {}
+
+
+
+@dataclass(frozen=True)
+class TensorTarget:
+    module: nn.Module      # e.g. block.mlp.experts
+    attr: str              # e.g. "gate_up_proj" or "down_proj"
+
+
+def list_layers(block: nn.Module) -> Dict[str, Union[nn.Linear, TensorTarget]]:
+    layers: Dict[str, Union[nn.Linear, TensorTarget]] = {}
+
+    # Normal path: nn.Linear modules (DeepSeek-style experts are nn.Linear)
     for n, m in block.named_modules():
         if isinstance(m, nn.Linear):
             layers[n] = m
+
+    # GPT-OSS path: fused expert weights as Parameters on block.mlp.experts
+    mlp = getattr(block, "mlp", None)
+    experts = getattr(mlp, "experts", None) if mlp is not None else None
+    if experts is not None:
+        # gate_up_proj / down_proj are tensors/params in GPT-OSS
+        if hasattr(experts, "gate_up_proj"):
+            layers["mlp.experts.gate_up_proj"] = TensorTarget(experts, "gate_up_proj")
+        if hasattr(experts, "down_proj"):
+            layers["mlp.experts.down_proj"] = TensorTarget(experts, "down_proj")
+
     return layers
 
 
