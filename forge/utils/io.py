@@ -14,7 +14,7 @@ from typing import List
 import torch
 import torch.nn as nn
 from accelerate.utils import set_module_tensor_to_device
-import re
+
 
 # -----------------------------
 # Small utilities
@@ -36,54 +36,19 @@ def _is_local_dir(repo_id: str) -> bool:
 def _now() -> float:
     return time.time()
 
-import torch
-import torch.nn as nn
-from typing import Dict
 
-class ExpertParamProxy:
-    """
-    Proxy that behaves like a minimal 'layer' with a .weight Tensor.
-    Backed by a slice into a fused expert Parameter.
-    """
-    def __init__(self, experts: nn.Module, attr: str, expert_idx: int):
-        self.experts = experts
-        self.attr = attr
-        self.expert_idx = expert_idx
-
-    @property
-    def weight(self) -> torch.Tensor:
-        # returns a view into the underlying Parameter storage
-        return getattr(self.experts, self.attr)[self.expert_idx]
-
-
-def list_layers(block: nn.Module) -> Dict[str, object]:
-    """
-    Returns a dict name->target where targets are:
-      - nn.Linear modules (normal path, incl DeepSeek experts)
-      - ExpertParamProxy for GPT-OSS fused expert params (per-expert 2D matrices)
-    """
-    layers: Dict[str, object] = {}
-
-    # 1) Normal Linear modules (DeepSeek will be fully covered here)
+def list_layers(block: nn.Module) -> Dict[str, nn.Linear]:
+    layers = {}
     for n, m in block.named_modules():
-        if isinstance(m, nn.Linear):
-            layers[n] = m
-
-    # 2) GPT-OSS fused experts: Parameters on block.mlp.experts
-    mlp = getattr(block, "mlp", None)
-    experts = getattr(mlp, "experts", None) if mlp is not None else None
-
-    if experts is not None and hasattr(experts, "gate_up_proj") and isinstance(experts.gate_up_proj, nn.Parameter):
-        W_gu = experts.gate_up_proj  # [E, H, 2D]
-        E = W_gu.shape[0]
-
-        # gate_up_proj and down_proj exist as fused Parameters in GPT-OSS
-        if hasattr(experts, "down_proj") and isinstance(experts.down_proj, nn.Parameter):
-            for e in range(E):
-                layers[f"mlp.experts.{e}.gate_up_proj"] = ExpertParamProxy(experts, "gate_up_proj", e)  # [H, 2D]
-                layers[f"mlp.experts.{e}.down_proj"]    = ExpertParamProxy(experts, "down_proj", e)     # [D, H]
-
+        if 'experts' in n.lower():
+            if isinstance(m, nn.Linear):
+                layers[n] = m
+            else: #GPT OSS
+                layers[n+'.gate_up_proj'] = m.gate_up_proj
+                layers[n+'.down_proj'] = m.down_proj
     return layers
+
+
 # -----------------------------
 # set_module_tensor_to_device (fallback)
 # -----------------------------
@@ -530,7 +495,7 @@ def _dequant_mxfp4_blocks_to_fp(blocks_u8: torch.Tensor, scales_u8: torch.Tensor
 
     scale = _e8m0_to_scale_fp32(scales_u8).unsqueeze(-1)  # [..., NB, 1]
     out = (vals * scale).reshape(*vals.shape[:-2], vals.shape[-2] * vals.shape[-1])  # [..., NB*32]
-    return out.transpose(1, 2).contiguous()  # fp32
+    return out.transpose(-2, -1)  # fp32
 
 def _apply_block_scale_inv_2d(w_fp32: torch.Tensor, s_inv_2d: torch.Tensor) -> torch.Tensor:
     # w: [O, I], s_inv: [O/128, I/128]
