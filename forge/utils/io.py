@@ -488,7 +488,7 @@ def materialize_block_weights_to_fp(block, state_tensors: dict, *, dtype):
                     layer.weight.data = w_fp.to(dtype=dtype, device="cpu")
                     continue
 
-        if w_key in state_tensors and state_tensors[w_key].dtype in (torch.float16, torch.bfloat16, torch.float32):
+        if w_key in state_tensors and isinstance(state_tensors[w_key], torch.Tensor):
             layer.weight.data = state_tensors[w_key].to(dtype=dtype, device="cpu")
             continue
 
