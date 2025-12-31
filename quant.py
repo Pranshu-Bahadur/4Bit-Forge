@@ -86,8 +86,8 @@ def parse_args():
 def main():
     args = parse_args()
 
-    rank = 0
-    device = f"cuda:{rank}"
+    rank = 0 #TODO multigpu
+    device = "cuda"
     torch.set_grad_enabled(False)
     torch.cuda.set_device(device)
     dtype = getattr(torch, str(args.dtype))

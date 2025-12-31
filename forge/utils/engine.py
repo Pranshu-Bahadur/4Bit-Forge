@@ -68,7 +68,6 @@ def get_position_embeddings(rotary_emb: nn.Module, hidden_states: torch.Tensor, 
 @torch.no_grad()
 def dequantize_forge_full(dtype, qweight, scales, qzeros, group_size, device):
 
-    qweight = qweight.to(device, non_blocking=True)
 
     if qweight.dim() != 2:
         raise ValueError(f"Expected qweight (R,C) unpacked, got shape={tuple(qweight.shape)}")
@@ -77,8 +76,8 @@ def dequantize_forge_full(dtype, qweight, scales, qzeros, group_size, device):
     G = (C + group_size - 1) // group_size
 
     # scales/qzeros are per-group for flattened [R*G]
-    scales = scales.to(device, non_blocking=True).reshape(-1)
-    qzeros = qzeros.to(device, non_blocking=True).reshape(-1)
+    scales = scales.reshape(-1)
+    qzeros = qzeros.reshape(-1)
 
     if scales.numel() != R * G or qzeros.numel() != R * G:
         raise ValueError(f"Expected scales/qzeros numel == R*G ({R*G}), "
