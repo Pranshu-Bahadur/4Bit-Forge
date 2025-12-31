@@ -37,8 +37,9 @@ def list_layers(block: nn.Module) -> Dict[str, Union[nn.Linear, ParamSliceProxy]
         dn = getattr(experts, "down_proj", None)      # [E,D,H]
 
         print(gu.shape)
+        print(dn)
+        print(dn.shape)
         
-
         if isinstance(gu, nn.Parameter) and gu.ndim == 3 and isinstance(dn, nn.Parameter) and dn.ndim == 3:
             E = gu.shape[0]
             for e in range(E):
