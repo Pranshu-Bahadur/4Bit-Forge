@@ -604,9 +604,9 @@ def materialize_block_weights_to_fp(
                     _shape = state_tensors[shape_key]
                     print(_shape)
                     try:
-                        w_fp32 = w_fp32 * s.reshape(-1, *_shape.detach.tolist())
+                        w_fp32 = w_fp32 * s.reshape(-1, *_shape.detach().tolist())
                     except:
-                        w_fp32 = w_fp32.reshape(-1, *_shape.detach.tolist()) * s
+                        w_fp32 = w_fp32.reshape(-1, *_shape.detach().tolist()) * s
                 else:
                     w_fp32 = w_fp32 * s
                 state_tensors.pop(scale_key, None)

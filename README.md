@@ -4,10 +4,15 @@ This repo builds upon the solid foundation laid in MoE-Quant. Thank you for your
 Supports: MiniMax M2.1, DeepSeek V3.2, Kimi K2, GPT-OSS-120B (Prolly more models)
 Runs GPTQ quantization on a Single A100...and its like supa fast...!
 
+Note: Still...WIP..
+
 Todo(s):
 
 - [ ] pack uint8 <- int4?
 - [ ] save final model checkpoint for formatting for vllm compatibility
+- [ ] confirm frontend didnt break quantization...
+- [ ] test inference
+- [ ] fp8, fp16, bf16 kernel dispatcher
 - [ ] sparsegptq 2:4 vllm inference compatible format
     - [ ] build interblock Mask update sparsegptq 2:4 kernel
     - [ ] Test sparsegptq on gpt 120B oss ("mvp")
