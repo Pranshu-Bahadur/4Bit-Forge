@@ -307,7 +307,7 @@ def main():
                         os.makedirs(os.path.join(args.save_dir + f"/block.{block_id}", handle_name), exist_ok=True)
                         torch.save(
                                 {"qweight": qweight.to(torch.int8), "scale": scales.to(dtype), "zero": qzeros.to(torch.int8)},
-                                os.path.join(args.save_dir + f"/block.{block_id}" handle_name, f"quantized_weight.pt"),
+                                os.path.join(args.save_dir, f"block.{block_id}", handle_name, f"quantized_weight.pt"),
                             )
 
             for handle_name, handle in handles.items():
