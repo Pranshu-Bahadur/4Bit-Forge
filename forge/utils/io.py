@@ -607,7 +607,9 @@ def materialize_block_weights_to_fp(
             if scale_key in state_tensors:
                 s = state_tensors[scale_key].to(torch.float32)
                 if s.shape[1] != w_fp32.shape[1]:
-                    w_fp32 = w_fp32 * s.transpose(0, 1)
+                    _shape = w_fp32.shape
+                    w_fp32 = w_fp32.view(-1) * s.view(-1)
+                    w_fp32 = w_fp32.reshape(*_shape)
                 else:
                     w_fp32 = w_fp32 * s
                 state_tensors.pop(scale_key, None)
