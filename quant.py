@@ -233,6 +233,7 @@ def main():
         
         #Calibration Pass
         handles = {}
+        hooks  = {}
         layers = forge.utils.engine.list_layers(block) #TODO sort
 
         if hasattr(block, "mlp") and hasattr(block.mlp, "experts"):
