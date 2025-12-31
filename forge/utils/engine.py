@@ -32,10 +32,14 @@ def list_layers(block: nn.Module) -> Dict[str, Union[nn.Linear, ParamSliceProxy]
     layers: Dict[str, Union[nn.Linear, ParamSliceProxy]] = {}
 
     # Normal path: nn.Linear modules (DeepSeek-style experts are nn.Linear)
+    detect_experts = False
     for n, m in block.named_modules():
         if isinstance(m, nn.Linear):
             layers[n] = m
-
+            if 'experts' in n:
+                detect_experts = True
+    if detect_experts:
+        return layers
     # GPT-OSS path: fused expert weights as Parameters on block.mlp.experts
     mlp = getattr(block, "mlp", None)
     experts = getattr(mlp, "experts", None) if mlp is not None else None
