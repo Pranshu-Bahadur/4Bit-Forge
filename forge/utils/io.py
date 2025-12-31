@@ -528,6 +528,41 @@ def _apply_block_scale_inv_2d(w_fp32: torch.Tensor, s_inv_2d: torch.Tensor) -> t
     w4 = w4 * (1.0 / s).reshape(so, 1, si, 1)
     return w4.reshape(O, I)
 
+def _apply_block_scale(w: torch.Tensor, s: torch.Tensor, weight_shape: list) -> torch.Tensor:
+    """
+    Applies block-wise scaling to flattened weights and reshapes to original dimensions.
+    
+    Args:
+        w: Flattened weight tensor (likely 1D).
+        s: Flattened scale tensor (1D), one scale per block.
+        weight_shape: The target logical shape of the weight matrix [out_features, in_features].
+    """
+    # 1. Flatten inputs to ensure we are working with raw streams of elements
+    w_flat = w.flatten()
+    s_flat = s.flatten()
+    
+    # 2. Derive the block size (number of weights sharing a single scale)
+    #    Common sizes are 32, 64, or 128 depending on the specific Kimi layer
+    num_weights = w_flat.numel()
+    num_scales = s_flat.numel()
+    
+    if num_weights % num_scales != 0:
+        raise ValueError(f"Weight size ({num_weights}) is not divisible by scale size ({num_scales}).")
+        
+    block_size = num_weights // num_scales
+    
+    # 3. Reshape weights into [num_blocks, block_size]
+    # 4. Reshape scales into  [num_blocks, 1] for broadcasting
+    w_blocked = w_flat.view(num_scales, block_size)
+    s_blocked = s_flat.view(num_scales, 1)
+    
+    # 5. Apply the scales (broadcast multiply)
+    #    Ensure types match (e.g., if w is int8 and s is fp16, result should be fp16)
+    w_dequant = w_blocked * s_blocked.to(w_blocked.dtype)
+    
+    # 6. Reshape to the final target shape
+    return w_dequant.view(weight_shape)
+
 def _maybe_materialize_gptoss_expert_params(block: nn.Module, state_tensors: dict[str, torch.Tensor], dtype: torch.dtype) -> None:
     # gpt-oss pattern: mlp.experts.{gate_up_proj,down_proj}_{blocks,scales} -> mlp.experts.{gate_up_proj,down_proj}
     for proj in ("gate_up_proj", "down_proj"):
@@ -602,14 +637,7 @@ def materialize_block_weights_to_fp(
                 shape_key = f"{lname}.weight_shape"
                 if shape_key in state_tensors:
                     _shape = state_tensors[shape_key]
-                    print(_shape)
-                    _wshape = w_fp32.shape
-                    try:
-                        w_fp32 = w_fp32 * s.reshape(-1, *_shape.detach().tolist())
-                    except:
-                        w_fp32 = w_fp32.reshape(-1, *_shape.detach().tolist()) * s
-                    else:
-                        w_fp32 = w_fp32.reshape(-1, *_shape.detach().tolist()) * s.reshape(-1, *_shape.detach().tolist())
+                    w_fp32 = _apply_block_scale(w_fp32, s, _shape.detach().tolist())
                 else:
                     w_fp32 = w_fp32 * s
                 state_tensors.pop(scale_key, None)
