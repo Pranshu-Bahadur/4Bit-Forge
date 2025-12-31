@@ -304,7 +304,7 @@ def main():
                                                                 )
                     handle.layer.weight.copy_(deq)
                     if args.save_dir:
-                        os.makedirs(os.path.join(args.save_dir, handle_name), exist_ok=True)
+                        os.makedirs(os.path.join(args.save_dir, f"block{block_id}" + handle_name), exist_ok=True)
                         torch.save(
                                 {"qweight": qweight.to(torch.int8), "scale": scales.to(dtype), "zero": qzeros.to(torch.int8)},
                                 os.path.join(args.save_dir, handle_name, f"quantized_weight.pt"),
@@ -318,7 +318,7 @@ def main():
                                                                 )
                     handle.layer.weight.copy_(deq)
                     if args.save_dir:
-                        os.makedirs(os.path.join(args.save_dir, handle_name), exist_ok=True)
+                        os.makedirs(os.path.join(args.save_dir, f"block{block_id}" + handle_name), exist_ok=True)
                         torch.save(
                                 {"qweight": qweight.to(torch.int8), "scale": scales.to(dtype), "zero": qzeros.to(torch.int8)},
                                 os.path.join(args.save_dir, handle_name, f"quantized_weight.pt"),
