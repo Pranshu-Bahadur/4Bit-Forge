@@ -180,11 +180,9 @@ def main():
             disk_window=disk_window,
         )
         
-        rotary_emb = forge.utils.engine.ensure_rotary_ready(
+        rotary_emb = forge.utils.engine.ensure_rotary_emb(
             rotary_emb, config,
-            device=device,
-            max_seq_len=int(args.max_sequence_length),
-            dtype=dtype,
+            device=device
         )
     else:
         rotary_emb = forge.utils.engine.find_rotary_emb(model)
@@ -198,11 +196,9 @@ def main():
             reserve_bytes=0,
             disk_window=disk_window,
         )
-        rotary_emb = forge.utils.engine.ensure_rotary_ready(
+        rotary_emb = forge.utils.engine.ensure_rotary_emb(
             rotary_emb, config,
-            device=device,
-            max_seq_len=int(args.max_sequence_length),
-            dtype=dtype,
+            device=device
         )
     
 
