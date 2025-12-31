@@ -108,7 +108,7 @@ def main():
         ).eval()
         model.config.use_cache = False
     ROUTED_EXPERTS_REGEX = r".*mlp\.experts\.\d+\.(down|gate|up|gate_up)_proj$"
-    ROUTED_EXPERTS_REGEX = ROUTED_EXPERTS_REGEX if "deepseek" in str(args.model_name_or_path).lower() else r".*mlp\.experts\.(down|gate|up|gate_up)_proj.*"
+    ROUTED_EXPERTS_REGEX = ROUTED_EXPERTS_REGEX if "deepseek" in str(args.model_name_or_path).lower() else r".*mlp\.experts$"
     shard_ids = forge.utils.io.load_safetensors_index(args.model_name_or_path, tmp_dir=args.hf_tmp_dir)
     weight_map = shard_ids["weight_map"]
     num_shards = len(set(weight_map.values()))
