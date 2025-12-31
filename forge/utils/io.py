@@ -10,6 +10,10 @@ import torch
 import torch.nn as nn
 from safetensors import safe_open 
 from huggingface_hub import hf_hub_download
+from typing import List
+import torch
+import torch.nn as nn
+from accelerate.utils import set_module_tensor_to_device
 
 
 # -----------------------------
@@ -349,25 +353,47 @@ def load_safetensors_index(model_name_or_path: str, tmp_dir: str = "/tmp/hf_jit"
 # -----------------------------
 # Tensor injection / metaization
 # -----------------------------
+def _walk_module_path(root: nn.Module, parts: List[str]) -> nn.Module:
+    """
+    Walk a dotted module path where numeric segments index into ModuleList/Sequential/etc.
+    Example: ["model","layers","12","mlp","experts","0","up_proj"].
+    """
+    mod: Any = root
+    for p in parts:
+        if p.isdigit():
+            idx = int(p)
+            # Prefer indexing for ModuleList/Sequential; fallback to getattr if needed.
+            try:
+                mod = mod[idx]  # type: ignore[index]
+            except Exception:
+                mod = getattr(mod, p)
+        else:
+            mod = getattr(mod, p)
+    return mod
+
 
 def inject_tensor_by_name(model: nn.Module, name: str, tensor: torch.Tensor, device: str = "cpu") -> None:
     """
     Inject a tensor into model by dotted name.
     Supports parameters (weight/bias) and buffers.
+    Handles ModuleList indices in the path (e.g. layers.12, experts.0).
     """
     parts = name.split(".")
     attr = parts[-1]
-    module_path = ".".join(parts[:-1])
+    module_parts = parts[:-1]
 
-    mod = model
-    if module_path:
-        try:
-            mod = _walk_module_path(model, module_path.split("."))
-        except Exception:
-            return  # (or raise, if you want strict)
+    try:
+        mod = _walk_module_path(model, module_parts) if module_parts else model
+    except Exception:
+        # If you want strict behavior during debugging, replace with: raise
+        return
 
     # If already registered, overwrite
-    if hasattr(mod, attr) or attr in getattr(mod, "_parameters", {}) or attr in getattr(mod, "_buffers", {}):
+    if (
+        hasattr(mod, attr)
+        or attr in getattr(mod, "_parameters", {})
+        or attr in getattr(mod, "_buffers", {})
+    ):
         set_module_tensor_to_device(mod, attr, device=device, value=tensor)
         return
 
@@ -388,6 +414,7 @@ def inject_tensor_by_name(model: nn.Module, name: str, tensor: torch.Tensor, dev
 def metaize_module_(module: nn.Module) -> None:
     """
     Move params/buffers back to META to free CPU RAM after a block is done.
+    Handles ModuleList indices in parameter/buffer names.
     """
     # Parameters
     for n, p in list(module.named_parameters(recurse=True)):
@@ -397,9 +424,7 @@ def metaize_module_(module: nn.Module) -> None:
         try:
             parts = n.split(".")
             attr = parts[-1]
-            mod = module
-            for k in parts[:-1]:
-                mod = getattr(mod, k)
+            mod = _walk_module_path(module, parts[:-1]) if len(parts) > 1 else module
             set_module_tensor_to_device(mod, attr, device="meta", value=meta)
         except Exception:
             pass
@@ -412,13 +437,10 @@ def metaize_module_(module: nn.Module) -> None:
         try:
             parts = n.split(".")
             attr = parts[-1]
-            mod = module
-            for k in parts[:-1]:
-                mod = getattr(mod, k)
+            mod = _walk_module_path(module, parts[:-1]) if len(parts) > 1 else module
             set_module_tensor_to_device(mod, attr, device="meta", value=meta)
         except Exception:
             pass
-
 
 # -----------------------------
 # Main: prefix streaming loader
