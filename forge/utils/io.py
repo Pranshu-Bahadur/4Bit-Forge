@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 import os
 import json
 import shutil
@@ -7,8 +5,6 @@ import time
 from dataclasses import dataclass
 from typing import Dict, List, Tuple, Optional, Any, Set
 from collections import defaultdict, OrderedDict, deque
-
-from . import engine
 
 import torch
 import torch.nn as nn
@@ -35,6 +31,13 @@ def _is_local_dir(repo_id: str) -> bool:
 
 def _now() -> float:
     return time.time()
+
+def list_layers(block: nn.Module) -> Dict[str, nn.Linear]:
+    layers = {}
+    for n, m in block.named_modules():
+        if isinstance(m, nn.Linear):
+            layers[n] = m
+    return layers
 
 
 # -----------------------------
@@ -436,7 +439,7 @@ def materialize_block_weights_to_fp(block, state_tensors: dict, *, dtype):
     state_tensors: loaded tensors for this prefix from the source checkpoint
     goal: write float weights into block's nn.Linear.weight (CPU), so the block can run forward.
     """
-    layers = engine.list_layers(block)  # your existing layer enumerator
+    layers = list_layers(block)  # your existing layer enumerator
     if not layers:
         return
 
