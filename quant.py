@@ -269,6 +269,7 @@ def main():
                     handles[name].update(x)                
                 return _hook
         
+            layers = dict(sorted(layers.items()))
             for layer_name, layer in layers.items():
                 if args.quantize_only_routed_experts and re.search(ROUTED_EXPERTS_REGEX, layer_name) is None:
                     continue
