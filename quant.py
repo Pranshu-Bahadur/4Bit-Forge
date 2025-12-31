@@ -14,6 +14,8 @@ import forge.utils
 
 from forge.gptq import GPTQ
 
+ROUTED_EXPERTS_REGEX = r".*mlp\.experts\.\d+\.(down|gate|up|gate_up)_proj$"
+
 def parse_args():
     parser = argparse.ArgumentParser()
 
@@ -108,6 +110,23 @@ def main():
     weight_map = shard_ids["weight_map"]
     num_shards = len(set(weight_map.values()))
 
+
+    # --- IO objects (create once) ---
+    lru = forge.utils.io.ShardLRU(max_bytes=int(args.lru_ram_gb * (1024**3)))
+
+    # If you know shard size (you mentioned ~5.36GB), set shard_bytes for reserve-aware cap.
+    # Else set shard_bytes=0 to use a fixed-count window (max_shards).
+    assumed_shard_bytes = int(5.36 * (1024**3)) if args.jit_stream else 0
+
+    disk_cfg = forge.utils.io.DiskWindowConfig(
+        shard_bytes=assumed_shard_bytes,
+        safety_bytes=int(2 * (1024**3)),
+        max_shards=8,
+        use_lru_touch=True,
+    )
+    disk_window = forge.utils.io.ShardDiskWindow(args.hf_tmp_dir, disk_cfg)
+
+
     tokenizer = AutoTokenizer.from_pretrained(args.model_name_or_path, trust_remote_code=True)
 
     calibration_dataset = forge.utils.preprocess.prepare_dataset(args.dataset_name_or_path, tokenizer, 
@@ -125,12 +144,16 @@ def main():
     embed = model.model.embed_tokens
 
     forge.utils.io.jit_load_prefix_to_cpu(
-             model,
-             args.model_name_or_path,
-             weight_map,
-             ["model.embed_tokens."],
-             args.hf_tmp_dir,
+        model,
+        args.model_name_or_path,
+        weight_map,
+        ["model.embed_tokens."],
+        args.hf_tmp_dir,
+        lru,
+        reserve_bytes=0,
+        disk_window=disk_window,
     )
+
 
     embed.to(device)
     X = forge.utils.preprocess.prepare_embeddings(embed, X, N, T, B)
@@ -143,12 +166,16 @@ def main():
 
     if rotary_embed:
         forge.utils.io.jit_load_prefix_to_cpu(
-             model,
-             args.model_name_or_path,
-             weight_map,
-             ["model.rotary_emb."],
-             args.hf_tmp_dir,
+            model,
+            args.model_name_or_path,
+            weight_map,
+            ["model.rotary_emb."],
+            args.hf_tmp_dir,
+            lru,
+            reserve_bytes=0,
+            disk_window=disk_window,
         )
+
 
 
     torch.cuda.empty_cache()
@@ -159,14 +186,22 @@ def main():
     for block_id, block in tqdm(enumerate(blocks)):
         prefix = f"model.layers.{block_id}."
         forge.utils.io.jit_load_prefix_to_cpu(
-             model,
-             args.model_name_or_path,
-             weight_map,
-             [prefix],
-             args.hf_tmp_dir,
+            model,
+            args.model_name_or_path,
+            weight_map,
+            [prefix],
+            args.hf_tmp_dir,
+            lru,
+            reserve_bytes=0,
+            disk_window=disk_window,
+            materialize_block=block,
+            materialize_prefix=prefix,
+            materialize_fn=forge.utils.io.materialize_block_weights_to_fp,
+            group_size=int(args.group_size),
+            bits=int(args.bits),
+            dtype=dtype,
+            list_layers_fn=forge.utils.engine.list_layers,
         )
-        if dtype != block.dtype:
-            block.to(dtype=dtype)
 
         block.to(device)
 
