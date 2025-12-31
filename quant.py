@@ -329,6 +329,7 @@ def main():
 
             del handles
             del hooks
+            del deq
             torch.cuda.empty_cache()
             gc.collect()
 
