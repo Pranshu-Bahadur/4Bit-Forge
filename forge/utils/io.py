@@ -18,50 +18,53 @@ import re
 
 import torch
 import torch.nn as nn
-from typing import Dict
+from typing import Dict, Any
 
-class ExpertParamProxy:
+
+class ParamSliceProxy:
     """
-    Proxy that behaves like a minimal 'layer' with a .weight Tensor.
-    Backed by a slice into a fused expert Parameter.
+    Exposes a 2D .weight view into a 3D fused expert Parameter.
+    layer.weight.copy_(...) will write back into the underlying Parameter storage.
     """
-    def __init__(self, experts: nn.Module, attr: str, expert_idx: int):
-        self.experts = experts
-        self.attr = attr
-        self.expert_idx = expert_idx
+    def __init__(self, p3d: torch.Tensor, expert_idx: int):
+        self._p3d = p3d
+        self._e = expert_idx
 
     @property
     def weight(self) -> torch.Tensor:
-        # returns a view into the underlying Parameter storage
-        return getattr(self.experts, self.attr)[self.expert_idx]
+        return self._p3d[self._e]  # 2D view
 
 
-def list_layers(block: nn.Module) -> Dict[str, object]:
-    """
-    Returns a dict name->target where targets are:
-      - nn.Linear modules (normal path, incl DeepSeek experts)
-      - ExpertParamProxy for GPT-OSS fused expert params (per-expert 2D matrices)
-    """
-    layers: Dict[str, object] = {}
+def list_layers(block: nn.Module) -> Dict[str, Any]:
+    layers: Dict[str, Any] = {}
 
-    # 1) Normal Linear modules (DeepSeek will be fully covered here)
+    # 1) Normal Linear modules (DeepSeek experts + non-expert projections)
     for n, m in block.named_modules():
+        if n == "":
+            continue
         if isinstance(m, nn.Linear):
             layers[n] = m
 
-    # 2) GPT-OSS fused experts: Parameters on block.mlp.experts
-    mlp = getattr(block, "mlp", None)
-    experts = getattr(mlp, "experts", None) if mlp is not None else None
+    # 2) GPT-OSS fused experts (Parameters on mlp.experts)
+    # Look for 3D parameters named gate_up_proj / down_proj and expand per expert.
+    fused = {}
+    for n, p in block.named_parameters(recurse=True):
+        # n looks like "mlp.experts.gate_up_proj" (NOT a module)
+        if n.endswith("experts.gate_up_proj") and p.ndim == 3:
+            fused["gate_up_proj"] = (n, p)
+        elif n.endswith("experts.down_proj") and p.ndim == 3:
+            fused["down_proj"] = (n, p)
 
-    if experts is not None and hasattr(experts, "gate_up_proj") and isinstance(experts.gate_up_proj, nn.Parameter):
-        W_gu = experts.gate_up_proj  # [E, H, 2D]
-        E = W_gu.shape[0]
-
-        # gate_up_proj and down_proj exist as fused Parameters in GPT-OSS
-        if hasattr(experts, "down_proj") and isinstance(experts.down_proj, nn.Parameter):
+    if "gate_up_proj" in fused and "down_proj" in fused:
+        n_gu, p_gu = fused["gate_up_proj"]   # [E, H, 2D]
+        n_dn, p_dn = fused["down_proj"]      # [E, D, H]
+        E = p_gu.shape[0]
+        if p_dn.shape[0] == E:
+            # Emit names that match your routed-experts regex style:
+            # mlp.experts.<e>.gate_up_proj / down_proj
             for e in range(E):
-                layers[f"mlp.experts.{e}.gate_up_proj"] = ExpertParamProxy(experts, "gate_up_proj", e)  # [H, 2D]
-                layers[f"mlp.experts.{e}.down_proj"]    = ExpertParamProxy(experts, "down_proj", e)     # [D, H]
+                layers[f"mlp.experts.{e}.gate_up_proj"] = ParamSliceProxy(p_gu, e)
+                layers[f"mlp.experts.{e}.down_proj"]    = ParamSliceProxy(p_dn, e)
 
     return layers
 # -----------------------------
