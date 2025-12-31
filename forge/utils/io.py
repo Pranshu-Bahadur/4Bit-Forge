@@ -39,8 +39,13 @@ def _now() -> float:
 def list_layers(block: nn.Module) -> Dict[str, nn.Linear]:
     layers = {}
     for n, m in block.named_modules():
-        if isinstance(m, nn.Module) and re.search(r'.*(gate|up|down)_proj'):
+        if (isinstance(m, nn.Module) and re.search(r'.*(gate|up|down)_proj$', n)) or isinstance(m, nn.Linear):
             layers[n] = m
+        else:
+             sub = getattr(m, "named_modules", None)
+             _layers = list_layers(sub)
+             if _layers:
+                 return _layers
     return layers
 
 
