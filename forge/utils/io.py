@@ -63,9 +63,9 @@ def list_layers(block: nn.Module) -> Dict[str, Union[nn.Linear, TensorTarget]]:
     if experts is not None:
         # gate_up_proj / down_proj are tensors/params in GPT-OSS
         if hasattr(experts, "gate_up_proj"):
-            layers["mlp.experts.gate_up_proj"] = TensorTarget(experts, "gate_up_proj")
+            layers["mlp.experts.gate_up_proj"] = TensorTarget(experts, "gate_up_proj").module
         if hasattr(experts, "down_proj"):
-            layers["mlp.experts.down_proj"] = TensorTarget(experts, "down_proj")
+            layers["mlp.experts.down_proj"] = TensorTarget(experts, "down_proj").module
 
     return layers
 
