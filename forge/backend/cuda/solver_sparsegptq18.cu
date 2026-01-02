@@ -83,7 +83,7 @@ __global__ void sparsegptq_f2b_intrablock_kernel(
     float* __restrict__ W, 
     const float* __restrict__ U, // U/Uinv {C, C}
     const float* __restrict__ Uinv,  
-    uint32_t* __restrict__ M,
+    uint32_t* __restrict__ M, //ceil(C/32), R
     uint8_t* __restrict__ qweight, 
     const float* __restrict__ scales, 
     const float* __restrict__ qzeros, 
