@@ -98,8 +98,11 @@ __global__ void sparsegptq_f2b_intrablock_kernel(
     unsigned mask = 0xffffffff; 
 
     float eps  = 1e-12f;
+    bool active = (rid < R); 
 
+    float x[32];
     float y[32];
+    
     for (int r = 0; r < 32; ++r) {
         float v = 0.f;
         if (r < B && lane < B && r <= lane) {
@@ -109,8 +112,7 @@ __global__ void sparsegptq_f2b_intrablock_kernel(
     }
 
  
-    float x[32];
-    bool active = (rid < R); 
+    
 
     if (active) {
         for (int i = 0; i < B; ++i) x[i] = W[(start + i) * R + rid];
