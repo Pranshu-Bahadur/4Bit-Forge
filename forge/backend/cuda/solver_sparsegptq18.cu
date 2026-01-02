@@ -146,27 +146,24 @@ __global__ void sparsegptq_f2b_intrablock_kernel(
                     bitpacked_mask |= (1u << bit_pos);
             }
         }
-        float s = 1.0f; 
-        float q0 = 0.0f;
         
-        if (active) {
-            s = scales[(cid * R) + rid];
-            q0 = qzeros[(cid * R) + rid];
-        }
-        
-        float inv_s = 1.0f / (s + eps);
-        float error = 0.f, deq = 0.f;
+        float error = 0.f; 
+        float deq = 0.f;
         uint8_t qb = 0;
 
         bool keep = (bitpacked_mask >> t) & 1u;
 
-        if (keep) {
+        if (keep && active) {
+            float s = 1.0f;
+            float q0 = 0.0f;
+            s = scales[(cid * R) + rid];
+            q0 = qzeros[(cid * R) + rid];  
+            float inv_s = 1.0f / (s + eps);      
             quantize_scalar(x[t], inv_s, s, q0, maxq_i, error, qb, deq);
         }
         else {
             error = x[t];
         }
-
 
         if (active) {
             qweight[(cid * R) + rid] = qb;
