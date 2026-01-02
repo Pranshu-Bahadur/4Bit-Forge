@@ -36,7 +36,8 @@ def list_layers(block: nn.Module) -> Dict[str, Union[nn.Linear, ParamSliceProxy]
     for n, m in block.named_modules():
         if isinstance(m, nn.Linear):
             layers[n] = m
-            
+        
+    """
     # GPT-OSS path: fused expert weights as Parameters on block.mlp.experts
     mlp = getattr(block, "mlp", None)
     experts = getattr(mlp, "experts", None) if mlp is not None else None
@@ -50,6 +51,7 @@ def list_layers(block: nn.Module) -> Dict[str, Union[nn.Linear, ParamSliceProxy]
             for e in range(E):
                 layers[f"mlp.experts.{e}.gate_up_proj"] = ParamSliceProxy(experts, "gate_up_proj", e)
                 layers[f"mlp.experts.{e}.down_proj"]    = ParamSliceProxy(experts, "down_proj", e)
+    """
 
     return layers
 
