@@ -78,7 +78,7 @@ __global__ void maskupdate18(
 }
 
 
-// (SPARSEGPTQ 1:8 F2B OG)
+// (SPARSEGPTQ 1:8 F2B OG) Mayber threads=32 or 64, reg pressure is pretty high
 __global__ void sparsegptq_f2b_intrablock_kernel(
     float* __restrict__ W, 
     const float* __restrict__ U, // U/Uinv {C, C}
@@ -121,6 +121,11 @@ __global__ void sparsegptq_f2b_intrablock_kernel(
 
     const int maxq_i = (1 << bits) - 1;
     uint32_t bitpacked_mask = 0u;
+    
+    float uinv = 1.0f;
+    if (lane < B && (start + lane < C)) {
+        uinv = Uinv[start + lane];
+    }
 
     for (int t = 0; t < B; ++t) {
         int cid = start + t;
@@ -130,7 +135,8 @@ __global__ void sparsegptq_f2b_intrablock_kernel(
             float score = best_score;
             for (int k = 0; k < 8; ++k) {
                 if (active && (cid + k < C)){
-                    score = fabsf(x[t+k]*Uinv[cid+k]);
+                    float uinv_curr = __shfl_sync(mask, uinv, t + k);
+                    score = fabsf(x[t+k]*uinv_curr); //Uinv[cid+k]
                 }
                 else {
                     score = -1e30f;
