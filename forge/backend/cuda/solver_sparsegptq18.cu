@@ -77,6 +77,7 @@ __global__ void maskupdate18(
     }
 }
 
+
 // (SPARSEGPTQ 1:8 F2B OG)
 __global__ void sparsegptq_f2b_intrablock_kernel(
     float* __restrict__ W, 
@@ -102,7 +103,7 @@ __global__ void sparsegptq_f2b_intrablock_kernel(
 
     float x[32];
     float y[32];
-    
+
     for (int r = 0; r < 32; ++r) {
         float v = 0.f;
         if (r < B && lane < B && r <= lane) {
@@ -110,9 +111,6 @@ __global__ void sparsegptq_f2b_intrablock_kernel(
         }
         y[r] = v;
     }
-
- 
-    
 
     if (active) {
         for (int i = 0; i < B; ++i) x[i] = W[(start + i) * R + rid];
@@ -176,7 +174,6 @@ __global__ void sparsegptq_f2b_intrablock_kernel(
             Eblk[(t * R) + rid]      = error;
         }
 
-        
         for (int k = t + 1; k < B; ++k) {
             float alpha = __shfl_sync(mask, y[t], k);
             x[k] = __fmaf_rn(-alpha, error, x[k]);
