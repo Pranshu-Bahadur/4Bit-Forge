@@ -5,6 +5,8 @@
 #include <cstdint>
 #include <cmath>
 #include <algorithm>
+#include <tuple>
+#include <cfloat>
 
 
 __device__ __forceinline__ void quantize_scalar(
@@ -186,4 +188,67 @@ __global__ void sparsegptq_f2b_intrablock_kernel(
     if (active) {
         M[(start>>5) * R + rid] = bitpacked_mask;
     }
+}
+
+
+
+
+std::tuple<torch::Tensor, torch::Tensor> sparsegptq18_solver_cuda(
+    torch::Tensor W,       // [C, R]
+    torch::Tensor U,  // [C, C]
+    torch::Tensor scales,  //{C, R}
+    torch::Tensor qzeros, //{C, R}
+    int64_t bits
+) {
+    W      = W.contiguous();
+    const int64_t C = W.size(0);
+    const int64_t R = W.size(1);
+
+    U = U.contiguous();
+    auto Uinv = U.diagonal(0, 0, 1).reciprocal().contiguous();
+    U.mul_(Uinv.unsqueeze(1));
+    scales = scales.contiguous();
+    qzeros = qzeros.contiguous();
+
+    auto qweight     = torch::empty({C, R}, torch::TensorOptions().dtype(torch::kUInt8).device(W.device()));
+    auto M     = torch::empty({(C + 32 - 1)/32, R}, torch::TensorOptions().dtype(torch::kUInt32).device(W.device()));
+
+    auto stream = at::cuda::getCurrentCUDAStream();
+    const int threads = 32; //64
+    int64_t block_size = 32;
+
+    auto Eblk = torch::empty({block_size, R}, torch::TensorOptions().dtype(at::kFloat).device(W.device()));
+    const int grid = (static_cast<int>(R) + threads - 1) / threads;
+
+    for (int64_t block_start = 0; block_start < C; block_start += block_size) {
+
+        const int64_t block_end = std::min(block_start + block_size, C);
+        const int64_t B_long    = block_end - block_start;
+        const int B             = static_cast<int>(B_long);
+        const int N             = static_cast<int>(R);
+
+        sparsegptq_f2b_intrablock_kernel<<<grid, threads, 0, stream>>>(
+            W.data_ptr<float>(),
+            U.data_ptr<float>(),
+            Uinv.data_ptr<float>(),
+            M.data_ptr<uint32_t>(),
+            qweight.data_ptr<uint8_t>(),
+            scales.data_ptr<float>(),
+            qzeros.data_ptr<float>(),
+            Eblk.data_ptr<float>(),
+            (uint8_t)bits,
+            (int64_t)R, 
+            (int64_t)C,
+            B_long,
+            (int64_t) block_start
+        );
+        if (block_end < C) {
+            W.narrow(0, block_end, C - block_end).addmm_(
+                U.narrow(0, block_start, B_long).narrow(1, block_end, C - block_end).t(),
+                Eblk.narrow(0, 0, B_long),
+                1.0f, -1.0f
+            );
+        }
+    }
+    return std::make_tuple(qweight, M);
 }
