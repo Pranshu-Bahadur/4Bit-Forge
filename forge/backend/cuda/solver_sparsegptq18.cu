@@ -81,7 +81,7 @@ __global__ void maskupdate18(
 
 
 // (SPARSEGPTQ 1:8 F2B OG) Mayber threads=32 or 64, reg pressure is pretty high
-__global__ void sparsegptq_f2b_intrablock_kernel(
+__global__ void sparsegptq18_f2b_intrablock_kernel(
     float* __restrict__ W, 
     const float* __restrict__ U, // U/Uinv {C, C}
     const float* __restrict__ Uinv,  
@@ -227,7 +227,7 @@ std::tuple<torch::Tensor, torch::Tensor> sparsegptq18_solver_cuda(
         const int B             = static_cast<int>(B_long);
         const int N             = static_cast<int>(R);
 
-        sparsegptq_f2b_intrablock_kernel<<<grid, threads, 0, stream>>>(
+        sparsegptq18_f2b_intrablock_kernel<<<grid, threads, 0, stream>>>(
             W.data_ptr<float>(),
             U.data_ptr<float>(),
             Uinv.data_ptr<float>(),
