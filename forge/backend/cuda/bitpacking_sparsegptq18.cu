@@ -27,8 +27,8 @@ __device__ __forceinline__ uint16_t packidx4(uint32_t bitmask) {
 
 
 __global__ void bitpack_sparsegptq18_kernel(
-    uint8_t* __restrict__ qweight, //C, R
-    uint32_t* __restrict__ M, //KT, R| KT = ceil(C/32)
+    const uint8_t* __restrict__ qweight, //C, R
+    const uint32_t* __restrict__ M, //KT, R | KT = ceil(C/32)
     uint32_t* __restrict__ qWpack_u32, //KT, R
     int64_t C, 
     int64_t R,

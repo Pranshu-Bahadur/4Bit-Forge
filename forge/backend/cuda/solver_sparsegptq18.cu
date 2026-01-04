@@ -79,7 +79,6 @@ __global__ void maskupdate18(
     }
 }
 
-
 // (SPARSEGPTQ 1:8 F2B OG) Mayber threads=32 or 64, reg pressure is pretty high
 __global__ void sparsegptq18_f2b_intrablock_kernel(
     float* __restrict__ W, 
