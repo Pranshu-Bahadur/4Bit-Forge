@@ -15,10 +15,10 @@
 
 __global__ void sparse18_unstructured_gemm_kernel(
     uint32_t* __restrict__ qWpacked_u32, //G, R | G = (ceil(C/32)) | idx4 + int4
-    __nv_bfloat16* __restrict__ X, //N, C
+    __nv_bfloat16*  X, //N, C
     __nv_bfloat16* __restrict__ Y, //N, R
-    const float* __restrict__ scales, //G, R | G = (ceil(C/32))
-    const uint8_t* __restrict__ qzeros, //G, R | G = (ceil(C/32))
+    const float*  scales, //G, R | G = (ceil(C/32))
+    const uint8_t* qzeros, //G, R | G = (ceil(C/32))
     int64_t N,
     int64_t R,
     int64_t C,
