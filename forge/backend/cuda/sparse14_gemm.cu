@@ -59,9 +59,9 @@ __device__ __forceinline__ float dequant_sym_u4(uint32_t q4, float s) {
 
 // Unstructured 1 out of 4 Sparsity MatMul
 __global__ void sparse14_gemm(
-    const uint4* __restrict__ qW2S1u64vec2, //ulong2 [G2, R]
+    const uint4* __restrict__ qW2S1u64vec2, //ulong2 [G2, R] R=2048/7168
     const float4* __restrict__ X,       // [N4, C] | N4 = ceil(N/4)
-    float4* __restrict__ Y,             // [N4, R] | N4 = ceil(N/4) __nv_bfloat16
+    float4* Y,             // [N4, R] | N4 = ceil(N/4) __nv_bfloat16
     const int64_t N,
     const int64_t R,
     const int64_t C,
@@ -76,11 +76,11 @@ __global__ void sparse14_gemm(
     int64_t rid = (blockIdx.y * blockDim.x) + tid;
     int64_t lane = tid & 31;
 
-    
+
 }
 
 
-torch::Tensor unstructured_sparse14_int4symq__gemm(
+torch::Tensor moe_proj_unstructured_sparse14_int4symq__gemm(
     torch::Tensor qW2S1u64, // [G, R] | G=ceil(C/32) | uint64 | Packing format defined above
     torch::Tensor X // [N, C] | bfloat16
 ) {
