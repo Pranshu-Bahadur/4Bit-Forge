@@ -115,3 +115,40 @@ int64_t warps_per_row = (R + 31) / 32;
 int64_t rows_of_warps = (N + 3) / 4; // Chunk size 4
 dim3 gridDim(rows_of_warps * warps_per_row, 1, 1);
 */
+
+
+/*
+
+#include <torch/extension.h>
+#include <vector>
+
+// Forward declaration of your CUDA kernel
+void launch_sparse18_kernel(
+    const uint32_t* qW, const at::Half* X, at::Half* Y, 
+    const float* scales, const uint8_t* qzeros,
+    int64_t N, int64_t R, int64_t C, int64_t G
+);
+
+void sparse_gemm_forward(
+    torch::Tensor qW, torch::Tensor X, torch::Tensor Y, 
+    torch::Tensor scales, torch::Tensor qzeros
+) {
+    const int64_t N = X.size(0);
+    const int64_t C = X.size(1);
+    const int64_t R = Y.size(1);
+    const int64_t G = qW.size(0);
+
+    launch_sparse18_kernel(
+        (uint32_t*)qW.data_ptr(),
+        (at::Half*)X.data_ptr(),
+        (at::Half*)Y.data_ptr(),
+        (float*)scales.data_ptr(),
+        (uint8_t*)qzeros.data_ptr(),
+        N, R, C, G
+    );
+}
+
+PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
+    m.def("forward", &sparse_gemm_forward, "Sparse 1:8 GEMM");
+}
+*/
