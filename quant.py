@@ -241,7 +241,7 @@ def main():
         )
         meta_names = [n for n, p in block.named_parameters(recurse=True) if getattr(p, "is_meta", False)]
         assert not meta_names, f"Still meta params in block {block_id}: {meta_names[:10]}"
-        #block.to(device)
+        block.to(device)
         
         #Calibration Pass
         handles = {}
@@ -299,8 +299,6 @@ def main():
                     )
                 if owner is None:
                     hooks[layer_name] = layer.register_forward_hook(update_handle_hook(layer_name))
-
-
         with torch.no_grad():
             _ = forge.utils.engine.forward(block, X, position_ids, N, B, device, offload_device, False, rotary_emb)
             del _
