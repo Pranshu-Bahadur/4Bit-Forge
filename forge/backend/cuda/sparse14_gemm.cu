@@ -179,7 +179,7 @@ torch::Tensor moe_proj_unstructured_sparse14_int4symq_gemm(
 ) {
     TORCH_CHECK(qW2S1u64.is_cuda(), "qW2S1u64 must be CUDA");
     TORCH_CHECK(X.is_cuda(), "X must be CUDA");
-    TORCH_CHECK(qW2S1u64.scalar_type() == at::kULong, "qW2S1u64 must be uint64");
+    //TORCH_CHECK(qW2S1u64.scalar_type() == torch::kULong, "qW2S1u64 must be uint64");
     TORCH_CHECK(X.scalar_type() == at::kBFloat16, "X must be bfloat16");
     TORCH_CHECK(qW2S1u64.dim() == 3 && qW2S1u64.size(2) == 2, "qW2S1u64 must be [G2, R, 2]");
     TORCH_CHECK(X.dim() == 2, "X must be [N, C]");

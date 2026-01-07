@@ -122,7 +122,7 @@ def main():
     # --- IO objects (create once) ---
     lru = forge.utils.io.ShardLRU(max_bytes=int(args.lru_ram_gb * (1024**3)))
 
-    assumed_shard_bytes = int(4.63 * (1024**3)) if args.jit_stream else 0
+    assumed_shard_bytes = int(5.36 * (1024**3)) if args.jit_stream else 0
 
     disk_cfg = forge.utils.io.DiskWindowConfig(
         shard_bytes=assumed_shard_bytes,

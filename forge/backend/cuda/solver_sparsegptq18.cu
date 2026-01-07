@@ -216,7 +216,7 @@ std::tuple<torch::Tensor, torch::Tensor> sparsegptq18_solver_cuda(
     const int threads = 32; //64
     int64_t block_size = 32;
 
-    auto Eblk = torch::empty({block_size, R}, torch::TensorOptions().dtype(at::kFloat).device(W.device()));
+    auto Eblk = torch::empty({block_size, R}, torch::TensorOptions().dtype(torch::kFloat).device(W.device()));
     const int grid = (static_cast<int>(R) + threads - 1) / threads;
 
     for (int64_t block_start = 0; block_start < C; block_start += block_size) {
