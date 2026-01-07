@@ -105,10 +105,7 @@ torch::Tensor pack_sparsegptq14_to_u64x2_cuda(
     torch::Tensor M,
     torch::Tensor scales
 ) {
-    CHECK_CUDA(qweight_rc);
-    CHECK_CUDA(M);
-    CHECK_CUDA(scales);
-
+    
     CHECK_DTYPE(qweight_rc, torch::kUInt8);
     CHECK_DTYPE(M, torch::kUInt32);
     CHECK_DTYPE(scales, torch::kFloat32);
@@ -130,7 +127,7 @@ torch::Tensor pack_sparsegptq14_to_u64x2_cuda(
 
     // Transpose to [C, R] to match kernel indexing
     auto qweight_cr = qweight_rc.transpose(0, 1).contiguous(); // [C, R]
-    CHECK_CONTIG(qweight_cr);
+    //CHECK_CONTIG(qweight_cr);
 
     // Derive/validate G32
     const int64_t G32_expected = ceil_div_i64(C, 32);
@@ -148,7 +145,7 @@ torch::Tensor pack_sparsegptq14_to_u64x2_cuda(
         .device(qweight_rc.device());
 
     auto Wpair_u64 = torch::empty({G2, R, 2}, out_opts).contiguous();
-    CHECK_CONTIG(Wpair_u64);
+    //CHECK_CONTIG(Wpair_u64);
 
     //const at::cuda::OptionalCUDAGuard device_guard(device_of(qweight_rc));
     auto stream = at::cuda::getDefaultCUDAStream();
