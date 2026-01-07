@@ -187,7 +187,7 @@ class GPTQ(object):
         W = self.W.clone()
         R, C = W.shape
         #@TODO FIX PADDING LOGIC
-        G = (C + self.group_size - 1) / self.group_size
+        G = (C + self.group_size - 1) // self.group_size
         pad = (G * self.group_size) - C
 
         #R, G, g_size
