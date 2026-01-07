@@ -531,17 +531,36 @@ def _dequant_mxfp4_blocks_to_fp(blocks_u8: torch.Tensor, scales_u8: torch.Tensor
     return out.transpose(-2, -1)  # fp32
 
 def _apply_block_scale_inv_2d(w_fp32: torch.Tensor, s_inv_2d: torch.Tensor) -> torch.Tensor:
-    # w: [O, I], s_inv: [O/128, I/128]
+    # w_fp32: [O, I]
+    # s_inv_2d: [nO, nI] for ceil(O/so), ceil(I/si) tiles (DeepSeek FP8 uses 128x128)
     O, I = w_fp32.shape
-    so, si = s_inv_2d.shape
-    assert O % so == 0 and I % si == 0, (w_fp32.shape, s_inv_2d.shape)
+    nO, nI = s_inv_2d.shape
 
-    br = O // so
-    bc = I // si
-    w4 = w_fp32.reshape(so, br, si, bc)
-    s = s_inv_2d.to(torch.float32)
-    w4 = w4 * (1.0 / s).reshape(so, 1, si, 1)
-    return w4.reshape(O, I)
+    # Infer si from I dimension (must be exact)
+    assert I % nI == 0, (w_fp32.shape, s_inv_2d.shape)
+    si = I // nI
+
+    # Infer so: usually equals si (128). Use the fact nO == ceil(O/so).
+    # Prefer so=si if it matches ceil, else fall back to ceil_div.
+    def ceil_div(a, b): return (a + b - 1) // b
+    so = si if ceil_div(O, si) == nO else ceil_div(O, nO)
+
+    O_pad = nO * so
+    I_pad = nI * si  # equals I by construction
+
+    # Pad only along O if needed (DeepSeek often has partial last O tile)
+    if O_pad != O:
+        w_pad = torch.zeros((O_pad, I_pad), device=w_fp32.device, dtype=w_fp32.dtype)
+        w_pad[:O, :I] = w_fp32
+    else:
+        w_pad = w_fp32.contiguous()
+
+    # Apply per-tile inverse scales via a 4D view (no giant expanded scale tensor)
+    w4 = w_pad.view(nO, so, nI, si)
+    w4.mul_(s_inv_2d.to(w_fp32.dtype)[:, None, :, None])
+
+    # Slice back to original
+    return w4.view(O_pad, I_pad)[:O, :I].contiguous()
 
 
 def _apply_block_scale(
