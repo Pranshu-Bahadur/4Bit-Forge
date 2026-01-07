@@ -17,7 +17,7 @@ def prepare_dataset(
     def preprocess(example):
         messages = [
             {"role": "user", "content": example["instruction"]}, 
-            {"role": "assistant", "content":  example["output"]},
+            #{"role": "assistant", "content":  example["output"]},
         ]
         return {"text": tokenizer.apply_chat_template(messages, tokenize=False)}
     train_dataset_raw = train_dataset_raw.map(preprocess)
