@@ -356,8 +356,9 @@ def main():
                         M_u32 = M.to(torch.uint32).contiguous()
 
                         # packed: uint64 [G2, R, 2]
+                        G32 = (qw_u8.shape[1] + 32 - 1) // 32
                         Wpair_u64 = forge.backend.cuda.kernels.pack_sparsegptq14_to_u64x2(
-                            qw_u8, M_u32, scales_f32.view(-1, qw_u8.shape[0])
+                            qw_u8, M_u32, scales_f32.view(qw_u8.shape[0], G32).transpose(0, 1).contiguous()
                         )
 
                         # ---- SAVE PACKED IN YOUR DESIRED LAYOUT ----
@@ -452,8 +453,9 @@ def main():
                         M_u32 = M.to(torch.uint32).contiguous()
 
                         # packed: uint64 [G2, R, 2]
+                        G32 = (qw_u8.shape[1] + 32 - 1) // 32
                         Wpair_u64 = forge.backend.cuda.kernels.pack_sparsegptq14_to_u64x2(
-                            qw_u8, M_u32, scales_f32.view(-1, qw_u8.shape[0])
+                            qw_u8, M_u32, scales_f32.view(qw_u8.shape[0], G32).transpose(0, 1).contiguous()
                         )
 
                         # ---- SAVE PACKED IN YOUR DESIRED LAYOUT ----
