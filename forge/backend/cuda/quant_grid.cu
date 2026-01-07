@@ -199,7 +199,7 @@ std::tuple<torch::Tensor, torch::Tensor> build_quantization_meta_cuda(
         torch::TensorOptions().dtype(torch::kFloat).device(device)
     );
 
-    const int threads = 128;                // 4 warps/block (matches wpb = blockDim/32)
+    const int threads = (int)group_size;                // 4 warps/block (matches wpb = blockDim/32)
     const int wpb = threads / 32;           // 4
 
     // Each block covers wpb groups at a time (one per warp)
@@ -237,7 +237,7 @@ std::tuple<torch::Tensor, torch::Tensor> mse_quantization_grid_cuda(
     const int64_t P = candidates.size(0);
     
 
-    const int threads = 128;                // 4 warps/block (matches wpb = blockDim/32)
+    const int threads = (int)group_size;                // 4 warps/block (matches wpb = blockDim/32)
     const int wpb = threads / 32;           // 4
 
     // Each block covers wpb groups at a time (one per warp)
