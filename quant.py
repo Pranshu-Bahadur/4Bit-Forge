@@ -357,7 +357,7 @@ def main():
 
                         # packed: uint64 [G2, R, 2]
                         Wpair_u64 = forge.backend.cuda.kernels.pack_sparsegptq14_to_u64x2(
-                            qw_u8, M_u32, scales_f32
+                            qw_u8, M_u32, scales_f32.view(-1, qw_u8.shape[0])
                         )
 
                         # ---- SAVE PACKED IN YOUR DESIRED LAYOUT ----
@@ -453,7 +453,7 @@ def main():
 
                         # packed: uint64 [G2, R, 2]
                         Wpair_u64 = forge.backend.cuda.kernels.pack_sparsegptq14_to_u64x2(
-                            qw_u8, M_u32, scales_f32
+                            qw_u8, M_u32, scales_f32.view(-1, qw_u8.shape[0])
                         )
 
                         # ---- SAVE PACKED IN YOUR DESIRED LAYOUT ----
