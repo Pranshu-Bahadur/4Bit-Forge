@@ -131,6 +131,10 @@ class GPTQ(object):
         scales, qzeros = self._quant_grid()
         A = self._h_factor()
         W = self.W.clone().transpose(-2, -1)[self.perm]#.contiguous()
+        if self.algorithm=="sparsegptq":
+            qweight, M = self._solver(A, W, scales, qzeros)
+            return qweight[self.perm_inv].transpose(-2, -1).contiguous(), scales, qzeros, M
+
         qweight = self._solver(A, W, scales, qzeros)
         return qweight[self.perm_inv].transpose(-2, -1).contiguous(), scales, qzeros
 
@@ -261,7 +265,7 @@ class GPTQ(object):
 
             scales = scales.clone().view(R, self.G).repeat_interleave(self.group_size, dim=1)[:, :C].transpose(-2, -1)[self.perm]   # (C, R) fp32
             qzeros = qzeros.clone().view(R, self.G).repeat_interleave(self.group_size, dim=1)[:, :C].transpose(-2, -1)[self.perm]
-            qw = kernels.sparsegptq14_solver(
+            qw, M = kernels.sparsegptq14_solver(
                 W.to(torch.float32),
                 A,
                 scales,
@@ -269,4 +273,4 @@ class GPTQ(object):
                 self.bits
             )
 
-            return qw
+            return qw, M

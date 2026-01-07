@@ -50,7 +50,6 @@ __device__ __forceinline__ float dequant_sym_u4(uint32_t q4, float s) {
     return (float((int)q4) - 8.0f) * s;
 }
 
-
 __global__ void pack_sparsegptq14_to_u64x2(
     const uint8_t* __restrict__ qweight,   // [C, R]
     const uint32_t* __restrict__ M,        // [G32, R]

@@ -291,7 +291,7 @@ def main():
                         quantization_order=args.quantization_order,
                         quantization_scale=args.quantization_scale,
                         owner=owner,
-                        algorithm="gptq",
+                        algorithm=str(args.algorithm),
                         device = device
                     )
                 if owner is None:
@@ -306,30 +306,109 @@ def main():
 
             for handle_name, handle in handles.items():
                 if handle._is_owner():
-                    qweight, scales, qzeros = handle.quantize()
-                    deq, scales, qzeros = forge.utils.engine.dequantize_forge_full(handle.layer.weight.dtype, qweight, scales, qzeros,
-                                                                int(args.group_size), int(args.bits),
-                                                                )
-                    handle.layer.weight.copy_(deq)
-                    if args.save_dir:
-                        os.makedirs(os.path.join(args.save_dir + f"/block.{block_id}", handle_name), exist_ok=True)
-                        torch.save(
-                                {"qweight": qweight.to(torch.int8), "scale": scales.to(dtype), "zero": qzeros.to(torch.int8)},
-                                os.path.join(args.save_dir, f"block.{block_id}", handle_name, f"quantized_weight.pt"),
+                    if str(args.algorithm) == "sparsegptq":
+                        qweight, scales, qzeros, M = handle.quantize()
+
+                        deq, scales, qzeros = forge.utils.engine.dequantize_forge_full(
+                            handle.layer.weight.dtype,
+                            qweight, scales, qzeros,
+                            int(args.group_size), int(args.bits),
+                        )
+                        handle.layer.weight.copy_(deq)
+
+                        if args.save_dir:
+                            out_dir = os.path.join(args.save_dir, f"block.{block_id}", handle_name)
+                            os.makedirs(out_dir, exist_ok=True)
+                            torch.save(
+                                {
+                                    "qweight": qweight.to(torch.int8),        # pre-nibble is fine as int8
+                                    "scales": scales.to(torch.float32),       # keep precision for repack
+                                    "qzeros": qzeros.to(torch.int32),         # optional; keep if your pipeline uses it
+                                    "M": M.to(torch.uint32),
+                                    "group_size": int(args.group_size),
+                                    "bits": int(args.bits),
+                                    "shape": tuple(handle.layer.weight.shape),
+                                    "layout": "RC"
+                                },
+                                os.path.join(out_dir, "sparse14quantized_weight.pt"),
                             )
+                    else:
+                        qweight, scales, qzeros = handle.quantize()
+
+                        deq, scales, qzeros = forge.utils.engine.dequantize_forge_full(
+                            handle.layer.weight.dtype,
+                            qweight, scales, qzeros,
+                            int(args.group_size), int(args.bits),
+                        )
+                        handle.layer.weight.copy_(deq)
+
+                        if args.save_dir:
+                            out_dir = os.path.join(args.save_dir, f"block.{block_id}", handle_name)
+                            os.makedirs(out_dir, exist_ok=True)
+                            torch.save(
+                                {
+                                    "qweight": qweight.to(torch.int8),        # pre-nibble
+                                    "scales": scales.to(torch.float32),
+                                    "qzeros": qzeros.to(torch.int32),
+                                    "group_size": int(args.group_size),
+                                    "bits": int(args.bits),
+                                    "shape": tuple(handle.layer.weight.shape),
+                                },
+                                os.path.join(out_dir, "quantized_weight.pt"),
+                            )
+
 
             for handle_name, handle in handles.items():
                 if not handle._is_owner():
-                    qweight, scales, qzeros = handle.quantize()
-                    deq, scales, qzeros = forge.utils.engine.dequantize_forge_full(handle.layer.weight.dtype, qweight, scales, qzeros,
-                                                                int(args.group_size), int(args.bits),
-                                                                )
-                    handle.layer.weight.copy_(deq)
-                    if args.save_dir:
-                        os.makedirs(os.path.join(args.save_dir + f"/block.{block_id}", handle_name), exist_ok=True)
-                        torch.save(
-                                {"qweight": qweight.to(torch.int8), "scale": scales.to(dtype), "zero": qzeros.to(torch.int8)},
-                                os.path.join(args.save_dir + f"/block.{block_id}", handle_name, f"quantized_weight.pt"),
+                    if str(args.algorithm) == "sparsegptq":
+                        qweight, scales, qzeros, M = handle.quantize()
+
+                        deq, scales, qzeros = forge.utils.engine.dequantize_forge_full(
+                            handle.layer.weight.dtype,
+                            qweight, scales, qzeros,
+                            int(args.group_size), int(args.bits),
+                        )
+                        handle.layer.weight.copy_(deq)
+
+                        if args.save_dir:
+                            out_dir = os.path.join(args.save_dir, f"block.{block_id}", handle_name)
+                            os.makedirs(out_dir, exist_ok=True)
+                            torch.save(
+                                {
+                                    "qweight": qweight.to(torch.int8),        # pre-nibble is fine as int8
+                                    "scales": scales.to(torch.float32),       # keep precision for repack
+                                    "qzeros": qzeros.to(torch.int32),         # optional; keep if your pipeline uses it
+                                    "M": M.to(torch.uint32),
+                                    "group_size": int(args.group_size),
+                                    "bits": int(args.bits),
+                                    "shape": tuple(handle.layer.weight.shape),
+                                    "layout": "RC"
+                                },
+                                os.path.join(out_dir, "sparse14quantized_weight.pt"),
+                            )
+                    else:
+                        qweight, scales, qzeros = handle.quantize()
+
+                        deq, scales, qzeros = forge.utils.engine.dequantize_forge_full(
+                            handle.layer.weight.dtype,
+                            qweight, scales, qzeros,
+                            int(args.group_size), int(args.bits),
+                        )
+                        handle.layer.weight.copy_(deq)
+
+                        if args.save_dir:
+                            out_dir = os.path.join(args.save_dir, f"block.{block_id}", handle_name)
+                            os.makedirs(out_dir, exist_ok=True)
+                            torch.save(
+                                {
+                                    "qweight": qweight.to(torch.int8),        # pre-nibble
+                                    "scales": scales.to(torch.float32),
+                                    "qzeros": qzeros.to(torch.int32),
+                                    "group_size": int(args.group_size),
+                                    "bits": int(args.bits),
+                                    "shape": tuple(handle.layer.weight.shape),
+                                },
+                                os.path.join(out_dir, "quantized_weight.pt"),
                             )
 
             for _, handle in handles.items():

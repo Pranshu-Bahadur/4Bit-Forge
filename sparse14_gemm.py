@@ -14,7 +14,7 @@ from forge.backend.cuda import kernels
 def sparse14_gemm(qWpacked, X_bf16: torch.Tensor) -> torch.Tensor:
     # Replace this with your real op path:
     # e.g. return torch.ops.fourbit_forge.moe_proj_unstructured_sparse14_int4symq_gemm(qWpacked, X_bf16)
-    return kernels(qWpacked, X_bf16)
+    return kernels.sparse14_gemm(qWpacked, X_bf16)
 
 
 class Sparse14MoERuntime:
