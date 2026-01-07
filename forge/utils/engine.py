@@ -94,7 +94,7 @@ def dequantize_forge_full(dtype, qweight, scales, qzeros, group_size, device):
     qzero = qzeros_rg.repeat_interleave(group_size, dim=1)[:, :C]
 
     w = (qweight.to(torch.float32) - qzero.to(torch.float32)) * scale.to(torch.float32)
-    return w.to(dtype), scale, qzero
+    return w.to(dtype)
 
 
 def forward(block, X, position_ids, N, bs, device, offload_device, act_update=False, rotary_emb=None):

@@ -339,7 +339,7 @@ def main():
                         qweight, scales, qzeros, M = handle.quantize()
 
                         # keep this if you still want dense deq checkpoint / sanity path
-                        deq, scales, qzeros = forge.utils.engine.dequantize_forge_full(
+                        deq = forge.utils.engine.dequantize_forge_full(
                             handle.layer.weight.dtype,
                             qweight, scales, qzeros,
                             int(args.group_size), int(args.bits),
@@ -356,7 +356,7 @@ def main():
                         M_u32 = M.to(torch.uint32).contiguous()
 
                         # packed: uint64 [G2, R, 2]
-                        G32 = (qw_u8.shape[1] + 32 - 1) // 32
+                        G32 = (qw_u8.shape[1] + 32 - 1) / 32
                         Wpair_u64 = forge.backend.cuda.kernels.pack_sparsegptq14_to_u64x2(
                             qw_u8, M_u32, scales_f32.view(qw_u8.shape[0], G32).transpose(0, 1).contiguous()
                         )
@@ -406,7 +406,7 @@ def main():
                     else:
                         qweight, scales, qzeros = handle.quantize()
 
-                        deq, scales, qzeros = forge.utils.engine.dequantize_forge_full(
+                        deq = forge.utils.engine.dequantize_forge_full(
                             handle.layer.weight.dtype,
                             qweight, scales, qzeros,
                             int(args.group_size), int(args.bits),
@@ -436,7 +436,7 @@ def main():
                         qweight, scales, qzeros, M = handle.quantize()
 
                         # keep this if you still want dense deq checkpoint / sanity path
-                        deq, scales, qzeros = forge.utils.engine.dequantize_forge_full(
+                        deq = forge.utils.engine.dequantize_forge_full(
                             handle.layer.weight.dtype,
                             qweight, scales, qzeros,
                             int(args.group_size), int(args.bits),
@@ -453,7 +453,7 @@ def main():
                         M_u32 = M.to(torch.uint32).contiguous()
 
                         # packed: uint64 [G2, R, 2]
-                        G32 = (qw_u8.shape[1] + 32 - 1) // 32
+                        G32 = (qw_u8.shape[1] + 32 - 1) / 32
                         Wpair_u64 = forge.backend.cuda.kernels.pack_sparsegptq14_to_u64x2(
                             qw_u8, M_u32, scales_f32.view(qw_u8.shape[0], G32).transpose(0, 1).contiguous()
                         )
@@ -503,7 +503,7 @@ def main():
                     else:
                         qweight, scales, qzeros = handle.quantize()
 
-                        deq, scales, qzeros = forge.utils.engine.dequantize_forge_full(
+                        deq = forge.utils.engine.dequantize_forge_full(
                             handle.layer.weight.dtype,
                             qweight, scales, qzeros,
                             int(args.group_size), int(args.bits),
