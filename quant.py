@@ -356,7 +356,7 @@ def main():
                         M_u32 = M.to(torch.uint32).contiguous()
 
                         # packed: uint64 [G2, R, 2]
-                        Wpair_u64 = forge.backends.cuda.kernels.pack_sparsegptq14_to_u64x2_cuda(
+                        Wpair_u64 = forge.backends.cuda.kernels.pack_sparsegptq14_to_u64x2(
                             qw_u8, M_u32, scales_f32
                         )
 
@@ -452,7 +452,7 @@ def main():
                         M_u32 = M.to(torch.uint32).contiguous()
 
                         # packed: uint64 [G2, R, 2]
-                        Wpair_u64 = forge.backends.cuda.kernels.pack_sparsegptq14_to_u64x2_cuda(
+                        Wpair_u64 = forge.backends.cuda.kernels.pack_sparsegptq14_to_u64x2(
                             qw_u8, M_u32, scales_f32
                         )
 
