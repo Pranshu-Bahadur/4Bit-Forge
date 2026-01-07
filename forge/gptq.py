@@ -171,7 +171,7 @@ class GPTQ(object):
 
         if info.item() > 0:
             self.issue_non_invertible = True
-            print(f"[HESSIAN] factorization failed at {self.layer.name}")  # enable during bring-up
+            #print(f"[HESSIAN] factorization failed at {self.layer}")  # enable during bring-up
             H = torch.eye(self.W.shape[-1], device=self.device, dtype=torch.float32)
         
         return H#.to(torch.float32)
