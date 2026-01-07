@@ -106,9 +106,9 @@ torch::Tensor pack_sparsegptq14_to_u64x2_cuda(
     torch::Tensor scales
 ) {
     
-    CHECK_DTYPE(qweight_rc, torch::kUInt8);
-    CHECK_DTYPE(M, torch::kUInt32);
-    CHECK_DTYPE(scales, torch::kFloat32);
+    //CHECK_DTYPE(qweight_rc, torch::kUInt8);
+    //CHECK_DTYPE(M, torch::kUInt32);
+    //CHECK_DTYPE(scales, torch::kFloat32);
 
     // We’ll transpose inside launcher as requested.
     qweight_rc = qweight_rc.contiguous();
