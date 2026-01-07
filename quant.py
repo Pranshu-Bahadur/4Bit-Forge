@@ -14,6 +14,30 @@ import forge.utils
 
 from forge.gptq import GPTQ
 
+def _to_u8_nibble_sym_int4(qweight_int8: torch.Tensor) -> torch.Tensor:
+    """
+    Convert symmetric int4 stored as int8 in [-8..7] into uint8 nibbles [0..15]
+    so that dequant in matmul uses (nibble - 8).
+    If your qweight is already 0..15, this still works fine.
+    """
+    # promote to int16 so +8 doesn't overflow
+    qw = qweight_int8.to(torch.int16)
+    qw = (qw + 8).clamp_(0, 15).to(torch.uint8)
+    return qw.contiguous()
+
+def _parse_expert_id(handle_name: str) -> int:
+    m = re.search(r"\.experts\.(\d+)\.", handle_name)
+    if not m:
+        raise RuntimeError(f"Could not parse expert id from handle_name={handle_name}")
+    return int(m.group(1))
+
+def _save_Wpair_u64(path: str, Wpair_u64: torch.Tensor):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    # Wpair_u64 is uint64 [G2, R, 2] (contiguous)
+    torch.save({"Wpair_u64": Wpair_u64.contiguous()}, path)
+    torch.save({"Wpair_u64": Wpair_u64.contiguous()}, path)
+
+
 
 def parse_args():
     parser = argparse.ArgumentParser()
@@ -306,11 +330,15 @@ def main():
             for _, h in hooks.items():
                 h.remove()
 
+            _pending_gate_Wpair = {}
+
             for handle_name, handle in handles.items():
                 if handle._is_owner():
+                    # inside your loop:
                     if str(args.algorithm) == "sparsegptq":
                         qweight, scales, qzeros, M = handle.quantize()
 
+                        # keep this if you still want dense deq checkpoint / sanity path
                         deq, scales, qzeros = forge.utils.engine.dequantize_forge_full(
                             handle.layer.weight.dtype,
                             qweight, scales, qzeros,
@@ -318,23 +346,62 @@ def main():
                         )
                         handle.layer.weight.copy_(deq)
 
+                        # ---- PACK NOW (no intermediate disk) ----
+                        # qweight is [R,C] int8, M is [G32,R] uint32, scales is [G32,R] float-ish
+                        # pack kernel expects qweight_rc uint8 nibbles 0..15
+                        qw_u8 = _to_u8_nibble_sym_int4(qweight)
+
+                        # ensure dtypes match packer expectations
+                        scales_f32 = scales.to(torch.float32).contiguous()
+                        M_u32 = M.to(torch.uint32).contiguous()
+
+                        # packed: uint64 [G2, R, 2]
+                        Wpair_u64 = forge.backends.cuda.kernels.pack_sparsegptq14_to_u64x2_cuda(
+                            qw_u8, M_u32, scales_f32
+                        )
+
+                        # ---- SAVE PACKED IN YOUR DESIRED LAYOUT ----
                         if args.save_dir:
-                            out_dir = os.path.join(args.save_dir, f"block.{block_id}", handle_name)
-                            os.makedirs(out_dir, exist_ok=True)
-                            torch.save(
-                                {
-                                    "qweight": qweight.to(torch.int8),        # pre-nibble is fine as int8
-                                    "scales": scales.to(torch.float32),       # keep precision for repack
-                                    "qzeros": qzeros.to(torch.int32),         # optional; keep if your pipeline uses it
-                                    "M": M.to(torch.uint32),
-                                    "group_size": int(args.group_size),
-                                    "bits": int(args.bits),
-                                    "shape": tuple(handle.layer.weight.shape),
-                                    "layout": "RC"
-                                },
-                                os.path.join(out_dir, "sparse14quantized_weight.pt"),
-                            )
-                        del deq, scales, qzeros, M
+                            # Detect proj type from handle_name
+                            is_gate = handle_name.endswith("gate_proj")
+                            is_up   = handle_name.endswith("up_proj")
+                            is_down = handle_name.endswith("down_proj")
+
+                            if is_gate:
+                                eid = _parse_expert_id(handle_name)
+                                _pending_gate_Wpair[(block_id, eid)] = Wpair_u64.detach().contiguous()
+
+                            elif is_up:
+                                eid = _parse_expert_id(handle_name)
+                                key = (block_id, eid)
+                                if key not in _pending_gate_Wpair:
+                                    raise RuntimeError(f"Missing cached gate Wpair for block={block_id} expert={eid}. "
+                                                    f"Loop order unexpected; need to pack+cache gate first.")
+
+                                Wgate = _pending_gate_Wpair.pop(key)  # [G2, 2048, 2]
+                                Wup   = Wpair_u64.detach().contiguous()  # [G2, 2048, 2]
+
+                                # Stack along R -> [G2, 4096, 2]
+                                W13 = torch.cat([Wgate, Wup], dim=1).contiguous()
+
+                                # Save under gate_up_proj folder (Option B)
+                                gateup_name = handle_name.replace("up_proj", "gate_up_proj")
+                                out_dir = os.path.join(args.save_dir, f"block.{block_id}", gateup_name)
+                                _save_Wpair_u64(os.path.join(out_dir, "Wpair_u64.pt"), W13)
+
+                                del Wgate, Wup, W13
+
+                            elif is_down:
+                                out_dir = os.path.join(args.save_dir, f"block.{block_id}", handle_name)
+                                _save_Wpair_u64(os.path.join(out_dir, "Wpair_u64.pt"), Wpair_u64.detach())
+
+                            else:
+                                # If you have non-expert or different names, decide what to do here.
+                                pass
+
+                        # aggressively free
+                        del deq, qw_u8, scales_f32, M_u32, Wpair_u64
+                        del qweight, scales, qzeros, M
                     else:
                         qweight, scales, qzeros = handle.quantize()
 
@@ -361,12 +428,13 @@ def main():
                             )
                         del deq, scales, qzeros
 
-
             for handle_name, handle in handles.items():
                 if not handle._is_owner():
+                    # inside your loop:
                     if str(args.algorithm) == "sparsegptq":
                         qweight, scales, qzeros, M = handle.quantize()
 
+                        # keep this if you still want dense deq checkpoint / sanity path
                         deq, scales, qzeros = forge.utils.engine.dequantize_forge_full(
                             handle.layer.weight.dtype,
                             qweight, scales, qzeros,
@@ -374,23 +442,62 @@ def main():
                         )
                         handle.layer.weight.copy_(deq)
 
+                        # ---- PACK NOW (no intermediate disk) ----
+                        # qweight is [R,C] int8, M is [G32,R] uint32, scales is [G32,R] float-ish
+                        # pack kernel expects qweight_rc uint8 nibbles 0..15
+                        qw_u8 = _to_u8_nibble_sym_int4(qweight)
+
+                        # ensure dtypes match packer expectations
+                        scales_f32 = scales.to(torch.float32).contiguous()
+                        M_u32 = M.to(torch.uint32).contiguous()
+
+                        # packed: uint64 [G2, R, 2]
+                        Wpair_u64 = forge.backends.cuda.kernels.pack_sparsegptq14_to_u64x2_cuda(
+                            qw_u8, M_u32, scales_f32
+                        )
+
+                        # ---- SAVE PACKED IN YOUR DESIRED LAYOUT ----
                         if args.save_dir:
-                            out_dir = os.path.join(args.save_dir, f"block.{block_id}", handle_name)
-                            os.makedirs(out_dir, exist_ok=True)
-                            torch.save(
-                                {
-                                    "qweight": qweight.to(torch.int8),        # pre-nibble is fine as int8
-                                    "scales": scales.to(torch.float32),       # keep precision for repack
-                                    "qzeros": qzeros.to(torch.int32),         # optional; keep if your pipeline uses it
-                                    "M": M.to(torch.uint32),
-                                    "group_size": int(args.group_size),
-                                    "bits": int(args.bits),
-                                    "shape": tuple(handle.layer.weight.shape),
-                                    "layout": "RC"
-                                },
-                                os.path.join(out_dir, "sparse14quantized_weight.pt"),
-                            )
-                        del deq, scales, qzeros, M
+                            # Detect proj type from handle_name
+                            is_gate = handle_name.endswith("gate_proj")
+                            is_up   = handle_name.endswith("up_proj")
+                            is_down = handle_name.endswith("down_proj")
+
+                            if is_gate:
+                                eid = _parse_expert_id(handle_name)
+                                _pending_gate_Wpair[(block_id, eid)] = Wpair_u64.detach().contiguous()
+
+                            elif is_up:
+                                eid = _parse_expert_id(handle_name)
+                                key = (block_id, eid)
+                                if key not in _pending_gate_Wpair:
+                                    raise RuntimeError(f"Missing cached gate Wpair for block={block_id} expert={eid}. "
+                                                    f"Loop order unexpected; need to pack+cache gate first.")
+
+                                Wgate = _pending_gate_Wpair.pop(key)  # [G2, 2048, 2]
+                                Wup   = Wpair_u64.detach().contiguous()  # [G2, 2048, 2]
+
+                                # Stack along R -> [G2, 4096, 2]
+                                W13 = torch.cat([Wgate, Wup], dim=1).contiguous()
+
+                                # Save under gate_up_proj folder (Option B)
+                                gateup_name = handle_name.replace("up_proj", "gate_up_proj")
+                                out_dir = os.path.join(args.save_dir, f"block.{block_id}", gateup_name)
+                                _save_Wpair_u64(os.path.join(out_dir, "Wpair_u64.pt"), W13)
+
+                                del Wgate, Wup, W13
+
+                            elif is_down:
+                                out_dir = os.path.join(args.save_dir, f"block.{block_id}", handle_name)
+                                _save_Wpair_u64(os.path.join(out_dir, "Wpair_u64.pt"), Wpair_u64.detach())
+
+                            else:
+                                # If you have non-expert or different names, decide what to do here.
+                                pass
+
+                        # aggressively free
+                        del deq, qw_u8, scales_f32, M_u32, Wpair_u64
+                        del qweight, scales, qzeros, M
                     else:
                         qweight, scales, qzeros = handle.quantize()
 
