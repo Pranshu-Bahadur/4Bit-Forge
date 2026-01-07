@@ -99,7 +99,7 @@ def dequantize_forge_full(dtype, qweight, scales, qzeros, group_size, device):
 
 def forward(block, X, position_ids, N, bs, device, offload_device, act_update=False, rotary_emb=None):
     block.to(device)
-    X.to(device)
+    #X.to(device)
     for s in range(0, N, bs):
         e = min(N, s + bs)
 
@@ -120,12 +120,12 @@ def forward(block, X, position_ids, N, bs, device, offload_device, act_update=Fa
         out = out.to(offload_device) if offload_device is not None else out
         if act_update:
             for j in range(B):
-                X[s + j] = out[j:j+1].contiguous()
+                X[s + j] = out[j:j+1].to(offload_device).contiguous()
 
         del x, pos, out
     block.to(offload_device)
     if act_update:
-        return X.to(offload_device)
+        return X#.to(offload_device)
     else:
         return None
     
