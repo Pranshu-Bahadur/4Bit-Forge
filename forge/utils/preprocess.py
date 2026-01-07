@@ -49,6 +49,6 @@ def prepare_embeddings(embed, dataset, X, N, batch_size, device, offload_device)
             x = x.to(offload_device) if offload_device is not None else x
             B = x.size(0)
             for j in range(B):
-                X[s + j] = x[j:j+1].contiguous()
+                X[s + j] = x[j:j+1].to(offload_device).contiguous()
             del ids, x
     return X
