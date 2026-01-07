@@ -29,6 +29,11 @@ __device__ __forceinline__ float bf16_bits_to_f32(uint16_t bits) {
     return __bfloat162float(cvt.b);
 }
 
+
+static inline int64_t ceil_div_i64(int64_t a, int64_t b) {
+    return (a + b - 1) / b;
+}
+
 ////////////////////////////////////////////////////////////////////////////////
 // Decode snippet (for matmul)
 ////////////////////////////////////////////////////////////////////////////////
