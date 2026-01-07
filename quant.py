@@ -58,7 +58,7 @@ def parse_args():
     parser.add_argument("--rel_damp", type=float, default=1e-1)
     parser.add_argument("--block_size", type=int, default=32)
     parser.add_argument("--quantization_scale", type=str, default="mse", choices=["absmax", "mse"])
-    parser.add_argument("--quantization_order", type=str, default="activation", choices=["default", "activation"])
+    parser.add_argument("--quantization_order", type=str, default="default", choices=["default", "activation"])
     parser.add_argument(
         "--quantize_only_routed_experts",
         default=False,
@@ -241,7 +241,7 @@ def main():
         )
         meta_names = [n for n, p in block.named_parameters(recurse=True) if getattr(p, "is_meta", False)]
         assert not meta_names, f"Still meta params in block {block_id}: {meta_names[:10]}"
-        block.to(device)
+        #block.to(device)
         
         #Calibration Pass
         handles = {}
@@ -303,6 +303,7 @@ def main():
 
         with torch.no_grad():
             _ = forge.utils.engine.forward(block, X, position_ids, N, B, device, offload_device, False, rotary_emb)
+            del _
             
             for _, h in hooks.items():
                 h.remove()
@@ -335,6 +336,7 @@ def main():
                                 },
                                 os.path.join(out_dir, "sparse14quantized_weight.pt"),
                             )
+                        del deq, scales, qzeros, M
                     else:
                         qweight, scales, qzeros = handle.quantize()
 
@@ -359,6 +361,7 @@ def main():
                                 },
                                 os.path.join(out_dir, "quantized_weight.pt"),
                             )
+                        del deq, scales, qzeros
 
 
             for handle_name, handle in handles.items():
@@ -389,6 +392,7 @@ def main():
                                 },
                                 os.path.join(out_dir, "sparse14quantized_weight.pt"),
                             )
+                        del deq, scales, qzeros, M
                     else:
                         qweight, scales, qzeros = handle.quantize()
 
@@ -413,6 +417,7 @@ def main():
                                 },
                                 os.path.join(out_dir, "quantized_weight.pt"),
                             )
+                        del deq, scales, qzeros
 
             for _, handle in handles.items():
                 handle.reset()
