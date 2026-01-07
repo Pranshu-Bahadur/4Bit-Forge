@@ -537,7 +537,7 @@ def main():
             X = forge.utils.engine.forward(block, X, position_ids, N, B, device, offload_device, True, rotary_emb)
 
         if args.offload:
-            X.to(offload_device)
+            #X.to(offload_device)
             block.to("cpu")
             forge.utils.io.metaize_module_(block)
 
