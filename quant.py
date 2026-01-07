@@ -46,6 +46,11 @@ def parse_args():
         default=128,
     )
 
+    parser.add_argument(
+        "--algorithm",
+         type=str, default="gptq",
+                   choices=["gptq", "sparsegptq"])
+
     parser.add_argument("--attn_implementation", type=str, default="flash_attention_2",
                    choices=["sdpa", "eager", "flash_attention_2"])
     
@@ -255,7 +260,7 @@ def main():
                             quantization_order=args.quantization_order,
                             quantization_scale=args.quantization_scale,
                             owner=owner,
-                            algorithm="gptq",
+                            algorithm=str(args.algorithm),
                             device = device
                         )
                 experts_hook = forge.utils.engine.fused_expert_hooks(block, handles)
