@@ -180,7 +180,7 @@ torch::Tensor moe_proj_unstructured_sparse14_int4symq_gemm(
     TORCH_CHECK(qW2S1u64.is_cuda(), "qW2S1u64 must be CUDA");
     TORCH_CHECK(X.is_cuda(), "X must be CUDA");
     //TORCH_CHECK(qW2S1u64.scalar_type() == torch::kULong, "qW2S1u64 must be uint64");
-    TORCH_CHECK(X.scalar_type() == at::kBFloat16, "X must be bfloat16");
+    TORCH_CHECK(X.scalar_type() == torch::kBFloat16, "X must be bfloat16");
     TORCH_CHECK(qW2S1u64.dim() == 3 && qW2S1u64.size(2) == 2, "qW2S1u64 must be [G2, R, 2]");
     TORCH_CHECK(X.dim() == 2, "X must be [N, C]");
 
@@ -247,20 +247,20 @@ torch::Tensor moe_proj_unstructured_sparse14_int4symq_gemm(
 
     // Dispatch the specialized kernel.
     if (NTILE == 1) {
-        launch_stageXS<1>(qW_ptr, (const __nv_bfloat16*)X.data_ptr<at::BFloat16>(),
-                          (__nv_bfloat16*)Y.data_ptr<at::BFloat16>(),
+        launch_stageXS<1>(qW_ptr, (const __nv_bfloat16*)X.data_ptr<torch::BFloat16>(),
+                          (__nv_bfloat16*)Y.data_ptr<torch::BFloat16>(),
                           N_padded, R, C_padded, G2, grid, block, stream);
     } else if (NTILE == 2) {
-        launch_stageXS<2>(qW_ptr, (const __nv_bfloat16*)X.data_ptr<at::BFloat16>(),
-                          (__nv_bfloat16*)Y.data_ptr<at::BFloat16>(),
+        launch_stageXS<2>(qW_ptr, (const __nv_bfloat16*)X.data_ptr<torch::BFloat16>(),
+                          (__nv_bfloat16*)Y.data_ptr<torch::BFloat16>(),
                           N_padded, R, C_padded, G2, grid, block, stream);
     } else if (NTILE == 3) {
-        launch_stageXS<3>(qW_ptr, (const __nv_bfloat16*)X.data_ptr<at::BFloat16>(),
-                          (__nv_bfloat16*)Y.data_ptr<at::BFloat16>(),
+        launch_stageXS<3>(qW_ptr, (const __nv_bfloat16*)X.data_ptr<torch::BFloat16>(),
+                          (__nv_bfloat16*)Y.data_ptr<torch::BFloat16>(),
                           N_padded, R, C_padded, G2, grid, block, stream);
     } else { // NTILE == 4
-        launch_stageXS<4>(qW_ptr, (const __nv_bfloat16*)X.data_ptr<at::BFloat16>(),
-                          (__nv_bfloat16*)Y.data_ptr<at::BFloat16>(),
+        launch_stageXS<4>(qW_ptr, (const __nv_bfloat16*)X.data_ptr<torch::BFloat16>(),
+                          (__nv_bfloat16*)Y.data_ptr<torch::BFloat16>(),
                           N_padded, R, C_padded, G2, grid, block, stream);
     }
 
