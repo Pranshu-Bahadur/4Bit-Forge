@@ -152,12 +152,18 @@ class GPTQ(object):
 
         if self.algorithm == "babai":
             H, info = torch.linalg.cholesky_ex(H, upper=True)  # A where H = A^T A
-        else:
+        elif self.algorithm == "gptq":
             H, info = torch.linalg.cholesky_ex(H, upper=False)
             H = torch.cholesky_inverse(H, upper=False)    # H^{-1}
             H, info2 = torch.linalg.cholesky_ex(H, upper=True)
             info.add_(info2)
             H.div_(H.diag()[:, None])
+        else: #Sparsegptq
+            H, info = torch.linalg.cholesky_ex(H, upper=False)
+            H = torch.cholesky_inverse(H, upper=False)    # H^{-1}
+            H, info2 = torch.linalg.cholesky_ex(H, upper=True)
+            info.add_(info2)
+            #H.div_(H.diag()[:, None])
 
         if info.item() > 0:
             self.issue_non_invertible = True
@@ -241,6 +247,21 @@ class GPTQ(object):
             scales = scales.clone().view(R, self.G).repeat_interleave(self.group_size, dim=1)[:, :C].transpose(-2, -1)[self.perm]   # (C, R) fp32
             qzeros = qzeros.clone().view(R, self.G).repeat_interleave(self.group_size, dim=1)[:, :C].transpose(-2, -1)[self.perm]
             qw = kernels.gptq_solver(
+                W.to(torch.float32),
+                A,
+                scales,
+                qzeros,
+                self.bits
+            )
+
+            return qw
+        
+        if self.algorithm == 'sparsegptq':
+            C, R = W.shape
+
+            scales = scales.clone().view(R, self.G).repeat_interleave(self.group_size, dim=1)[:, :C].transpose(-2, -1)[self.perm]   # (C, R) fp32
+            qzeros = qzeros.clone().view(R, self.G).repeat_interleave(self.group_size, dim=1)[:, :C].transpose(-2, -1)[self.perm]
+            qw = kernels.sparsegptq14_solver(
                 W.to(torch.float32),
                 A,
                 scales,
