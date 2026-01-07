@@ -55,7 +55,24 @@ torch::Tensor babai_solver_cuda(
     int G
 );
 
+std::tuple<torch::Tensor, torch::Tensor> sparsegptq14_solver_cuda(
+    torch::Tensor W,       // [C, R]
+    torch::Tensor U,  // [C, C]
+    torch::Tensor scales,  //{C, R}
+    torch::Tensor qzeros, //{C, R}
+    int64_t bits
+);
 
+torch::Tensor pack_sparsegptq14_to_u64x2_cuda(
+    torch::Tensor qweight_rc,
+    torch::Tensor M,
+    torch::Tensor scales
+);
+
+torch::Tensor moe_proj_unstructured_sparse14_int4symq_gemm(
+    torch::Tensor qW2S1u64, // [G2, R, 2] | G2=ceil(C/64) | ulonglong2 | Packing format defined above
+    torch::Tensor X         // [N, C] | bfloat16
+);
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def(
@@ -73,6 +90,30 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
         "gptq_solver",
         &gptq_solver_cuda,
         "GPTQ Solver"
+    );
+
+    m.def(
+        "sparsegptq14_solver",
+        &sparsegptq14_solver_cuda,
+        "GPTQ Solver"
+    );
+
+    m.def(
+        "sparsegptq14_solver",
+        &sparsegptq14_solver_cuda,
+        "SPARSEGPTQ 1:4 Solver"
+    );
+
+    m.def(
+        "pack_sparsegptq14_to_u64x2",
+        &pack_sparsegptq14_to_u64x2_cuda,
+        "SPARSEGPTQ 1:4 Packer for inference"
+    );
+
+    m.def(
+        "sparsegptq14_gemm",
+        &moe_proj_unstructured_sparse14_int4symq_gemm,
+        "SPARSEGPTQ 1:4 GEMM for inference, tuned for deepseek v3.2"
     );
 
     m.def(
