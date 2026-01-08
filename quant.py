@@ -218,7 +218,7 @@ def main():
     if args.algorithm=="sparsegptq":
         block_tensors = {}
         block_tensors["model.embed_tokens.weight"] = embed.weight.cpu().contiguous()
-        lm_head = model.model.lm_head
+        lm_head = model.lm_head
 
         forge.utils.io.jit_load_prefix_to_cpu(
             model,
@@ -231,7 +231,7 @@ def main():
             disk_window=disk_window,
         )
 
-        block_tensors["model.lm_head.weight"] = lm_head.weight.cpu().contiguous()
+        block_tensors["lm_head.weight"] = lm_head.weight.cpu().contiguous()
 
 
     embed.to(device)
