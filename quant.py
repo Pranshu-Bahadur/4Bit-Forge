@@ -434,6 +434,7 @@ def main():
                                 del Wgate, Wup, W13
 
                             elif is_down:
+                                eid = _parse_expert_id(handle_name)
                                 #out_dir = os.path.join(args.save_dir, f"block.{block_id}", handle_name)
                                 #_save_Wpair_u64(os.path.join(out_dir, "Wpair_u64.pt"), Wpair_u64.detach())
                                 packed_down[eid] = Wpair_u64.detach().cpu().contiguous()
@@ -533,6 +534,7 @@ def main():
                                 del Wgate, Wup, W13
 
                             elif is_down:
+                                eid = _parse_expert_id(handle_name)
                                 #out_dir = os.path.join(args.save_dir, f"block.{block_id}", handle_name)
                                 #_save_Wpair_u64(os.path.join(out_dir, "Wpair_u64.pt"), Wpair_u64.detach())
                                 packed_down[eid] = Wpair_u64.detach().cpu().contiguous()
