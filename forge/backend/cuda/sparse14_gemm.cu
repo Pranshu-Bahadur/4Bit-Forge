@@ -78,12 +78,10 @@ __global__ void unstructured_sparse14_int4symq_gemm_stageXS3(
     // -------- 2) Compute: loop over g2, read X from shared, never sync again --------
     float acc0 = 0.0f, acc1 = 0.0f, acc2 = 0.0f, acc3 = 0.0f;
     for (int64_t g2id = 0; g2id < G2; ++g2id) {
+            ulonglong2 pkt = make_ulonglong2(0, 0);
             if (valid_r) {
                 pkt = Wpair[g2id * R + rid];
-            } else {
-                pkt = make_ulonglong2(0, 0); // Dummy load
             }
-
             // Two halves: 0..31 and 32..63
             #pragma unroll
             for (int half = 0; half < 2; ++half) {
