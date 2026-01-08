@@ -317,17 +317,13 @@ def main():
 
         # collect ALL block tensors now (still CPU)
         if args.algorithm=="sparsegptq":
+            if not block_tensors:
+                block_tensors = {}
 
-            _block_tensors, base_shard_name = forge.utils.io.collect_block_tensors_from_base_shard(args.hf_tmp_dir, weight_map, prefix)
-            if block_tensors:
-                block_tensors = {**block_tensors, **_block_tensors}
-            else:
-                block_tensors = _block_tensors
+            #_block_tensors, base_shard_name = forge.utils.io.collect_block_tensors_from_base_shard(args.hf_tmp_dir, weight_map, prefix)
 
-            for k in block_tensors.keys():
-                #if "rotary_emb" not in k and "embed_tokens" not in k:
-                #full = prefix + k
-                block_tensors[k] = block_tensors[k].contiguous()
+            for k, v in block.state_dict().items():
+                block_tensors[k] = v.contiguous()
         
 
         block.to(device)

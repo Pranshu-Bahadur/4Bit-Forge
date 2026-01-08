@@ -595,18 +595,31 @@ def build_block_to_shards(weight_map: dict):
 from safetensors import safe_open
 from pathlib import Path
 
-def collect_block_tensors_from_base_shard(base_dir: str, weight_map: dict, prefix: str):
-    # pick any key in this block to discover which shard file contains it
-    hint_key = next(k for k in weight_map.keys() if k.startswith(prefix))
-    shard_name = weight_map[hint_key]
-    shard_path = str(Path(base_dir) / shard_name)
+from pathlib import Path
+from safetensors.torch import safe_open
+
+def collect_block_tensors_from_all_shards(base_dir: str, weight_map: dict, prefix: str):
+    # map shard -> keys under this prefix
+    shard2keys = {}
+    for k, shard in weight_map.items():
+        if k.startswith(prefix):
+            shard2keys.setdefault(shard, []).append(k)
 
     out = {}
-    with safe_open(shard_path, framework="pt", device="cpu") as f:
-        for k in f.keys():
-            if k.startswith(prefix):
+    for shard, keys in shard2keys.items():
+        shard_path = str(Path(base_dir) / shard)
+        with safe_open(shard_path, framework="pt", device="cpu") as f:
+            fkeys = set(f.keys())
+            for k in keys:
+                if k not in fkeys:
+                    # mismatch between index and shard contents = bad checkpoint, surface it
+                    raise KeyError(f"Key {k} not found in shard {shard}")
                 out[k] = f.get_tensor(k).contiguous()
-    return out, shard_name
+
+    # return something useful for logging
+    shard_names = sorted(shard2keys.keys())
+    return out, shard_names
+
 
 
 
