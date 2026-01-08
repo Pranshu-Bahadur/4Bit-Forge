@@ -643,6 +643,7 @@ def main():
 
         torch.cuda.empty_cache()
         gc.collect()
+        block_tensors = None
 
     if args.save_dir:
         torch.save(
