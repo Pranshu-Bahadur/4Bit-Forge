@@ -35,7 +35,6 @@ def _save_Wpair_u64(path: str, Wpair_u64: torch.Tensor):
     os.makedirs(os.path.dirname(path), exist_ok=True)
     # Wpair_u64 is uint64 [G2, R, 2] (contiguous)
     torch.save({"Wpair_u64": Wpair_u64.contiguous()}, path)
-    torch.save({"Wpair_u64": Wpair_u64.contiguous()}, path)
 
 
 
@@ -141,6 +140,27 @@ def main():
     shard_ids = forge.utils.io.load_safetensors_index(args.model_name_or_path, tmp_dir=args.hf_tmp_dir)
     weight_map = shard_ids["weight_map"]
     num_shards = len(set(weight_map.values()))
+
+    if args.save_dir and args.algorithm=="sparsegptq":
+        os.makedirs(args.save_dir, exist_ok=True)
+
+        # copy small files once
+        import shutil
+        for fname in ["config.json", "generation_config.json",
+                    "tokenizer.json", "tokenizer_config.json",
+                    "special_tokens_map.json", "tokenizer.model"]:
+            src = os.path.join(args.model_name_or_path, fname)
+            if os.path.exists(src):
+                dst = os.path.join(args.save_dir, fname)
+                if not os.path.exists(dst):
+                    shutil.copy2(src, dst)
+
+        # load base index dict you already have as `shard_ids`
+        idx_writer = forge.utils.io.IncrementalIndexWriter(args.model_name_or_path, args.save_dir, shard_ids)
+        idx_writer.flush()
+    else:
+        idx_writer = None
+
 
 
     # --- IO objects (create once) ---
@@ -265,6 +285,20 @@ def main():
         )
         meta_names = [n for n, p in block.named_parameters(recurse=True) if getattr(p, "is_meta", False)]
         assert not meta_names, f"Still meta params in block {block_id}: {meta_names[:10]}"
+
+        prefix = f"model.layers.{block_id}."
+
+        # collect ALL block tensors now (still CPU)
+        if args.algorithm=="sparsegptq":
+            block_sd = block.state_dict()
+            block_tensors = {}
+            for k, v in block_sd.items():
+                full = prefix + k
+                t = v.detach()
+                if t.is_cuda:
+                    t = t.cpu()
+                block_tensors[full] = t.contiguous()
+
         block.to(device)
         
         #Calibration Pass
@@ -323,6 +357,12 @@ def main():
                     )
                 if owner is None:
                     hooks[layer_name] = layer.register_forward_hook(update_handle_hook(layer_name))
+
+        if args.algorithm == "sparsegptq":
+            num_experts = 128  # or derive from model/config
+            packed_gateup = [None] * num_experts
+            packed_down   = [None] * num_experts
+
         with torch.no_grad():
             _ = forge.utils.engine.forward(block, X, position_ids, N, B, device, offload_device, False, rotary_emb)
             del _
@@ -334,7 +374,6 @@ def main():
 
             for handle_name, handle in handles.items():
                 if handle._is_owner():
-                    # inside your loop:
                     if str(args.algorithm) == "sparsegptq":
                         qweight, scales, qzeros, M = handle.quantize()
 
@@ -386,15 +425,18 @@ def main():
                                 W13 = torch.cat([Wgate, Wup], dim=1).contiguous()
 
                                 # Save under gate_up_proj folder (Option B)
-                                gateup_name = handle_name.replace("up_proj", "gate_up_proj")
-                                out_dir = os.path.join(args.save_dir, f"block.{block_id}", gateup_name)
-                                _save_Wpair_u64(os.path.join(out_dir, "Wpair_u64.pt"), W13)
+                                #gateup_name = handle_name.replace("up_proj", "gate_up_proj")
+                                #out_dir = os.path.join(args.save_dir, f"block.{block_id}", gateup_name)
+                                #_save_Wpair_u64(os.path.join(out_dir, "Wpair_u64.pt"), W13)
+
+                                packed_gateup[eid] = W13.detach().cpu().contiguous() 
 
                                 del Wgate, Wup, W13
 
                             elif is_down:
-                                out_dir = os.path.join(args.save_dir, f"block.{block_id}", handle_name)
-                                _save_Wpair_u64(os.path.join(out_dir, "Wpair_u64.pt"), Wpair_u64.detach())
+                                #out_dir = os.path.join(args.save_dir, f"block.{block_id}", handle_name)
+                                #_save_Wpair_u64(os.path.join(out_dir, "Wpair_u64.pt"), Wpair_u64.detach())
+                                packed_down[eid] = Wpair_u64.detach().cpu().contiguous()
 
                             else:
                                 # If you have non-expert or different names, decide what to do here.
@@ -431,7 +473,6 @@ def main():
 
             for handle_name, handle in handles.items():
                 if not handle._is_owner():
-                    # inside your loop:
                     if str(args.algorithm) == "sparsegptq":
                         qweight, scales, qzeros, M = handle.quantize()
 
@@ -483,15 +524,18 @@ def main():
                                 W13 = torch.cat([Wgate, Wup], dim=1).contiguous()
 
                                 # Save under gate_up_proj folder (Option B)
-                                gateup_name = handle_name.replace("up_proj", "gate_up_proj")
-                                out_dir = os.path.join(args.save_dir, f"block.{block_id}", gateup_name)
-                                _save_Wpair_u64(os.path.join(out_dir, "Wpair_u64.pt"), W13)
+                                #gateup_name = handle_name.replace("up_proj", "gate_up_proj")
+                                #out_dir = os.path.join(args.save_dir, f"block.{block_id}", gateup_name)
+                                #_save_Wpair_u64(os.path.join(out_dir, "Wpair_u64.pt"), W13)
+
+                                packed_gateup[eid] = W13.detach().cpu().contiguous() 
 
                                 del Wgate, Wup, W13
 
                             elif is_down:
-                                out_dir = os.path.join(args.save_dir, f"block.{block_id}", handle_name)
-                                _save_Wpair_u64(os.path.join(out_dir, "Wpair_u64.pt"), Wpair_u64.detach())
+                                #out_dir = os.path.join(args.save_dir, f"block.{block_id}", handle_name)
+                                #_save_Wpair_u64(os.path.join(out_dir, "Wpair_u64.pt"), Wpair_u64.detach())
+                                packed_down[eid] = Wpair_u64.detach().cpu().contiguous()
 
                             else:
                                 # If you have non-expert or different names, decide what to do here.
@@ -525,6 +569,37 @@ def main():
                                 os.path.join(out_dir, "quantized_weight.pt"),
                             )
                         del deq, scales, qzeros
+
+            if args.algorithm == "sparsegptq" and args.save_dir and handles:
+                # stack to single tensors (keeps shard count low)
+                W13_all = torch.stack(packed_gateup, dim=0).contiguous()  # [E, G2, R13, 2]
+                W2_all  = torch.stack(packed_down,   dim=0).contiguous()  # [E, G2, R2,  2]
+
+                # choose keys your vLLM patch will load later
+                k_w13 = f"{prefix}mlp.experts.gate_up_proj.qW2S1u64"
+                k_w2  = f"{prefix}mlp.experts.down_proj.qW2S1u64"
+                block_tensors[k_w13] = W13_all
+                block_tensors[k_w2]  = W2_all
+                ROUTED_EXPERTS_WEIGHT = re.compile(
+                    rf"^{re.escape(prefix)}mlp\.experts\.\d+\.(gate_proj|up_proj|down_proj|gate_up_proj)\.weight"
+                )
+
+                drop_keys = set([k for k in block_tensors.keys() if ROUTED_EXPERTS_WEIGHT.match(k)])
+
+                for k in drop_keys:
+                    del block_tensors[k]
+                del W13_all, W2_all
+                
+            if idx_writer is not None and args.algorithm == "sparsegptq" and args.save_dir:
+                    print(f'updating shards...block_{block_id:03d}.safetensors')
+                    shard_name = f"block_{block_id:03d}.safetensors"
+                    idx_writer.write_block_shard(
+                        block_id=block_id,
+                        prefix=prefix,
+                        tensors=block_tensors,
+                        shard_name=shard_name,
+                        drop_keys=drop_keys,
+                    )
 
             for _, handle in handles.items():
                 handle.reset()
