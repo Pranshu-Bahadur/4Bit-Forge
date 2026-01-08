@@ -292,12 +292,14 @@ def main():
         if args.algorithm=="sparsegptq":
             block_sd = block.state_dict()
             block_tensors = {}
+            """
             for k, v in block_sd.items():
                 full = prefix + k
                 t = v.detach()
                 if t.is_cuda:
                     t = t.cpu()
                 block_tensors[full] = t.contiguous()
+            """
 
         block.to(device)
         
@@ -588,7 +590,7 @@ def main():
                     ROUTED_EXPERTS_WEIGHT = re.compile(
                         rf"^{re.escape(prefix)}mlp\.experts\.\d+\.(gate_proj|up_proj|down_proj|gate_up_proj)\.weight"
                     )
-                    drop_keys = set([k for k in block_tensors.keys() if ROUTED_EXPERTS_WEIGHT.match(k)])
+                    drop_keys = set([k for k in idx_writer.weight_map.keys() if ROUTED_EXPERTS_WEIGHT.match(k)])
                     if drop_keys:
                         for k in drop_keys:
                                 del block_tensors[k]
@@ -602,6 +604,7 @@ def main():
                         shard_name=shard_name,
                         drop_keys=drop_keys
                     )
+                    del block_tensors
 
             for _, handle in handles.items():
                 handle.reset()
