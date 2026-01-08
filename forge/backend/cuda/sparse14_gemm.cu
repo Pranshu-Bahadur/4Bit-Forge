@@ -77,10 +77,12 @@ __global__ void unstructured_sparse14_int4symq_gemm_stageXS3(
 
     // -------- 2) Compute: loop over g2, read X from shared, never sync again --------
     float acc0 = 0.0f, acc1 = 0.0f, acc2 = 0.0f, acc3 = 0.0f;
-
-    if (valid_r) {
-        for (int64_t g2id = 0; g2id < G2; ++g2id) {
-            const ulonglong2 pkt = Wpair[g2id * R + rid];
+    for (int64_t g2id = 0; g2id < G2; ++g2id) {
+            if (valid_r) {
+                pkt = Wpair[g2id * R + rid];
+            } else {
+                pkt = make_ulonglong2(0, 0); // Dummy load
+            }
 
             // Two halves: 0..31 and 32..63
             #pragma unroll
@@ -121,8 +123,8 @@ __global__ void unstructured_sparse14_int4symq_gemm_stageXS3(
                 if (NTILE >= 3) acc2 += sum2 * scale;
                 if (NTILE >= 4) acc3 += sum3 * scale;
             }
-        }
     }
+    
 
     // Stores (N is padded, so writes are always in-bounds; R is predicated via valid_r).
     if (valid_r) {
@@ -208,10 +210,6 @@ torch::Tensor moe_proj_unstructured_sparse14_int4symq_gemm(
     cudaDeviceProp prop;
     C10_CUDA_CHECK(cudaGetDeviceProperties(&prop, device));
     size_t max_smem = prop.sharedMemPerBlock;
-#ifdef __CUDACC_VER_MAJOR__
-    // If opt-in shared is supported, prefer it.
-    if (prop.sharedMemPerBlockOptin > 0) max_smem = prop.sharedMemPerBlockOptin;
-#endif
 
     auto smem_needed = [&](int t){ return (size_t)t * (size_t)C_padded * sizeof(__nv_bfloat16); };
     while (NTILE > 1 && smem_needed(NTILE) > max_smem) NTILE--;
