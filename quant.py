@@ -224,7 +224,7 @@ def main():
             model,
             args.model_name_or_path,
             weight_map,
-            ["model.lm_head."],
+            ["lm_head."],
             args.hf_tmp_dir,
             lru,
             reserve_bytes=0,
