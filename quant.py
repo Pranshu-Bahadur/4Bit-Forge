@@ -609,8 +609,8 @@ def main():
                 W2_all  = torch.stack(packed_down,   dim=0).contiguous()  # [E, G2, R2,  2]
 
                 # choose keys your vLLM patch will load later
-                k_w13 = f"{prefix}mlp.experts.gate_up_proj.qW2S1u64"
-                k_w2  = f"{prefix}mlp.experts.down_proj.qW2S1u64"
+                k_w13 = f"{prefix}mlp.experts.gate_up_proj.w13_packed"
+                k_w2  = f"{prefix}mlp.experts.down_proj.w2_packed"
                 block_tensors[k_w13] = W13_all
                 block_tensors[k_w2]  = W2_all
                 del W13_all, W2_all
