@@ -580,17 +580,17 @@ def main():
                 k_w2  = f"{prefix}mlp.experts.down_proj.qW2S1u64"
                 block_tensors[k_w13] = W13_all
                 block_tensors[k_w2]  = W2_all
-                ROUTED_EXPERTS_WEIGHT = re.compile(
-                    rf"^{re.escape(prefix)}mlp\.experts\.\d+\.(gate_proj|up_proj|down_proj|gate_up_proj)\.weight"
-                )
-
-                drop_keys = set([k for k in block_tensors.keys() if ROUTED_EXPERTS_WEIGHT.match(k)])
-
-                for k in drop_keys:
-                    del block_tensors[k]
                 del W13_all, W2_all
                 
             if idx_writer is not None and args.algorithm == "sparsegptq" and args.save_dir:
+                    ROUTED_EXPERTS_WEIGHT = re.compile(
+                        rf"^{re.escape(prefix)}mlp\.experts\.\d+\.(gate_proj|up_proj|down_proj|gate_up_proj)\.weight"
+                    )
+                    drop_keys = set([k for k in block_tensors.keys() if ROUTED_EXPERTS_WEIGHT.match(k)])
+                    if drop_keys:
+                        for k in drop_keys:
+                                del block_tensors[k]
+                    
                     print(f'updating shards...block_{block_id:03d}.safetensors')
                     shard_name = f"block_{block_id:03d}.safetensors"
                     idx_writer.write_block_shard(
@@ -598,7 +598,7 @@ def main():
                         prefix=prefix,
                         tensors=block_tensors,
                         shard_name=shard_name,
-                        drop_keys=drop_keys,
+                        drop_keys=drop_keys
                     )
 
             for _, handle in handles.items():
