@@ -203,6 +203,12 @@ def main():
 
     embed = model.model.embed_tokens
 
+    if args.algorithm=="sparsegptq":
+        block_tensors = {}
+        block_tensors["model.model.embed_tokens"] = embed.cpu().contiguous()
+
+    
+
     forge.utils.io.jit_load_prefix_to_cpu(
         model,
         args.model_name_or_path,
@@ -261,10 +267,25 @@ def main():
             device=device
         )
     
+    if rotary_emb:
+        if args.algorithm=="sparsegptq":
+            block_tensors["model.model.rotary_emb"] = rotary_emb.cpu().contiguous()
+    
+        
 
     blocks = model.model.layers
 
     for block_id, block in tqdm(enumerate(blocks)):
+        if args.algorithm=="sparsegptq":
+            block_sd = block.state_dict()
+            block_tensors = {}
+            for k, v in block_sd.items():
+                full = prefix + k
+                t = v.detach()
+                if t.is_cuda:
+                    t = t.cpu()
+                block_tensors[full] = t.contiguous()
+
         prefix = f"model.layers.{block_id}."
         forge.utils.io.jit_load_prefix_to_cpu(
             model,
@@ -289,17 +310,7 @@ def main():
         prefix = f"model.layers.{block_id}."
 
         # collect ALL block tensors now (still CPU)
-        if args.algorithm=="sparsegptq":
-            block_sd = block.state_dict()
-            block_tensors = {}
-            """
-            for k, v in block_sd.items():
-                full = prefix + k
-                t = v.detach()
-                if t.is_cuda:
-                    t = t.cpu()
-                block_tensors[full] = t.contiguous()
-            """
+        
 
         block.to(device)
         
@@ -590,7 +601,7 @@ def main():
                     ROUTED_EXPERTS_WEIGHT = re.compile(
                         rf"^{re.escape(prefix)}mlp\.experts\.\d+\.(gate_proj|up_proj|down_proj|gate_up_proj)\.weight"
                     )
-                    drop_keys = set([k for k in idx_writer.weight_map.keys() if ROUTED_EXPERTS_WEIGHT.match(k)])
+                    drop_keys = set([k for k in block_tensors.keys() if ROUTED_EXPERTS_WEIGHT.match(k)])
                     if drop_keys:
                         for k in drop_keys:
                                 del block_tensors[k]
