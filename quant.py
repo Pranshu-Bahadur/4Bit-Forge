@@ -291,7 +291,7 @@ def main():
             for k in block_tensors.keys():
                 if "rotary_emb" not in k and "embed_tokens" not in k:
                     full = prefix + k
-                    block_tensors[full] = block_tensors[full].contiguous()
+                    block_tensors[k] = block_tensors[k].contiguous()
 
         forge.utils.io.jit_load_prefix_to_cpu(
             model,
