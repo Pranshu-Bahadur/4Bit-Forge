@@ -311,7 +311,7 @@ def main():
             if block_tensors:
                 block_tensors = {**block_tensors, **_block_tensors}
             else:
-                block_tensors = block_tensors
+                block_tensors = _block_tensors
 
             for k in block_tensors.keys():
                 #if "rotary_emb" not in k and "embed_tokens" not in k:
