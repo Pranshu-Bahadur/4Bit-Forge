@@ -220,7 +220,7 @@ def main():
 
     if args.algorithm=="sparsegptq":
         block_tensors = {}
-        block_tensors["model.model.embed_tokens"] = embed.cpu()
+        block_tensors["model.model.embed_tokens.weight"] = embed.weight.cpu().contiguous()
 
 
     embed.to(device)
@@ -271,7 +271,7 @@ def main():
     
     if rotary_emb:
         if args.algorithm=="sparsegptq":
-            block_tensors["model.model.rotary_emb"] = rotary_emb.cpu()#.contiguous()
+            block_tensors["model.model.rotary_emb.weight"] = rotary_emb.weight.cpu().contiguous()
     
         
 
@@ -280,18 +280,7 @@ def main():
     for block_id, block in tqdm(enumerate(blocks)):
         prefix = f"model.layers.{block_id}."
 
-        if args.algorithm=="sparsegptq":
-
-            _block_tensors, base_shard_name = forge.utils.io.collect_block_tensors_from_base_shard(args.hf_tmp_dir, weight_map, prefix)
-            if block_tensors:
-                block_tensors = {**block_tensors, **_block_tensors}
-            else:
-                block_tensors = block_tensors
-
-            for k in block_tensors.keys():
-                if "rotary_emb" not in k and "embed_tokens" not in k:
-                    full = prefix + k
-                    block_tensors[k] = block_tensors[k].contiguous()
+        
 
         forge.utils.io.jit_load_prefix_to_cpu(
             model,
@@ -316,6 +305,18 @@ def main():
         prefix = f"model.layers.{block_id}."
 
         # collect ALL block tensors now (still CPU)
+        if args.algorithm=="sparsegptq":
+
+            _block_tensors, base_shard_name = forge.utils.io.collect_block_tensors_from_base_shard(args.hf_tmp_dir, weight_map, prefix)
+            if block_tensors:
+                block_tensors = {**block_tensors, **_block_tensors}
+            else:
+                block_tensors = block_tensors
+
+            for k in block_tensors.keys():
+                #if "rotary_emb" not in k and "embed_tokens" not in k:
+                #full = prefix + k
+                block_tensors[k] = block_tensors[k].contiguous()
         
 
         block.to(device)
