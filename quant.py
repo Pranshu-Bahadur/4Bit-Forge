@@ -276,17 +276,20 @@ def main():
     blocks = model.model.layers
 
     for block_id, block in tqdm(enumerate(blocks)):
-        if args.algorithm=="sparsegptq":
-            block_sd = block.state_dict()
-            block_tensors = {}
-            for k, v in block_sd.items():
-                full = prefix + k
-                t = v.detach()
-                if t.is_cuda:
-                    t = t.cpu()
-                block_tensors[full] = t.contiguous()
-
         prefix = f"model.layers.{block_id}."
+
+        if args.algorithm=="sparsegptq":
+
+            _block_tensors, base_shard_name = forge.utils.io.collect_block_tensors_from_base_shard(args.tmp_dir, weight_map, prefix)
+            if block_tensors:
+                block_tensors = {**block_tensors, **_block_tensors}
+            else:
+                block_tensors = block_tensors
+                
+            for k in block_tensors.keys():
+                full = prefix + k if "rotary_emb" not in k and "embed_tokens" not in k else k
+                block_tensors[full] = block_tensors[full].contiguous()
+
         forge.utils.io.jit_load_prefix_to_cpu(
             model,
             args.model_name_or_path,

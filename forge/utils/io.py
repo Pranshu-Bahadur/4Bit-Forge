@@ -592,6 +592,24 @@ def build_block_to_shards(weight_map: dict):
 
     return block_to_shards, global_shards
 
+from safetensors import safe_open
+from pathlib import Path
+
+def collect_block_tensors_from_base_shard(base_dir: str, weight_map: dict, prefix: str):
+    # pick any key in this block to discover which shard file contains it
+    hint_key = next(k for k in weight_map.keys() if k.startswith(prefix))
+    shard_name = weight_map[hint_key]
+    shard_path = str(Path(base_dir) / shard_name)
+
+    out = {}
+    with safe_open(shard_path, framework="pt", device="cpu") as f:
+        for k in f.keys():
+            if k.startswith(prefix):
+                out[k] = f.get_tensor(k).contiguous()
+    return out, shard_name
+
+
+
 from safetensors.torch import save_file
 from pathlib import Path
 import json
