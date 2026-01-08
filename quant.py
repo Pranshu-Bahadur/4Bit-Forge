@@ -220,7 +220,7 @@ def main():
 
     if args.algorithm=="sparsegptq":
         block_tensors = {}
-        block_tensors["model.model.embed_tokens"] = embed.cpu().contiguous()
+        block_tensors["model.model.embed_tokens"] = embed.cpu()
 
 
     embed.to(device)
@@ -271,7 +271,7 @@ def main():
     
     if rotary_emb:
         if args.algorithm=="sparsegptq":
-            block_tensors["model.model.rotary_emb"] = rotary_emb.cpu().contiguous()
+            block_tensors["model.model.rotary_emb"] = rotary_emb.cpu()#.contiguous()
     
         
 
