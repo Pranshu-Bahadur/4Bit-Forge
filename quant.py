@@ -202,9 +202,6 @@ def main():
     X = [None] * N
 
     embed = model.model.embed_tokens
-
-    
-
     
 
     forge.utils.io.jit_load_prefix_to_cpu(
@@ -220,7 +217,21 @@ def main():
 
     if args.algorithm=="sparsegptq":
         block_tensors = {}
-        block_tensors["model.model.embed_tokens.weight"] = embed.weight.cpu().contiguous()
+        block_tensors["model.embed_tokens.weight"] = embed.weight.cpu().contiguous()
+        lm_head = model.model.lm_head
+
+        forge.utils.io.jit_load_prefix_to_cpu(
+            model,
+            args.model_name_or_path,
+            weight_map,
+            ["model.lm_head."],
+            args.hf_tmp_dir,
+            lru,
+            reserve_bytes=0,
+            disk_window=disk_window,
+        )
+
+        block_tensors["model.lm_head.weight"] = lm_head.weight.cpu().contiguous()
 
 
     embed.to(device)
