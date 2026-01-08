@@ -269,9 +269,9 @@ def main():
             device=device
         )
     
-    if rotary_emb:
-        if args.algorithm=="sparsegptq":
-            block_tensors["model.model.rotary_emb.weight"] = rotary_emb.weight.cpu().contiguous()
+    #if rotary_emb:
+    #    if args.algorithm=="sparsegptq":
+    #        block_tensors["model.model.rotary_emb.weight"] = rotary_emb.weight.cpu().contiguous()
     
         
 
