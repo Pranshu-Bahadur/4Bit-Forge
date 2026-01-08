@@ -203,9 +203,7 @@ def main():
 
     embed = model.model.embed_tokens
 
-    if args.algorithm=="sparsegptq":
-        block_tensors = {}
-        block_tensors["model.model.embed_tokens"] = embed.cpu().contiguous()
+    
 
     
 
@@ -219,6 +217,10 @@ def main():
         reserve_bytes=0,
         disk_window=disk_window,
     )
+
+    if args.algorithm=="sparsegptq":
+        block_tensors = {}
+        block_tensors["model.model.embed_tokens"] = embed.cpu().contiguous()
 
 
     embed.to(device)
@@ -285,7 +287,7 @@ def main():
                 block_tensors = {**block_tensors, **_block_tensors}
             else:
                 block_tensors = block_tensors
-                
+
             for k in block_tensors.keys():
                 full = prefix + k if "rotary_emb" not in k and "embed_tokens" not in k else k
                 block_tensors[full] = block_tensors[full].contiguous()
