@@ -323,7 +323,7 @@ def main():
             #_block_tensors, base_shard_name = forge.utils.io.collect_block_tensors_from_base_shard(args.hf_tmp_dir, weight_map, prefix)
 
             for k, v in block.state_dict().items():
-                block_tensors[k] = v.contiguous()
+                block_tensors[prefix + k] = v.contiguous()
         
 
         block.to(device)
