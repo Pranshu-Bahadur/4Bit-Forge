@@ -282,7 +282,7 @@ def main():
 
         if args.algorithm=="sparsegptq":
 
-            _block_tensors, base_shard_name = forge.utils.io.collect_block_tensors_from_base_shard(args.tmp_dir, weight_map, prefix)
+            _block_tensors, base_shard_name = forge.utils.io.collect_block_tensors_from_base_shard(args.hf_tmp_dir, weight_map, prefix)
             if block_tensors:
                 block_tensors = {**block_tensors, **_block_tensors}
             else:
