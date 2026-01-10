@@ -106,14 +106,16 @@ __global__ void unstructured_sparse14_int4symq_gemm_stageXS3(
 
                 #pragma unroll
                 for (int i = 0; i < 8; ++i) {
-                    const uint32_t sparse2 = (idx16 >> (2 * i)) & 0x3u;          // 0..3
-                    const uint32_t ch      = ((uint32_t)i << 2) + sparse2;       // 0..31
+                    const uint32_t idx2    = (idx16 >> (2 * i)) & 0x3u;
+                    const uint32_t sparse2 = idx2;
+                    const uint32_t ch      = ((uint32_t)i << 2) + sparse2;
+
                     const uint32_t q4 = (qw32 >> (4 * i)) & 0xFu;
 
+                    // NEW: skip tail/empty groups encoded as default zeros
                     if (q4 == 0u && idx2 == 0u) continue;
 
                     const float w = (float((int)q4) - 8.0f);
-                    
 
                     sum0 += __shfl_sync(0xFFFFFFFFu, x0, (int)ch) * w;
                     if (NTILE >= 2) sum1 += __shfl_sync(0xFFFFFFFFu, x1, (int)ch) * w;
@@ -189,14 +191,14 @@ __global__ void unstructured_sparse14_int4symq_gemm(
 
                 #pragma unroll
                 for (int i = 0; i < 8; ++i) {
-                    const uint32_t sparse2 = (idx16 >> (2 * i)) & 0x3u;          // 0..3
-                    const uint32_t ch      = ((uint32_t)i << 2) + sparse2;       // 0..31
+                    const uint32_t idx2    = (idx16 >> (2 * i)) & 0x3u;
+                    const uint32_t sparse2 = idx2;
+                    const uint32_t ch      = ((uint32_t)i << 2) + sparse2;
 
                     const uint32_t q4 = (qw32 >> (4 * i)) & 0xFu;
 
-                    if (q4 == 0u && idx2 == 0u) {
-                        continue;
-                    }
+                    // NEW: skip tail/empty groups encoded as default zeros
+                    if (q4 == 0u && idx2 == 0u) continue;
 
                     const float w = (float((int)q4) - 8.0f);
 
@@ -334,7 +336,7 @@ torch::Tensor moe_proj_unstructured_sparse14_int4symq_gemm(
 
     auto stream = at::cuda::getCurrentCUDAStream();
 
-    dim3 block(64);
+    dim3 block(256);
     dim3 grid(
         (unsigned)ceil_div_i64(N_padded, NTILE),               // tiles over N
         (unsigned)ceil_div_i64(R, (int64_t)block.x)            // tiles over R
