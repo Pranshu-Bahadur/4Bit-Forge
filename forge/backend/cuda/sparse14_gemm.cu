@@ -216,10 +216,10 @@ static inline int pick_NTILE(int64_t N) {
     // - decode / tiny per-expert N: keep staging small -> NTILE=1
     // - medium: NTILE=2 or 3
     // - large prefill chunks: NTILE=4 (better reuse across the block)
-    if (N <= 64)   return 1;
-    if (N <= 256)  return 2;
-    if (N <= 768)  return 3;
-    return 4;
+    if (N <= 32)   return 1;
+    if (N <= 64)  return 2;
+    if (N <= 256)  return 3;
+    return 3;
 }
 
 template<int NTILE>
@@ -244,7 +244,7 @@ static inline void launch_stageXS(
     //    (int)shmem_bytes
     //);
 
-    if (N_TILE==1) {
+    if (N_TILE==1 || N_TILE==2) {
         unstructured_sparse14_int4symq_gemm<NTILE>
         <<<grid, block, 0, stream>>>(
             Wpair, X, Y, N, R, C, G2
