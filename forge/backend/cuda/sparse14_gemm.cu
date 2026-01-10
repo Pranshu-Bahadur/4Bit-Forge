@@ -133,6 +133,84 @@ __global__ void unstructured_sparse14_int4symq_gemm_stageXS3(
     }
 }
 
+
+template<int NTILE>
+__global__ void unstructured_sparse14_int4symq_gemm(
+    const ulonglong2* __restrict__ Wpair,   // [G2, R]  (each is two u64 for 64 channels)
+    const __nv_bfloat16* __restrict__ X,    // [N, C] (N and C may be padded)
+    __nv_bfloat16* __restrict__ Y,          // [N, R] (N may be padded)
+    int64_t N,
+    int64_t R,
+    int64_t C,
+    int64_t G2
+) {
+    // NTILE-row tile
+    const int64_t nid_base = (int64_t)blockIdx.x * (int64_t)NTILE;
+
+    const int tid  = (int)threadIdx.x;
+    const int lane = tid & 31;
+
+    const int64_t rid = (int64_t)blockIdx.y * (int64_t)blockDim.x + (int64_t)tid;
+    const bool valid_r = (rid < R);
+
+    // -------- 2) Compute: loop over g2, read X from shared, never sync again --------
+    float acc0 = 0.0f, acc1 = 0.0f, acc2 = 0.0f, acc3 = 0.0f;
+    for (int64_t g2id = 0; g2id < G2; ++g2id) {
+            ulonglong2 pkt = make_ulonglong2(0, 0);
+            if (valid_r) {
+                pkt = Wpair[g2id * R + rid];
+            }
+            // Two halves: 0..31 and 32..63
+
+            for (int half = 0; half < 2; ++half) {
+                const uint64_t u = (half == 0) ? pkt.x : pkt.y;
+
+                const uint32_t qw32 = (uint32_t)(u & 0xFFFFFFFFull);
+                const uint32_t hi   = (uint32_t)(u >> 32);
+
+                const uint16_t idx16      = (uint16_t)(hi & 0xFFFFu);
+                const uint16_t scale_bf16 = (uint16_t)(hi >> 16);
+                const float scale         = bf16_bits_to_f32(scale_bf16);
+
+                const int64_t base_c = (g2id << 6) + ((int64_t)half << 5);  // 64*g2 + 32*half
+
+                // Each lane loads its element for this 32-wide half; then shfl selects within warp.
+                const float x0 = __bfloat162float(X[(n + 0) * C + base_c + lane]);
+                const float x1 = (NTILE >= 2) ? __bfloat162float(X[(n + 1) * C + base_c + lane]) : 0.0f;
+                const float x2 = (NTILE >= 3) ? __bfloat162float(X[(n + 2) * C + base_c + lane]) : 0.0f;
+                const float x3 = (NTILE >= 4) ? __bfloat162float(X[(n + 3) * C + base_c + lane]) : 0.0f;
+
+                float sum0 = 0.0f, sum1 = 0.0f, sum2 = 0.0f, sum3 = 0.0f;
+
+                #pragma unroll
+                for (int i = 0; i < 8; ++i) {
+                    const uint32_t sparse2 = (idx16 >> (2 * i)) & 0x3u;          // 0..3
+                    const uint32_t ch      = ((uint32_t)i << 2) + sparse2;       // 0..31
+                    const float w = (float)(((qw32 >> (4 * i)) & 0xFu) - 8);     // symmetric int4 -> [-8, 7]
+
+                    sum0 += __shfl_sync(0xFFFFFFFFu, x0, (int)ch) * w;
+                    if (NTILE >= 2) sum1 += __shfl_sync(0xFFFFFFFFu, x1, (int)ch) * w;
+                    if (NTILE >= 3) sum2 += __shfl_sync(0xFFFFFFFFu, x2, (int)ch) * w;
+                    if (NTILE >= 4) sum3 += __shfl_sync(0xFFFFFFFFu, x3, (int)ch) * w;
+                }
+
+                acc0 += sum0 * scale;
+                if (NTILE >= 2) acc1 += sum1 * scale;
+                if (NTILE >= 3) acc2 += sum2 * scale;
+                if (NTILE >= 4) acc3 += sum3 * scale;
+            }
+    }
+    
+
+    // Stores (N is padded, so writes are always in-bounds; R is predicated via valid_r).
+    if (valid_r) {
+        Y[(nid_base + 0) * R + rid] = __float2bfloat16(acc0);
+        if (NTILE >= 2) Y[(nid_base + 1) * R + rid] = __float2bfloat16(acc1);
+        if (NTILE >= 3) Y[(nid_base + 2) * R + rid] = __float2bfloat16(acc2);
+        if (NTILE >= 4) Y[(nid_base + 3) * R + rid] = __float2bfloat16(acc3);
+    }
+}
+
 static inline int pick_NTILE(int64_t N) {
     // Heuristic dispatch:
     // - decode / tiny per-expert N: keep staging small -> NTILE=1
@@ -157,20 +235,31 @@ static inline void launch_stageXS(
     dim3 block,
     cudaStream_t stream
 ) {
-    const int64_t shmem_bytes = (int64_t)NTILE * C * (int64_t)sizeof(__nv_bfloat16);
 
     // Opt-in to larger dynamic shared memory when needed/available (A100/H100).
     // If the device can't satisfy it, the launcher will downshift NTILE before calling here.
-    cudaFuncSetAttribute(
-        (const void*)unstructured_sparse14_int4symq_gemm_stageXS3<NTILE>,
-        cudaFuncAttributeMaxDynamicSharedMemorySize,
-        (int)shmem_bytes
-    );
+    //cudaFuncSetAttribute(
+    //    (const void*)unstructured_sparse14_int4symq_gemm_stageXS3<NTILE>,
+    //   cudaFuncAttributeMaxDynamicSharedMemorySize,
+    //    (int)shmem_bytes
+    //);
 
-    unstructured_sparse14_int4symq_gemm_stageXS3<NTILE>
+    if (N_TILE==1) {
+        unstructured_sparse14_int4symq_gemm<NTILE>
+        <<<grid, block, 0, stream>>>(
+            Wpair, X, Y, N, R, C, G2
+        );
+
+    }
+    else {
+        const int64_t shmem_bytes = (int64_t)NTILE * C * (int64_t)sizeof(__nv_bfloat16);
+        unstructured_sparse14_int4symq_gemm_stageXS3<NTILE>
         <<<grid, block, (size_t)shmem_bytes, stream>>>(
             Wpair, X, Y, N, R, C, G2
         );
+
+    }
+    
 }
 
 torch::Tensor moe_proj_unstructured_sparse14_int4symq_gemm(
