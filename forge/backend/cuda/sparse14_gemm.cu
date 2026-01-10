@@ -244,7 +244,7 @@ static inline void launch_stageXS(
     //    (int)shmem_bytes
     //);
 
-    if (N_TILE==1 || N_TILE==2) {
+    if (NTILE==1 || NTILE==2) {
         unstructured_sparse14_int4symq_gemm<NTILE>
         <<<grid, block, 0, stream>>>(
             Wpair, X, Y, N, R, C, G2
