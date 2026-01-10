@@ -108,7 +108,12 @@ __global__ void unstructured_sparse14_int4symq_gemm_stageXS3(
                 for (int i = 0; i < 8; ++i) {
                     const uint32_t sparse2 = (idx16 >> (2 * i)) & 0x3u;          // 0..3
                     const uint32_t ch      = ((uint32_t)i << 2) + sparse2;       // 0..31
-                    const float w = (float)(((qw32 >> (4 * i)) & 0xFu) - 8);     // symmetric int4 -> [-8, 7]
+                    const uint32_t q4 = (qw32 >> (4 * i)) & 0xFu;
+
+                    if (q4 == 0u && idx2 == 0u) continue;
+
+                    const float w = (float((int)q4) - 8.0f);
+                    
 
                     sum0 += __shfl_sync(0xFFFFFFFFu, x0, (int)ch) * w;
                     if (NTILE >= 2) sum1 += __shfl_sync(0xFFFFFFFFu, x1, (int)ch) * w;
@@ -186,7 +191,14 @@ __global__ void unstructured_sparse14_int4symq_gemm(
                 for (int i = 0; i < 8; ++i) {
                     const uint32_t sparse2 = (idx16 >> (2 * i)) & 0x3u;          // 0..3
                     const uint32_t ch      = ((uint32_t)i << 2) + sparse2;       // 0..31
-                    const float w = (float)(((qw32 >> (4 * i)) & 0xFu) - 8);     // symmetric int4 -> [-8, 7]
+
+                    const uint32_t q4 = (qw32 >> (4 * i)) & 0xFu;
+
+                    if (q4 == 0u && idx2 == 0u) {
+                        continue;
+                    }
+
+                    const float w = (float((int)q4) - 8.0f);
 
                     sum0 += __shfl_sync(0xFFFFFFFFu, x0, (int)ch) * w;
                     if (NTILE >= 2) sum1 += __shfl_sync(0xFFFFFFFFu, x1, (int)ch) * w;
@@ -244,7 +256,7 @@ static inline void launch_stageXS(
     //    (int)shmem_bytes
     //);
 
-    if (NTILE==1 || NTILE==2) {
+    if (NTILE==1) {
         unstructured_sparse14_int4symq_gemm<NTILE>
         <<<grid, block, 0, stream>>>(
             Wpair, X, Y, N, R, C, G2
