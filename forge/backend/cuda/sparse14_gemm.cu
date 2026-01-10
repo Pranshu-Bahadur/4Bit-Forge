@@ -175,10 +175,10 @@ __global__ void unstructured_sparse14_int4symq_gemm(
                 const int64_t base_c = (g2id << 6) + ((int64_t)half << 5);  // 64*g2 + 32*half
 
                 // Each lane loads its element for this 32-wide half; then shfl selects within warp.
-                const float x0 = __bfloat162float(X[(n + 0) * C + base_c + lane]);
-                const float x1 = (NTILE >= 2) ? __bfloat162float(X[(n + 1) * C + base_c + lane]) : 0.0f;
-                const float x2 = (NTILE >= 3) ? __bfloat162float(X[(n + 2) * C + base_c + lane]) : 0.0f;
-                const float x3 = (NTILE >= 4) ? __bfloat162float(X[(n + 3) * C + base_c + lane]) : 0.0f;
+                const float x0 = __bfloat162float(X[(nid_base + 0) * C + base_c + lane]);
+                const float x1 = (NTILE >= 2) ? __bfloat162float(X[(nid_base + 1) * C + base_c + lane]) : 0.0f;
+                const float x2 = (NTILE >= 3) ? __bfloat162float(X[(nid_base + 2) * C + base_c + lane]) : 0.0f;
+                const float x3 = (NTILE >= 4) ? __bfloat162float(X[(nid_base + 3) * C + base_c + lane]) : 0.0f;
 
                 float sum0 = 0.0f, sum1 = 0.0f, sum2 = 0.0f, sum3 = 0.0f;
 
