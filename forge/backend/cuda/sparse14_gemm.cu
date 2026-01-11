@@ -113,7 +113,7 @@ __global__ void unstructured_sparse14_int4symq_gemm_stageXS3(
                     const uint32_t q4 = (qw32 >> (4 * i)) & 0xFu;
 
                     // NEW: skip tail/empty groups encoded as default zeros
-                    if (q4 == 8u) continue;
+                    //if (q4 == 8u) continue;
 
                     const float w = (float((int)q4) - 16.0f);
 
@@ -198,7 +198,7 @@ __global__ void unstructured_sparse14_int4symq_gemm(
                     const uint32_t q4 = (qw32 >> (4 * i)) & 0xFu;
 
                     // NEW: skip tail/empty groups encoded as default zeros
-                    if (q4 == 8u) continue;
+                    //if (q4 == 8u) continue;
 
                     const float w = (float((int)q4) - 16.0f);
 
@@ -336,7 +336,7 @@ torch::Tensor moe_proj_unstructured_sparse14_int4symq_gemm(
 
     auto stream = at::cuda::getCurrentCUDAStream();
 
-    dim3 block(64);
+    dim3 block(128);
     dim3 grid(
         (unsigned)ceil_div_i64(N_padded, NTILE),               // tiles over N
         (unsigned)ceil_div_i64(R, (int64_t)block.x)            // tiles over R
