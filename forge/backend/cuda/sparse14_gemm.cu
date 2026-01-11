@@ -112,8 +112,7 @@ __global__ void unstructured_sparse14_int4symq_gemm_stageXS3(
 
                     const uint32_t q4 = (qw32 >> (4 * i)) & 0xFu;
 
-                    // NEW: skip tail/empty groups encoded as default zeros
-                    if (q4 == 8u) continue;
+                    //if (q4 == 8u && idx2 == 0u) continue;
 
                     const float w = (float((int)q4) - 8.0f);
 
@@ -197,8 +196,7 @@ __global__ void unstructured_sparse14_int4symq_gemm(
 
                     const uint32_t q4 = (qw32 >> (4 * i)) & 0xFu;
 
-                    // NEW: skip tail/empty groups encoded as default zeros
-                    if (q4 == 8u) continue;
+                    //if (q4 == 8u && idx2 == 0u) continue;
 
                     const float w = (float((int)q4) - 8.0f);
 
