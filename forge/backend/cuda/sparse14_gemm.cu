@@ -230,10 +230,10 @@ static inline int pick_NTILE(int64_t N) {
     // - decode / tiny per-expert N: keep staging small -> NTILE=1
     // - medium: NTILE=2 or 3
     // - large prefill chunks: NTILE=4 (better reuse across the block)
-    if (N <= 32)   return 1;
-    if (N <= 64)  return 2;
-    if (N <= 256)  return 3;
-    return 3;
+    if (N <= 64)   return 1;
+    if (N <= 256)  return 2;
+    if (N <= 764)  return 3;
+    return 4;
 }
 
 template<int NTILE>
@@ -336,7 +336,7 @@ torch::Tensor moe_proj_unstructured_sparse14_int4symq_gemm(
 
     auto stream = at::cuda::getCurrentCUDAStream();
 
-    dim3 block(64);
+    dim3 block(128);
     dim3 grid(
         (unsigned)ceil_div_i64(N_padded, NTILE),               // tiles over N
         (unsigned)ceil_div_i64(R, (int64_t)block.x)            // tiles over R
