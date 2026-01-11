@@ -252,6 +252,7 @@ static inline void launch_stageXS(
 
     // Opt-in to larger dynamic shared memory when needed/available (A100/H100).
     // If the device can't satisfy it, the launcher will downshift NTILE before calling here.
+    const int64_t shmem_bytes = (int64_t)NTILE * C * (int64_t)sizeof(__nv_bfloat16);
     cudaFuncSetAttribute(
         (const void*)unstructured_sparse14_int4symq_gemm_stageXS3<NTILE>,
        cudaFuncAttributeMaxDynamicSharedMemorySize,
@@ -266,7 +267,7 @@ static inline void launch_stageXS(
 
     }
     else {
-        const int64_t shmem_bytes = (int64_t)NTILE * C * (int64_t)sizeof(__nv_bfloat16);
+        
         unstructured_sparse14_int4symq_gemm_stageXS3<NTILE>
         <<<grid, block, (size_t)shmem_bytes, stream>>>(
             Wpair, X, Y, N, R, C, G2
