@@ -646,7 +646,7 @@ def main():
                         block_tensors[k] = _load_tensor_from_shard(k)
                     
                     ROUTED_EXPERTS_WEIGHT = re.compile(
-                        rf"^{re.escape(prefix)}mlp\.experts\.\d+\.(gate_proj|up_proj|down_proj)\.(weight|weight_scale_inv|weight_inv_scale|bias|bias_scale|bias_scale_inv|bias_inv_scale)$"
+                        rf"^{re.escape(prefix)}mlp.experts\.\d+\.(gate_proj|up_proj|down_proj).(weight|weight_scale_inv|weight_inv_scale|bias|bias_scale|bias_scale_inv|bias_inv_scale)$"
                     )
                     drop_keys = set([k for k in block_tensors.keys() if ROUTED_EXPERTS_WEIGHT.match(k)])
                     if drop_keys:
