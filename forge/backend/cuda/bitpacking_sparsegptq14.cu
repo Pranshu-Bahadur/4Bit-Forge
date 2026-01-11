@@ -76,7 +76,8 @@ __global__ void pack_sparsegptq14_to_u64x2(
         uint32_t bitmask = M[gid * R + r];
 
         uint16_t idx16 = 0;
-        uint32_t qw32  = 0;
+        uint32_t qw32  = 0x88888888u;   // default q=8 -> w=0 for all 8 groups
+
 
         #pragma unroll
         for (int i = 0; i < 8; i++) {

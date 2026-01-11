@@ -14,16 +14,14 @@ import forge.utils
 
 from forge.gptq import GPTQ
 
-def _to_u8_nibble_sym_int4(qweight_int8: torch.Tensor) -> torch.Tensor:
-    """
-    Convert symmetric int4 stored as int8 in [-8..7] into uint8 nibbles [0..15]
-    so that dequant in matmul uses (nibble - 8).
-    If your qweight is already 0..15, this still works fine.
-    """
-    # promote to int16 so +8 doesn't overflow
-    qw = qweight_int8.to(torch.int16)
-    qw = (qw + 8).clamp_(0, 15).to(torch.uint8)
-    return qw.contiguous()
+def to_u8_nibble_sym_int4(qw: torch.Tensor) -> torch.Tensor:
+    qw16 = qw.to(torch.int16)
+    # Heuristic: if any negatives exist, it's signed [-8..7] and needs +8.
+    if (qw16 < 0).any():
+        qw16 = qw16 + 8
+    # Now force into nibble range
+    return qw16.clamp_(0, 15).to(torch.uint8).contiguous()
+
 
 def _parse_expert_id(handle_name: str) -> int:
     m = re.search(r"\.experts\.(\d+)\.", handle_name)
@@ -317,7 +315,7 @@ def main():
             materialize_block=block,
             materialize_prefix=prefix,
             materialize_fn=forge.utils.io.materialize_block_weights_to_fp,
-            group_size=int(args.group_size),
+            group_size=128,
             bits=int(args.bits),
             dtype=dtype,
             list_layers_fn=forge.utils.engine.list_layers,
@@ -427,7 +425,7 @@ def main():
                         # ---- PACK NOW (no intermediate disk) ----
                         # qweight is [R,C] int8, M is [G32,R] uint32, scales is [G32,R] float-ish
                         # pack kernel expects qweight_rc uint8 nibbles 0..15
-                        qw_u8 = _to_u8_nibble_sym_int4(qweight)
+                        qw_u8 = to_u8_nibble_sym_int4(qweight)
 
                         # ensure dtypes match packer expectations
                         scales_f32 = scales.to(torch.float32).contiguous()
@@ -468,7 +466,7 @@ def main():
                                 #out_dir = os.path.join(args.save_dir, f"block.{block_id}", gateup_name)
                                 #_save_Wpair_u64(os.path.join(out_dir, "Wpair_u64.pt"), W13)
 
-                                packed_gateup[eid] = W13.detach().cpu().contiguous() 
+                                packed_gateup[int(eid)] = W13.detach().cpu().contiguous() 
 
                                 del Wgate, Wup, W13
 
@@ -476,7 +474,7 @@ def main():
                                 eid = _parse_expert_id(handle_name)
                                 #out_dir = os.path.join(args.save_dir, f"block.{block_id}", handle_name)
                                 #_save_Wpair_u64(os.path.join(out_dir, "Wpair_u64.pt"), Wpair_u64.detach())
-                                packed_down[eid] = Wpair_u64.detach().cpu().contiguous()
+                                packed_down[int(eid)] = Wpair_u64.detach().cpu().contiguous()
 
                             else:
                                 # If you have non-expert or different names, decide what to do here.
@@ -527,7 +525,7 @@ def main():
                         # ---- PACK NOW (no intermediate disk) ----
                         # qweight is [R,C] int8, M is [G32,R] uint32, scales is [G32,R] float-ish
                         # pack kernel expects qweight_rc uint8 nibbles 0..15
-                        qw_u8 = _to_u8_nibble_sym_int4(qweight)
+                        qw_u8 = to_u8_nibble_sym_int4(qweight)
 
                         # ensure dtypes match packer expectations
                         scales_f32 = scales.to(torch.float32).contiguous()
@@ -568,7 +566,7 @@ def main():
                                 #out_dir = os.path.join(args.save_dir, f"block.{block_id}", gateup_name)
                                 #_save_Wpair_u64(os.path.join(out_dir, "Wpair_u64.pt"), W13)
 
-                                packed_gateup[eid] = W13.detach().cpu().contiguous() 
+                                packed_gateup[int(eid)] = W13.detach().cpu().contiguous() 
 
                                 del Wgate, Wup, W13
 
@@ -576,7 +574,7 @@ def main():
                                 eid = _parse_expert_id(handle_name)
                                 #out_dir = os.path.join(args.save_dir, f"block.{block_id}", handle_name)
                                 #_save_Wpair_u64(os.path.join(out_dir, "Wpair_u64.pt"), Wpair_u64.detach())
-                                packed_down[eid] = Wpair_u64.detach().cpu().contiguous()
+                                packed_down[int(eid)] = Wpair_u64.detach().cpu().contiguous()
 
                             else:
                                 # If you have non-expert or different names, decide what to do here.
@@ -612,7 +610,6 @@ def main():
                         del deq, scales, qzeros
 
             if args.algorithm == "sparsegptq" and args.save_dir and handles:
-                # stack to single tensors (keeps shard count low)
                 W13_all = torch.stack(packed_gateup, dim=0).contiguous()  # [E, G2, R13, 2]
                 W2_all  = torch.stack(packed_down,   dim=0).contiguous()  # [E, G2, R2,  2]
 

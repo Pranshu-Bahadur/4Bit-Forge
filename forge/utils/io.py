@@ -1013,7 +1013,7 @@ def jit_load_prefix_to_cpu(
         materialize_fn(
             materialize_block,
             rel,
-            group_size=group_size,
+            group_size=128,
             bits=bits,
             dtype=dtype,
             list_layers_fn=list_layers_fn
