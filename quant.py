@@ -134,7 +134,7 @@ def main():
             torch_dtype=dtype
         ).eval()
         model.config.use_cache = False
-    ROUTED_EXPERTS_REGEX = r"*mlp\.experts\.\d+\.(down_proj|gate_proj|up_proj)$"
+    ROUTED_EXPERTS_REGEX = r".*mlp.experts.\d+.(down|gate|up)_proj$"
 
     #ROUTED_EXPERTS_REGEX = ROUTED_EXPERTS_REGEX if "deepseek" in str(args.model_name_or_path).lower() else r".*mlp\.experts\.(down|gate|up|gate_up)_proj.*"
     shard_ids = forge.utils.io.load_safetensors_index(args.model_name_or_path, tmp_dir=args.hf_tmp_dir)
