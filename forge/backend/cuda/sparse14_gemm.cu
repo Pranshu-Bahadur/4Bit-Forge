@@ -115,7 +115,7 @@ __global__ void unstructured_sparse14_int4symq_gemm_stageXS3(
                     // NEW: skip tail/empty groups encoded as default zeros
                     if (q4 == 8u) continue;
 
-                    const float w = (float((int)q4) - 8.0f);
+                    const float w = (float((int)q4) - 16.0f);
 
                     sum0 += __shfl_sync(0xFFFFFFFFu, x0, (int)ch) * w;
                     if (NTILE >= 2) sum1 += __shfl_sync(0xFFFFFFFFu, x1, (int)ch) * w;
@@ -200,7 +200,7 @@ __global__ void unstructured_sparse14_int4symq_gemm(
                     // NEW: skip tail/empty groups encoded as default zeros
                     if (q4 == 8u) continue;
 
-                    const float w = (float((int)q4) - 8.0f);
+                    const float w = (float((int)q4) - 16.0f);
 
                     sum0 += __shfl_sync(0xFFFFFFFFu, x0, (int)ch) * w;
                     if (NTILE >= 2) sum1 += __shfl_sync(0xFFFFFFFFu, x1, (int)ch) * w;
