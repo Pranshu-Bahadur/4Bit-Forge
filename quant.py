@@ -219,7 +219,7 @@ def main():
         block_tensors = {}
         block_tensors["model.embed_tokens.weight"] = embed.weight.cpu().contiguous()
         lm_head = model.lm_head
-        norm = model.norm
+        norm = model.model.norm
 
         forge.utils.io.jit_load_prefix_to_cpu(
             model,
@@ -238,13 +238,13 @@ def main():
             model,
             args.model_name_or_path,
             weight_map,
-            ["norm."],
+            ["model.norm."],
             args.hf_tmp_dir,
             lru,
             reserve_bytes=0,
             disk_window=disk_window,
         )
-        block_tensors["norm.weight"] = norm.weight.cpu().contiguous()
+        block_tensors["model.norm.weight"] = norm.weight.cpu().contiguous()
 
     embed.to(device)
     X = forge.utils.preprocess.prepare_embeddings(embed, calibration_dataset, X, N, B, device, offload_device)
