@@ -9,6 +9,8 @@ import torch
 from transformers import AutoConfig, AutoTokenizer, AutoModelForCausalLM
 
 from accelerate import init_empty_weights
+from safetensors import safe_open 
+
 
 import forge.utils
 
@@ -425,16 +427,16 @@ def main():
                         # ---- PACK NOW (no intermediate disk) ----
                         # qweight is [R,C] int8, M is [G32,R] uint32, scales is [G32,R] float-ish
                         # pack kernel expects qweight_rc uint8 nibbles 0..15
-                        qw_u8 = to_u8_nibble_sym_int4(qweight)
+                        #qw_u8 = to_u8_nibble_sym_int4(qweight)
 
                         # ensure dtypes match packer expectations
                         scales_f32 = scales.to(torch.float32).contiguous()
                         M_u32 = M.to(torch.uint32).contiguous()
 
                         # packed: uint64 [G2, R, 2]
-                        G32 = (qw_u8.shape[1] + 32 - 1) // 32
+                        G32 = (qweight.shape[1] + 32 - 1) // 32
                         Wpair_u64 = forge.backend.cuda.kernels.pack_sparsegptq14_to_u64x2(
-                            qw_u8, M_u32, scales_f32.view(qw_u8.shape[0], G32).transpose(0, 1).contiguous()
+                            qweight, M_u32, scales_f32.view(qweight.shape[0], G32).transpose(0, 1).contiguous()
                         )
 
                         # ---- SAVE PACKED IN YOUR DESIRED LAYOUT ----
@@ -481,7 +483,7 @@ def main():
                                 pass
 
                         # aggressively free
-                        del deq, qw_u8, scales_f32, M_u32, Wpair_u64
+                        del deq, scales_f32, M_u32, Wpair_u64
                         del qweight, scales, qzeros, M
                     else:
                         qweight, scales, qzeros = handle.quantize()
@@ -525,16 +527,16 @@ def main():
                         # ---- PACK NOW (no intermediate disk) ----
                         # qweight is [R,C] int8, M is [G32,R] uint32, scales is [G32,R] float-ish
                         # pack kernel expects qweight_rc uint8 nibbles 0..15
-                        qw_u8 = to_u8_nibble_sym_int4(qweight)
+                        #qw_u8 = to_u8_nibble_sym_int4(qweight)
 
                         # ensure dtypes match packer expectations
                         scales_f32 = scales.to(torch.float32).contiguous()
                         M_u32 = M.to(torch.uint32).contiguous()
 
                         # packed: uint64 [G2, R, 2]
-                        G32 = (qw_u8.shape[1] + 32 - 1) // 32
+                        G32 = (qweight.shape[1] + 32 - 1) // 32
                         Wpair_u64 = forge.backend.cuda.kernels.pack_sparsegptq14_to_u64x2(
-                            qw_u8, M_u32, scales_f32.view(qw_u8.shape[0], G32).transpose(0, 1).contiguous()
+                            qweight, M_u32, scales_f32.view(qweight.shape[0], G32).transpose(0, 1).contiguous()
                         )
 
                         # ---- SAVE PACKED IN YOUR DESIRED LAYOUT ----
@@ -581,7 +583,7 @@ def main():
                                 pass
 
                         # aggressively free
-                        del deq, qw_u8, scales_f32, M_u32, Wpair_u64
+                        del deq, scales_f32, M_u32, Wpair_u64
                         del qweight, scales, qzeros, M
                     else:
                         qweight, scales, qzeros = handle.quantize()
@@ -621,8 +623,30 @@ def main():
                 del W13_all, W2_all
                 
             if idx_writer is not None and args.algorithm == "sparsegptq" and args.save_dir:
+                    def _load_tensor_from_shard(full_key: str) -> torch.Tensor:
+                        shard = weight_map[full_key]
+                        tensors = lru.get(shard) or {}
+                        if full_key in tensors:
+                            return tensors[full_key].contiguous()
+
+                        shard_path = disk_window.download_shard(
+                            args.model_name_or_path, shard,
+                            reserve_bytes=0,
+                            pinned_filenames=set([shard]),
+                        )
+                        with safe_open(shard_path, framework="pt", device="cpu") as f:
+                            t = f.get_tensor(full_key)
+                        tensors[full_key] = t
+                        lru.put(shard, tensors, sum(forge.utils.io._tensor_bytes(x) for x in tensors.values()))
+                        return t.contiguous()
+                    
+                    all_block_keys = [k for k in weight_map.keys() if k.startswith(prefix)]
+                    
+                    for k in all_block_keys:
+                        block_tensors[k] = _load_tensor_from_shard(k)
+                    
                     ROUTED_EXPERTS_WEIGHT = re.compile(
-                        rf"^{re.escape(prefix)}mlp\.experts\.\d+\.(gate_proj|up_proj|down_proj)\.(weight|weight_scale_inv)$"
+                        rf"^{re.escape(prefix)}mlp\.experts\.\d+\.(gate_proj|up_proj|down_proj)\.(weight|weight_scale_inv|weight_inv_scale|bias|bias_scale|bias_scale_inv|bias_inv_scale)$"
                     )
                     drop_keys = set([k for k in block_tensors.keys() if ROUTED_EXPERTS_WEIGHT.match(k)])
                     if drop_keys:
@@ -632,6 +656,7 @@ def main():
                     
                     print(f'updating shards...block_{block_id:03d}.safetensors')
                     shard_name = f"block_{block_id:03d}.safetensors"
+
                     idx_writer.write_block_shard(
                         block_id=block_id,
                         prefix=prefix,
