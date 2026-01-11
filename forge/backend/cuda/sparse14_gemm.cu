@@ -252,11 +252,11 @@ static inline void launch_stageXS(
 
     // Opt-in to larger dynamic shared memory when needed/available (A100/H100).
     // If the device can't satisfy it, the launcher will downshift NTILE before calling here.
-    //cudaFuncSetAttribute(
-    //    (const void*)unstructured_sparse14_int4symq_gemm_stageXS3<NTILE>,
-    //   cudaFuncAttributeMaxDynamicSharedMemorySize,
-    //    (int)shmem_bytes
-    //);
+    cudaFuncSetAttribute(
+        (const void*)unstructured_sparse14_int4symq_gemm_stageXS3<NTILE>,
+       cudaFuncAttributeMaxDynamicSharedMemorySize,
+        (int)shmem_bytes
+    );
 
     if (NTILE==1) {
         unstructured_sparse14_int4symq_gemm<NTILE>
