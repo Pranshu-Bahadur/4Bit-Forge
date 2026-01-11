@@ -659,7 +659,7 @@ class IncrementalIndexWriter:
 
         # 3) Any key we intentionally removed -> delete from index
         for k in drop_keys:
-            if k in self.weight_map:
+            if k in self.weight_map and "shared_experts" not in k:
                 del self.weight_map[k]
 
         # 4) Also re-point *all* remaining keys under this block prefix that still exist in index

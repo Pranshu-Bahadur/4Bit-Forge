@@ -92,12 +92,13 @@ __global__ void build_quantization_grid(
             }
 
             scales[g] = s;
-            qzeros[g] = fminf(fmaxf(q0, 0.0f), maxq);
+            qzeros[g] = q0; // fminf(fmaxf(q0, 0.0f), maxq);
             //
         }
     }
 }
 
+template <int GROUP_SIZE>
 __global__ void mse_build_quantization_grid(
     const float* __restrict__ X, //R*G, group_size
     float* scales, //R*G
@@ -105,20 +106,22 @@ __global__ void mse_build_quantization_grid(
     const float* __restrict__ candidates, //candidates
     const int64_t  RG,
     const int64_t  P, //100
-    const int64_t  group_size,
     const int bit_width,
     const float norm,
     const bool symmetric
 ) {
 
+    constexpr int VPL = GROUP_SIZE / 32;          // values per lane
+
     int bid = blockIdx.x;
     int wpb = blockDim.x / 32; // 4
     int tid = threadIdx.x;
     int lane = tid % 32;
-    int wib = tid / 32; //warps in block
+    int wib = tid / 32; //warps in block == WIB
     int wid = (int64_t)((bid * wpb) + wib);
 
     float maxq = float((1 << bit_width) - 1);
+    float eps  = 1e-12f;
 
     for (int64_t g = wid; g < (int64_t)(RG); g += (int64_t)(gridDim.x * wpb)) {
         float sg = scales[g];
@@ -131,18 +134,18 @@ __global__ void mse_build_quantization_grid(
         float best_q = q0g;
         float best_loss = FLT_MAX;
 
-        const float* group = X + (g*group_size);
+        const float* group = X + (g*GROUP_SIZE);
 
-        float vals[4];
-        #pragma unroll 4
-        for (int v = 0; v < 4; v++) {
+        float vals[VPL];
+        #pragma unroll 
+        for (int v = 0; v < VPL; v++) {
             vals[v] = group[lane+(32*v)];
         }
 
         for (int p = 0; p < P; p += 1){
             float s = sg *  candidates[p];
             float q0 = 0.0;
-            float rcp_s = 1.0f / s;
+            float rcp_s = 1.0f / (s + eps);
             if (symmetric) {
                q0 = q0g;//minf(fmaxf(lrintf(q0g), 0.0f), maxq);
             }
@@ -152,8 +155,8 @@ __global__ void mse_build_quantization_grid(
                 
             }
             float loss = 0.0;
-            #pragma unroll 4
-            for (int i = 0; i < 4; i += 1) {
+            #pragma unroll
+            for (int i = 0; i < VPL; i += 1) {
                 float v = vals[i];
                 float q = lrintf(fmaf(v, rcp_s, q0));   // v * rcp0 + q0
                 q       = fminf(fmaxf(q, 0.0f), maxq);
@@ -237,8 +240,8 @@ std::tuple<torch::Tensor, torch::Tensor> mse_quantization_grid_cuda(
     const int64_t P = candidates.size(0);
     
 
-    const int threads = (int)group_size;                // 4 warps/block (matches wpb = blockDim/32)
-    const int wpb = threads / 32;           // 4
+    constexpr int threads = 128;                // 4 warps/block (matches wpb = blockDim/32)
+    constexpr int wpb = threads / 32;           // 4
 
     // Each block covers wpb groups at a time (one per warp)
     int blocks = (int)((RG + wpb - 1) / wpb);
@@ -248,13 +251,37 @@ std::tuple<torch::Tensor, torch::Tensor> mse_quantization_grid_cuda(
 
     cudaStream_t stream = at::cuda::getDefaultCUDAStream();
 
-    mse_build_quantization_grid<<<blocks, threads, 0, stream>>>(
-        X.data_ptr<float>(), 
-        scales.data_ptr<float>(), 
-        qzeros.data_ptr<float>(), 
-        candidates.data_ptr<float>(), 
-        RG, P, group_size, 
-        bit_width, norm, symmetric);
+    switch (group_size) {
+        case 32:
+            mse_build_quantization_grid<32><<<blocks, threads, 0, stream>>>(
+                X.data_ptr<float>(),
+                scales.data_ptr<float>(),
+                qzeros.data_ptr<float>(),
+                candidates.data_ptr<float>(),
+                RG, P, (int)bit_width, norm, symmetric
+            );
+            break;
+        case 64:
+            mse_build_quantization_grid<64><<<blocks, threads, 0, stream>>>(
+                X.data_ptr<float>(),
+                scales.data_ptr<float>(),
+                qzeros.data_ptr<float>(),
+                candidates.data_ptr<float>(),
+                RG, P, (int)bit_width, norm, symmetric
+            );
+            break;
+        case 128:
+            mse_build_quantization_grid<128><<<blocks, threads, 0, stream>>>(
+                X.data_ptr<float>(),
+                scales.data_ptr<float>(),
+                qzeros.data_ptr<float>(),
+                candidates.data_ptr<float>(),
+                RG, P, (int)bit_width, norm, symmetric
+            );
+            break;
+        default:
+            TORCH_CHECK(false, "Unsupported group_size=", group_size, " (expected 32/64/128)");
+    }
 
     return std::make_tuple(scales, qzeros);
 }

@@ -134,7 +134,7 @@ def main():
             torch_dtype=dtype
         ).eval()
         model.config.use_cache = False
-    ROUTED_EXPERTS_REGEX = r".*\.experts\.\d+\.(down_proj|gate_proj|up_proj|gate_up_proj|w\d+)$"
+    ROUTED_EXPERTS_REGEX = r"*mlp\.experts\.\d+\.(down_proj|gate_proj|up_proj)$"
 
     #ROUTED_EXPERTS_REGEX = ROUTED_EXPERTS_REGEX if "deepseek" in str(args.model_name_or_path).lower() else r".*mlp\.experts\.(down|gate|up|gate_up)_proj.*"
     shard_ids = forge.utils.io.load_safetensors_index(args.model_name_or_path, tmp_dir=args.hf_tmp_dir)
@@ -219,6 +219,7 @@ def main():
         block_tensors = {}
         block_tensors["model.embed_tokens.weight"] = embed.weight.cpu().contiguous()
         lm_head = model.lm_head
+        norm = model.norm
 
         forge.utils.io.jit_load_prefix_to_cpu(
             model,
@@ -233,6 +234,17 @@ def main():
 
         block_tensors["lm_head.weight"] = lm_head.weight.cpu().contiguous()
 
+        forge.utils.io.jit_load_prefix_to_cpu(
+            model,
+            args.model_name_or_path,
+            weight_map,
+            ["norm."],
+            args.hf_tmp_dir,
+            lru,
+            reserve_bytes=0,
+            disk_window=disk_window,
+        )
+        block_tensors["norm.weight"] = norm.weight.cpu().contiguous()
 
     embed.to(device)
     X = forge.utils.preprocess.prepare_embeddings(embed, calibration_dataset, X, N, B, device, offload_device)
@@ -605,19 +617,20 @@ def main():
                 W2_all  = torch.stack(packed_down,   dim=0).contiguous()  # [E, G2, R2,  2]
 
                 # choose keys your vLLM patch will load later
-                k_w13 = f"{prefix}mlp.experts.gate_up_proj.w13_packed"
-                k_w2  = f"{prefix}mlp.experts.down_proj.w2_packed"
+                k_w13 = f"{prefix}mlp.experts.gate_up_proj.w13_weight"
+                k_w2  = f"{prefix}mlp.experts.down_proj.w2_weight"
                 block_tensors[k_w13] = W13_all
                 block_tensors[k_w2]  = W2_all
                 del W13_all, W2_all
                 
             if idx_writer is not None and args.algorithm == "sparsegptq" and args.save_dir:
                     ROUTED_EXPERTS_WEIGHT = re.compile(
-                        rf"^{re.escape(prefix)}mlp\.experts\.\d+\.(gate_proj|up_proj|down_proj|gate_up_proj)\.weight"
+                        rf"^{re.escape(prefix)}mlp\.experts\.\d+\.(gate_proj|up_proj|down_proj)\.(weight|weight_scale_inv)$"
                     )
                     drop_keys = set([k for k in block_tensors.keys() if ROUTED_EXPERTS_WEIGHT.match(k)])
                     if drop_keys:
                         for k in drop_keys:
+                            if "shared_experts" not in k:
                                 del block_tensors[k]
                     
                     print(f'updating shards...block_{block_id:03d}.safetensors')
