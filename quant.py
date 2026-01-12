@@ -177,7 +177,7 @@ def main():
     disk_window = forge.utils.io.ShardDiskWindow(args.hf_tmp_dir, disk_cfg)
 
 
-    tokenizer = AutoTokenizer.from_pretrained(args.model_name_or_path, trust_remote_code=True)
+    tokenizer = AutoTokenizer.from_pretrained("deepseek-ai/DeepSeek-V3.2", trust_remote_code=True)
     if tokenizer.pad_token_id is None:
                 print("[WARN] Tokenizer has no pad_token_id! Using eos_token_id as pad_token.")
                 tokenizer.pad_token = tokenizer.eos_token
