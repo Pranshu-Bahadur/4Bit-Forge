@@ -257,6 +257,12 @@ static inline void launch_stageXS(
         (int)shmem_bytes
     );
 
+    unstructured_sparse14_int4symq_gemm_stageXS3<NTILE>
+        <<<grid, block, (size_t)shmem_bytes, stream>>>(
+            Wpair, X, Y, N, R, C, G2
+        );
+
+    /*
     if (NTILE==1) {
         unstructured_sparse14_int4symq_gemm<NTILE>
         <<<grid, block, 0, stream>>>(
@@ -266,12 +272,10 @@ static inline void launch_stageXS(
     }
     else {
         
-        unstructured_sparse14_int4symq_gemm_stageXS3<NTILE>
-        <<<grid, block, (size_t)shmem_bytes, stream>>>(
-            Wpair, X, Y, N, R, C, G2
-        );
+        
 
     }
+    */
     
 }
 
