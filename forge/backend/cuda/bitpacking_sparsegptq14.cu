@@ -89,7 +89,8 @@ __global__ void pack_sparsegptq14_to_u64x2(
             int64_t cid = gid * 32 + i * 4 + c;
             if (cid < C) {
                 uint32_t q = (uint32_t)(qweight[cid * R + r] & 0xFu);
-                qw32 |= (q << (4 * i));
+                const uint32_t sh = 4u * i;
+                qw32 = (qw32 & ~(0xFu << sh)) | ((q & 0xFu) << sh);
             }
         }
 
