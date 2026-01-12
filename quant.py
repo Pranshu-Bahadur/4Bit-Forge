@@ -320,7 +320,7 @@ def main():
             group_size=128,
             bits=int(args.bits),
             dtype=dtype,
-            list_layers_fn=forge.utils.engine.list_layers,
+            list_layers_fn=forge.utils.io.list_layers,
         )
         meta_names = [n for n, p in block.named_parameters(recurse=True) if getattr(p, "is_meta", False)]
         assert not meta_names, f"Still meta params in block {block_id}: {meta_names[:10]}"
