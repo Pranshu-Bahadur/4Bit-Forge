@@ -618,8 +618,8 @@ def main():
                 # choose keys your vLLM patch will load later
                 k_w13 = f"{prefix}mlp.experts.gate_up_proj.w13_weight"
                 k_w2  = f"{prefix}mlp.experts.down_proj.w2_weight"
-                block_tensors[k_w13] = W13_all.view(torch.int64).contiguous()
-                block_tensors[k_w2]  = W2_all.view(torch.int64).contiguous()
+                block_tensors[k_w13] = W13_all.contiguous() #.view(torch.int64)
+                block_tensors[k_w2]  = W2_all.contiguous()
                 del W13_all, W2_all
                 
             if idx_writer is not None and args.algorithm == "sparsegptq" and args.save_dir:
