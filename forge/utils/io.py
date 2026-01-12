@@ -62,7 +62,7 @@ def list_layers(block: nn.Module) -> Dict[str, Union[nn.Linear, ParamSliceProxy]
     # Normal path: nn.Linear modules (DeepSeek-style experts are nn.Linear)
     detect_experts = False
     for n, m in block.named_modules():
-        if isinstance(m, nn.Linear):
+        #if isinstance(m, nn.Linear):
             layers[n] = m
         
     """
