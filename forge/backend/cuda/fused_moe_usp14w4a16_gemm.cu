@@ -39,9 +39,44 @@ __device__ __forceinline__ void zero(
 }
 
 
-__device__ __forceinline__ void readW_broadcast(
-    const ulonglong2 W,
-    const int64_t t,
+__device__ __forceinline__ uint64_t shfl_u64(uint64_t v, int src_lane, unsigned mask=0xFFFFFFFFu) {
+    uint32_t lo = (uint32_t)(v & 0xFFFFFFFFull);
+    uint32_t hi = (uint32_t)(v >> 32);
+    lo = __shfl_sync(mask, lo, src_lane);
+    hi = __shfl_sync(mask, hi, src_lane);
+    return (uint64_t)lo | ((uint64_t)hi << 32);
+}
+
+__device__ __forceinline__ ulonglong2 shfl_u64x2(ulonglong2 v, int src_lane, unsigned mask=0xFFFFFFFFu) {
+    v.x = shfl_u64(v.x, src_lane, mask);
+    v.y = shfl_u64(v.y, src_lane, mask);
+    return v;
+}
+
+
+__device__ __forceinline__ void decode(
+    uint64_t u64, 
+    int chunk_i,
+    __nv_bfloat16& val_bf16,
+    uint32_t& idx2,
+    uint16_t& scale_bits
+) {
+        const uint32_t qw32  = (uint32_t)(u64 & 0xFFFFFFFFull);
+        const uint32_t hi32  = (uint32_t)(u64 >> 32);
+        const uint16_t idx16 = (uint16_t)(hi32 & 0xFFFFu);
+
+        const uint32_t q4 = (qw32 >> (4 * chunk_i)) & 0xFu;
+        idx2      = (idx16 >> (2 * chunk_i)) & 0x3u;
+        scale_bits = (uint16_t)(hi32 >> 16);
+
+        int w = (int)q4 - 8;
+        val_bf16 = __float2bfloat16_rn((float)w);
+};
+
+__device__ __forceinline__ void stage_path(
+    const ulonglong2* __restrict__ W,
+    const int64_t curr_t, // 0,...,3
+    const int64_t src_t, // 0 (f=0), 2 (f=1)
     const int64_t g2,
     const int64_t uid,
     const int64_t E,
@@ -55,18 +90,46 @@ __device__ __forceinline__ void readW_broadcast(
     ulonglong2 qwBot = make_ulonglong2(0, 0);
 
 
-    if (t==0) {
+    if (curr_t==src_t) {
         qwTop = W[uid * E + g2*R + oc_base + groupID];
     }
 
-    if (t==1) {
+    if (curr_t==(src_t + 1)) {
         qwBot = W[uid * E + g2*R + oc_base + groupID + 8];
     }
     
-    qwTop = __shfl_sync(0xFFFFFFFFu, qwTop, groupID << 2);
-    qwBot = __shfl_sync(0xFFFFFFFFu, qwBot, (groupID << 2) + 1);
+    unsigned mask = __activemask();
+    qwTop = shfl_u64x2(qwTop, (groupID << 2) + src_t, mask);
+    qwBot = shfl_u64x2(qwBot, (groupID << 2) + (src_t + 1), mask);
 
-    //@TODO continue from here
+
+    __nv_bfloat16 top_h0_lo, top_h0_hi, top_h1_lo, top_h1_hi;
+    __nv_bfloat16 bot_h0_lo, bot_h0_hi, bot_h1_lo, bot_h1_hi;
+
+    uint32_t idx2_top_h0_lo, idx2_top_h0_hi, idx2_top_h1_lo, idx2_top_h1_hi;
+    uint32_t idx2_bot_h0_lo, idx2_bot_h0_hi, idx2_bot_h1_lo, idx2_bot_h1_hi;
+
+    uint16_t sc_top_h0, sc_top_h1, sc_bot_h0, sc_bot_h1;
+
+
+    const int i_lo = curr_t;      // 0..3
+    const int i_hi = curr_t + 4;  // 4..7
+
+    decode(qwTop.x, i_lo, top_h0_lo, idx2_top_h0_lo, sc_top_h0);
+    decode(qwTop.x, i_hi, top_h0_hi, idx2_top_h0_hi, sc_top_h0);
+    decode(qwTop.y, i_lo, top_h1_lo, idx2_top_h1_lo, sc_top_h1);
+    decode(qwTop.y, i_hi, top_h1_hi, idx2_top_h1_hi, sc_top_h1);
+
+    decode(qwBot.x, i_lo, bot_h0_lo, idx2_bot_h0_lo, sc_bot_h0);
+    decode(qwBot.x, i_hi, bot_h0_hi, idx2_bot_h0_hi, sc_bot_h0);
+    decode(qwBot.y, i_lo, bot_h1_lo, idx2_bot_h1_lo, sc_bot_h1);
+    decode(qwBot.y, i_hi, bot_h1_hi, idx2_bot_h1_hi, sc_bot_h1);
+
+
+    //Todo gather/repack metadata + inject phantom sparsity for mma.sp
+
+    
+    
 
 }
 
