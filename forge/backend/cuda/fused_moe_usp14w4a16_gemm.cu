@@ -5,6 +5,9 @@
 #include <cuda_bf16.h>
 
 
+
+//this is currently being built for A100 first because 4BF is for the gpu poor
+
 __device__ __forceinline__ float bf16_bits_to_f32(uint16_t bits) {
     union { __nv_bfloat16 b; uint16_t u; } cvt;
     cvt.u = bits;
@@ -133,9 +136,17 @@ __device__ __forceinline__ void decode(
 
 
 __device__ __forceinline__ uint32_t pack_i8x4_from_i16x2(int16_t lo_packed, int16_t hi_packed) {
-    return (uint16_t)lo_packed | ((uint32_t)(uint16_t)hi_packed << 16);
+    return ((uint32_t)(uint16_t)lo_packed) | ((uint32_t)(uint16_t)hi_packed << 16);
 }
 
+
+__device__ __forceinline__ uint16_t pack_nib2(
+    uint8_t top,
+    uint8_t bot
+) {
+    return ((uint16_t)(top & 0xF)) | (((uint16_t)(bot & 0xF)) << 4);
+
+}
 
 
 __device__ __forceinline__ void stage(
@@ -206,9 +217,7 @@ __device__ __forceinline__ void stage(
     out.top_h1 = pack_i8x4_from_i16x2(top_h1_lo, top_h1_hi);
     out.bot_h1 = pack_i8x4_from_i16x2(bot_h1_lo, bot_h1_hi);
 
-    auto pack_nib2 = [](uint8_t top, uint8_t bot) -> uint16_t {
-        return (uint16_t)(top & 0xF) | ((uint16_t)(bot & 0xF) << 4);
-    };
+    //@TODO need to review PTX ISA 9.1 for mma.sp::ordered_metadata.sync.aligned.m16n8k32.row.col.f32.bf16.bf16.f32
 
     out.nib_h0_lo = pack_nib2(meta_nib_top_h0_lo, meta_nib_bot_h0_lo);
     out.nib_h0_hi = pack_nib2(meta_nib_top_h0_hi, meta_nib_bot_h0_hi);
