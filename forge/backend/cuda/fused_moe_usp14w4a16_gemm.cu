@@ -30,7 +30,7 @@ __device__ __forceinline__ void stage_XS(
 
 template <int8_t SIZE>
 __device__ __forceinline__ void zero(
-    float* Cmatrix,
+    float* Cmatrix
 ) {
     #pragma unroll SIZE
     for (int8_t i = 0; i < SIZE; ++i) {
@@ -53,84 +53,167 @@ __device__ __forceinline__ ulonglong2 shfl_u64x2(ulonglong2 v, int src_lane, uns
     return v;
 }
 
-
-__device__ __forceinline__ void decode(
-    uint64_t u64, 
-    int chunk_i,
-    __nv_bfloat16& val_bf16,
-    uint32_t& idx2,
-    uint16_t& scale_bits
-) {
-        const uint32_t qw32  = (uint32_t)(u64 & 0xFFFFFFFFull);
-        const uint32_t hi32  = (uint32_t)(u64 >> 32);
-        const uint16_t idx16 = (uint16_t)(hi32 & 0xFFFFu);
-
-        const uint32_t q4 = (qw32 >> (4 * chunk_i)) & 0xFu;
-        idx2      = (idx16 >> (2 * chunk_i)) & 0x3u;
-        scale_bits = (uint16_t)(hi32 >> 16);
-
-        int w = (int)q4 - 8;
-        val_bf16 = __float2bfloat16_rn((float)w);
+__device__ __constant__ uint16_t k_bf16_m8_p7[16] = {
+  /* -8 .. 7 bf16 bit patterns */
+  0xC100, 0xC0E0, 0xC0C0, 0xC0A0, 0xC080, 0xC060, 0xC040, 0xC020,
+  0x0000, 0x3F80, 0x4000, 0x4040, 0x4080, 0x40A0, 0x40C0, 0x40E0
 };
 
-__device__ __forceinline__ void stage_path(
+__device__ __forceinline__ uint16_t bf16bits_from_i8_small(int8_t v) {
+    // v in [-8..7]
+    return k_bf16_m8_p7[(int)v + 8];
+}
+
+
+__device__ __forceinline__ uint32_t bf16x2_from_packed_i8pair(int16_t packed) {
+    int8_t v0 = (int8_t)(packed & 0xFF);
+    int8_t v1 = (int8_t)((packed >> 8) & 0xFF);
+
+    uint16_t b0 = bf16bits_from_i8_small(v0);
+    uint16_t b1 = bf16bits_from_i8_small(v1);
+
+    return (uint32_t)b0 | ((uint32_t)b1 << 16);
+}
+
+
+__device__ __forceinline__ void bf16x2x2_from_i8x4(
+    uint32_t i8x4,
+    uint32_t& out_lo_bf16x2,
+    uint32_t& out_hi_bf16x2
+) {
+    int16_t lo = (int16_t)(i8x4 & 0xFFFFu);
+    int16_t hi = (int16_t)(i8x4 >> 16);
+
+    out_lo_bf16x2 = bf16x2_from_packed_i8pair(lo);
+    out_hi_bf16x2 = bf16x2_from_packed_i8pair(hi);
+}
+
+struct StageOut {
+    
+    uint32_t top_h0, bot_h0;
+    uint32_t top_h1, bot_h1;
+
+    
+    uint64_t sc_pack;
+
+    
+    uint16_t nib_h0_lo, nib_h0_hi;
+    uint16_t nib_h1_lo, nib_h1_hi;
+};
+
+
+
+__device__ __forceinline__ void decode(
+    uint64_t u64,
+    int chunk_i,
+    int16_t& v01_packed,    
+    uint8_t& meta_nibble,   
+) {
+    const uint32_t qw32  = (uint32_t)(u64 & 0xFFFFFFFFull);
+    const uint32_t hi32  = (uint32_t)(u64 >> 32);
+    const uint16_t idx16 = (uint16_t)(hi32 & 0xFFFFu);
+    const uint32_t q4   = (qw32 >> (4 * chunk_i)) & 0xFu;
+    const uint32_t idx2 = (idx16 >> (2 * chunk_i)) & 0x3u;
+
+    const int8_t w = (int8_t)((int)q4 - 8);
+
+    const uint32_t pair = idx2 >> 1;
+    const uint32_t slot = idx2 & 1;
+
+    meta_nibble = (pair == 0) ? (uint8_t)0x4 : (uint8_t)0xE;
+    
+    const int8_t v0 = (slot == 0) ? w : (int8_t)0;
+    const int8_t v1 = (slot == 0) ? (int8_t)0 : w;
+
+    const uint16_t u =
+        (uint16_t)(uint8_t)v0 |
+        ((uint16_t)(uint8_t)v1 << 8);
+    v01_packed = (int16_t)u;
+}
+
+
+__device__ __forceinline__ uint32_t pack_i8x4_from_i16x2(int16_t lo_packed, int16_t hi_packed) {
+    return (uint16_t)lo_packed | ((uint32_t)(uint16_t)hi_packed << 16);
+}
+
+
+
+__device__ __forceinline__ void stage(
     const ulonglong2* __restrict__ W,
-    const int64_t curr_t, // 0,...,3
-    const int64_t src_t, // 0 (f=0), 2 (f=1)
+    const int curr_t, // 0,...,3
+    const int src_t, // t=0 (f=0), t=2 (f=1)
     const int64_t g2,
     const int64_t uid,
-    const int64_t E,
+    const int64_t G2,
     const int64_t oc_base,
     const int64_t R,
-    const groupID
-
+    const int64_t groupID,
+    StageOut& out
 ) {
 
     ulonglong2 qwTop = make_ulonglong2(0, 0);
     ulonglong2 qwBot = make_ulonglong2(0, 0);
 
-
+    //vec2 load vs slight divergence tradeoff
     if (curr_t==src_t) {
-        qwTop = W[uid * E + g2*R + oc_base + groupID];
+        qwTop = W[(uid * G2 + g2) * R  + oc_base + groupID];
     }
 
     if (curr_t==(src_t + 1)) {
-        qwBot = W[uid * E + g2*R + oc_base + groupID + 8];
+        qwBot = W[(uid * G2 + g2) * R + oc_base + groupID + 8];
     }
-    
-    unsigned mask = __activemask();
-    qwTop = shfl_u64x2(qwTop, (groupID << 2) + src_t, mask);
-    qwBot = shfl_u64x2(qwBot, (groupID << 2) + (src_t + 1), mask);
+
+    //__activemask(); better to use entire warp acc to nvidia programming guide
+    unsigned mask = 0xFFFFFFFF; 
+
+    qwTop = shfl_u64x2(qwTop, ((int)groupID << 2) + src_t, mask);
+    qwBot = shfl_u64x2(qwBot, ((int)groupID << 2) + (src_t + 1), mask);
 
 
-    __nv_bfloat16 top_h0_lo, top_h0_hi, top_h1_lo, top_h1_hi;
-    __nv_bfloat16 bot_h0_lo, bot_h0_hi, bot_h1_lo, bot_h1_hi;
+    uint16_t sc_top_h0 = (uint16_t)(qwTop.x >> 48);
+    uint16_t sc_bot_h0 = (uint16_t)(qwBot.x >> 48);
+    uint16_t sc_top_h1 = (uint16_t)(qwTop.y >> 48);
+    uint16_t sc_bot_h1 = (uint16_t)(qwBot.y >> 48);
 
-    uint32_t idx2_top_h0_lo, idx2_top_h0_hi, idx2_top_h1_lo, idx2_top_h1_hi;
-    uint32_t idx2_bot_h0_lo, idx2_bot_h0_hi, idx2_bot_h1_lo, idx2_bot_h1_hi;
+    out.sc_pack =
+        (uint64_t)sc_top_h0 |
+        ((uint64_t)sc_bot_h0 << 16) |
+        ((uint64_t)sc_top_h1 << 32) |
+        ((uint64_t)sc_bot_h1 << 48);
 
-    uint16_t sc_top_h0, sc_top_h1, sc_bot_h0, sc_bot_h1;
 
+    int16_t top_h0_lo, top_h0_hi, top_h1_lo, top_h1_hi;
+    int16_t bot_h0_lo, bot_h0_hi, bot_h1_lo, bot_h1_hi;
+
+    uint8_t meta_nib_top_h0_lo, meta_nib_top_h0_hi, meta_nib_top_h1_lo, meta_nib_top_h1_hi;
+    uint8_t meta_nib_bot_h0_lo, meta_nib_bot_h0_hi, meta_nib_bot_h1_lo, meta_nib_bot_h1_hi;
 
     const int i_lo = curr_t;      // 0..3
     const int i_hi = curr_t + 4;  // 4..7
 
-    decode(qwTop.x, i_lo, top_h0_lo, idx2_top_h0_lo, sc_top_h0);
-    decode(qwTop.x, i_hi, top_h0_hi, idx2_top_h0_hi, sc_top_h0);
-    decode(qwTop.y, i_lo, top_h1_lo, idx2_top_h1_lo, sc_top_h1);
-    decode(qwTop.y, i_hi, top_h1_hi, idx2_top_h1_hi, sc_top_h1);
+    decode(qwTop.x, i_lo, top_h0_lo, meta_nib_top_h0_lo);
+    decode(qwTop.x, i_hi, top_h0_hi, meta_nib_top_h0_hi);
+    decode(qwTop.y, i_lo, top_h1_lo, meta_nib_top_h1_lo);
+    decode(qwTop.y, i_hi, top_h1_hi, meta_nib_top_h1_hi);
 
-    decode(qwBot.x, i_lo, bot_h0_lo, idx2_bot_h0_lo, sc_bot_h0);
-    decode(qwBot.x, i_hi, bot_h0_hi, idx2_bot_h0_hi, sc_bot_h0);
-    decode(qwBot.y, i_lo, bot_h1_lo, idx2_bot_h1_lo, sc_bot_h1);
-    decode(qwBot.y, i_hi, bot_h1_hi, idx2_bot_h1_hi, sc_bot_h1);
+    decode(qwBot.x, i_lo, bot_h0_lo, meta_nib_bot_h0_lo);
+    decode(qwBot.x, i_hi, bot_h0_hi, meta_nib_bot_h0_hi);
+    decode(qwBot.y, i_lo, bot_h1_lo, meta_nib_bot_h1_lo);
+    decode(qwBot.y, i_hi, bot_h1_hi, meta_nib_bot_h1_hi);
 
+    out.top_h0 = pack_i8x4_from_i16x2(top_h0_lo, top_h0_hi);
+    out.bot_h0 = pack_i8x4_from_i16x2(bot_h0_lo, bot_h0_hi);
+    out.top_h1 = pack_i8x4_from_i16x2(top_h1_lo, top_h1_hi);
+    out.bot_h1 = pack_i8x4_from_i16x2(bot_h1_lo, bot_h1_hi);
 
-    //Todo gather/repack metadata + inject phantom sparsity for mma.sp
+    auto pack_nib2 = [](uint8_t top, uint8_t bot) -> uint16_t {
+        return (uint16_t)(top & 0xF) | ((uint16_t)(bot & 0xF) << 4);
+    };
 
-    
-    
-
+    out.nib_h0_lo = pack_nib2(meta_nib_top_h0_lo, meta_nib_bot_h0_lo);
+    out.nib_h0_hi = pack_nib2(meta_nib_top_h0_hi, meta_nib_bot_h0_hi);
+    out.nib_h1_lo = pack_nib2(meta_nib_top_h1_lo, meta_nib_bot_h1_lo);
+    out.nib_h1_hi = pack_nib2(meta_nib_top_h1_hi, meta_nib_bot_h1_hi);
 }
 
 
@@ -152,7 +235,7 @@ __global__ void phantom_usp14_w4a16_sym_sm80_fmoe_w13AS_mm_phase(
     const int64_t m_base = offsets[uid] + (((int64_t)(blockIdx.x)) * NTOK);
     const int64_t m_end = offsets[uid + 1];
 
-    if (m_base < m_end) return;
+    if (m_base > m_end) return;
     
     const int64_t tid = (int64_t)threadIdx.x;
 
