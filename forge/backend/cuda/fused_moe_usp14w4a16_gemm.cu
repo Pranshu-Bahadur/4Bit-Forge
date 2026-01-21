@@ -226,6 +226,21 @@ __device__ __forceinline__ void stage(
 }
 
 
+__device__ __forceinline__ void park(
+    const __restrict__ StageOut& out,
+    uint32_t metadata_03,
+    uint32_t metadata_47,
+    const int curr_t,
+    const int src_t
+) {
+
+    int dest_t = 0;
+    if (src_t == 2) {
+
+    }
+
+}
+
 
 // assuming C <= 7168
 template <int64_t NTOK, int64_t OTILE, int64_t CTA>
