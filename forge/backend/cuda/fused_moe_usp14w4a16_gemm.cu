@@ -248,7 +248,16 @@ __device__ __forceinline__ uint32_t park(
     return meta_top | (meta_bot << 16);
 }
 
-//mma.sp::ordered_metadata.sync.aligned.m16n8k32.row.col.f32.bf16.bf16.f32
+//@TODO mma.sp::ordered_metadata.sync.aligned.m16n8k32.row.col.f32.bf16.bf16.f32 wrapper
+//@TODO ldmatrix.x4.trans wrapper
+
+/*
+1) Implement exec helpers as 2 gates:
+   Gate1: ldmatrix.x4.trans wrapper + dump Bregs
+   Gate2: mma.sp::ordered_metadata wrapper (f=0 then f=1) + dump Dregs
+2) Then plug into exec_half() with AS scaling.
+*/
+
 // assuming C <= 7168
 template <int64_t NTOK, int64_t OTILE, int64_t CTA>
 __global__ void phantom_usp14_w4a16_sym_sm80_fmoe_w13AS_mm_phase(
