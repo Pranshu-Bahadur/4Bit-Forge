@@ -217,31 +217,38 @@ __device__ __forceinline__ void stage(
     out.top_h1 = pack_i8x4_from_i16x2(top_h1_lo, top_h1_hi);
     out.bot_h1 = pack_i8x4_from_i16x2(bot_h1_lo, bot_h1_hi);
 
-    //@TODO need to review PTX ISA 9.1 for mma.sp::ordered_metadata.sync.aligned.m16n8k32.row.col.f32.bf16.bf16.f32
-
     out.nib_h0_lo = pack_nib2(meta_nib_top_h0_lo, meta_nib_bot_h0_lo);
     out.nib_h0_hi = pack_nib2(meta_nib_top_h0_hi, meta_nib_bot_h0_hi);
     out.nib_h1_lo = pack_nib2(meta_nib_top_h1_lo, meta_nib_bot_h1_lo);
     out.nib_h1_hi = pack_nib2(meta_nib_top_h1_hi, meta_nib_bot_h1_hi);
 }
 
-
-__device__ __forceinline__ void park(
-    const __restrict__ StageOut& out,
-    uint32_t metadata_03,
-    uint32_t metadata_47,
-    const int curr_t,
-    const int src_t
+__device__ __forceinline__ uint32_t park(
+    const StageOut& out,
+    const int t
 ) {
 
-    int dest_t = 0;
-    if (src_t == 2) {
+    uint32_t tok;
+    if      (t == 0) tok = (uint32_t)out.nib_h0_lo;
+    else if (t == 1) tok = (uint32_t)out.nib_h0_hi;
+    else if (t == 2) tok = (uint32_t)out.nib_h1_lo;
+    else if (t == 3) tok = (uint32_t)out.nib_h1_hi;
+    else return 0u;
 
+    uint32_t meta_top = 0u;
+    uint32_t meta_bot = 0u;
+
+    #pragma unroll
+    for (int i = 0; i < 4; ++i) {
+        uint32_t pkt = __shfl_xor_sync(0xFFFFFFFFu, tok, (t ^ i), 4); // nvidia programming guide 4<WarpSize
+        meta_top |= (pkt & 0xFu)        << (i << 2);
+        meta_bot |= ((pkt >> 4) & 0xFu) << (i << 2);
     }
 
+    return meta_top | (meta_bot << 16);
 }
 
-
+//mma.sp::ordered_metadata.sync.aligned.m16n8k32.row.col.f32.bf16.bf16.f32
 // assuming C <= 7168
 template <int64_t NTOK, int64_t OTILE, int64_t CTA>
 __global__ void phantom_usp14_w4a16_sym_sm80_fmoe_w13AS_mm_phase(
