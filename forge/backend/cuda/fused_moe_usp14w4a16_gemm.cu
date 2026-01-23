@@ -96,11 +96,12 @@ struct StageOut {
     
     uint32_t top_h0, bot_h0;
     uint32_t top_h1, bot_h1;
+
     uint64_t sc_pack;
+
     uint16_t nib_h0_lo, nib_h0_hi;
     uint16_t nib_h1_lo, nib_h1_hi;
 };
-
 
 
 __device__ __forceinline__ void decode(
@@ -150,11 +151,11 @@ __device__ __forceinline__ void stage(
     const ulonglong2* __restrict__ W,
     const int curr_t, // 0,...,3
     const int src_t, // t=0 (f=0), t=2 (f=1)
-    const int64_t g2,
     const int64_t uid,
+    const int64_t g2,
     const int64_t G2,
-    const int64_t oc_base,
     const int64_t R,
+    const int64_t oc_base,
     const int64_t groupID,
     StageOut& out
 ) {
@@ -259,26 +260,61 @@ __device__ __forceinline__ uint32_t park(const StageOut& out, int t) {
 //    b+0+16t+(0, 1)      b+8+16t+(0, 1)     b+16+16t+(0, 1)   b+24+16t+(0, 1)  for +n=groupID forall (b=base)
 
 
+__device__ __forceinline__ void ldsmB(
+    const __nv_bfloat16* XS,
+    uint4 b
+) {
+    
+    uint32_t smem = static_cast<uint32_t>(__cvta_generic_to_shared(XS));
+    asm volatile(
+        "ldmatrix.sync.aligned.m8n8.x4.trans.shared.b16 {%0, %1, %2, %3}, [%4];\n"
+        : "=r"(b.x), "=r"(b.y), "=r"(b.z), "=r"(b.w)
+        : "r"(smem)
+    );
+}
+
+__device__ __forceinline__ void mma(
+    const uint4 a,
+    const uint4 b,
+    const uint32_t meta_data,
+    float* c,
+    const int8_t h
+) {
+
+    if (h==0) {
+        asm volatile(
+            "mma.sp::ordered_metadata.sync.aligned.m16n8k32.row.col.f32.bf16.bf16.f32 "
+            "{%0, %1, %2, %3}, {%4, %5, %6, %7}, {%8, %9, %10, %11}, {%12, %13, %14, %15}, {%16}, 0x0;\n"
+            : "=f"(c[0]), "=f"(c[1]), "=f"(c[2]), "=f"(c[3])
+            : "r"(a.x), "r"(a.y), "r"(a.z), "r"(a.w),
+              "r"(b.x), "r"(b.y), "r"(b.z), "r"(b.w),
+              "f"(c[0]), "f"(c[1]), "f"(c[2]), "f"(c[3]),
+              "r"(meta_data)
+        )
+    }
+    else {
+        asm volatile(
+            "mma.sp::ordered_metadata.sync.aligned.m16n8k32.row.col.f32.bf16.bf16.f32 "
+            "{%0, %1, %2, %3}, {%4, %5, %6, %7}, {%8, %9, %10, %11}, {%12, %13, %14, %15}, {%16}, 0x1;\n"
+            : "=f"(c[0]), "=f"(c[1]), "=f"(c[2]), "=f"(c[3])
+            : "r"(a.x), "r"(a.y), "r"(a.z), "r"(a.w),
+              "r"(b.x), "r"(b.y), "r"(b.z), "r"(b.w),
+              "f"(c[0]), "f"(c[1]), "f"(c[2]), "f"(c[3]),
+              "r"(meta_data)
+        )
+    }
+}
 
 
 
-//@TODO ldmatrix.x4.trans wrapper
-
-/*
-1) Implement exec helpers as 2 gates:
-   Gate1: ldmatrix.x4.trans wrapper + dump Bregs
-   Gate2: mma.sp::ordered_metadata wrapper (f=0 then f=1) + dump Dregs
-2) Then plug into exec_half() with AS scaling.
-*/
-
-// assuming C <= 7168
+// assuming C <= 7168 | C is K in nvidia notation
 template <int64_t NTOK, int64_t OTILE, int64_t CTA>
 __global__ void phantom_usp14_w4a16_sym_sm80_fmoe_w13AS_mm_phase(
-    const ulonglong2* __restrict__ W13, //[E, G2, R] | G32=(C/32), G2 = G32/2
+    const ulonglong2* __restrict__ W13, //[E, G2, R] | G32=(C/32), G2 = G32/2 | R=2I | C=H
     const __nv_bfloat16* __restrict__ X, //[N, C] permuted
+    __nv_bfloat16* X2, // [N, R] permuted
     const int64_t* __restrict__ offsets, // [E+1]
     const uint8_t* _restrict__ U, // [#active expert ids]
-    __nv_bfloat16* X2, // [N, R] permuted
     const int64_t N,
     const int64_t C,
     const int64_t R,
@@ -305,11 +341,15 @@ __global__ void phantom_usp14_w4a16_sym_sm80_fmoe_w13AS_mm_phase(
     
     float C1[4];
     float C3[4];
+    
+    StageOut gate;
+    uint4 ah0 = make_uint4(0, 0, 0, 0);
+    uint4 ah1 = make_uint4(0, 0, 0, 0);
+    uint4 bh0 = make_uint4(0, 0, 0, 0);
+    uint4 bh1 = make_uint4(0, 0, 0, 0);
+    uint32_t metadata_gate = 0u;
 
-    const ulonglong2 uTop01 = make_ulonglong2(0, 0);
-    const ulonglong2 uBot01 = make_ulonglong2(0, 0);
-    uint32_t meta03 = 0u;
-    uint32_t meta47 = 0u;
+
 
     for (int64_t phase = 0; phase < 2; ++phase) {
         
@@ -318,8 +358,42 @@ __global__ void phantom_usp14_w4a16_sym_sm80_fmoe_w13AS_mm_phase(
         zero<4>(C1);
         zero<4>(C3);
 
-        // Staging loop
-        for (int64_t g2 = 0; g2 < G2; ++g2) {
+        stage(
+                W13, 
+                (int)t, 0, 
+                uid, 0, G2, R, oc_base, groupID,
+                &gate
+            );
+        ldsmB(XS[((0 << 6) + ((int64_t)0 << 5)) * NTOK + groupID], bh0);
+        ldsmB(XS[((0 << 6) + ((int64_t)1 << 5)) * NTOK + groupID], bh1);
+
+        
+        metadata = park(&gate, (int)t);
+
+        for (int64_t g2 = 1; g2 < G2; ++g2) {
+
+            bf16x2x2_from_i8x4(gate.top_h0, ah0.x, ah0.y);
+            bf16x2x2_from_i8x4(gate.bot_h0, ah0.z, ah0.w);
+            bf16x2x2_from_i8x4(gate.top_h1, ah1.x, ah1.y);
+            bf16x2x2_from_i8x4(gate.bot_h1, ah1.z, ah1.w);
+
+            mma(ah0, bh0, metadata_gate, C1, 0);
+
+            stage(
+                W13, 
+                (int)t, 0, 
+                uid, g2, G2, R, oc_base, groupID,
+                &gate
+            );
+
+            mma(ah1, bh1, metadata_gate, C1, 1);
+
+            metadata_gate = park(&gate, (int)t);
+
+
+            ldsmB(XS[((g2 << 6) + ((int64_t)0 << 5)) * NTOK + groupID], bh0);
+            ldsmB(XS[((g2 << 6) + ((int64_t)1 << 5)) * NTOK + groupID], bh1);
+
 
         }
 
