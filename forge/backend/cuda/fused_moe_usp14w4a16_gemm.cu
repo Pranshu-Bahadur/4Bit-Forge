@@ -97,7 +97,7 @@ struct StageOut {
     uint32_t top_h0, bot_h0;
     uint32_t top_h1, bot_h1;
 
-    uint64_t sc_pack;
+    ushort4 sc_pack;
 
     uint16_t nib_h0_lo, nib_h0_hi;
     uint16_t nib_h1_lo, nib_h1_hi;
@@ -184,11 +184,10 @@ __device__ __forceinline__ void stage(
     uint16_t sc_top_h1 = (uint16_t)(qwTop.y >> 48);
     uint16_t sc_bot_h1 = (uint16_t)(qwBot.y >> 48);
 
-    out.sc_pack =
-        (uint64_t)sc_top_h0 |
-        ((uint64_t)sc_bot_h0 << 16) |
-        ((uint64_t)sc_top_h1 << 32) |
-        ((uint64_t)sc_bot_h1 << 48);
+    out.sc_pack.x = sc_top_h0;
+    out.sc_pack.y = sc_bot_h0;
+    out.sc_pack.z = sc_top_h1;
+    out.sc_pack.w = sc_bot_h1;
 
 
     int16_t top_h0_lo, top_h0_hi, top_h1_lo, top_h1_hi;
@@ -247,6 +246,33 @@ __device__ __forceinline__ uint32_t park(const StageOut& out, int t) {
 }
 
 
+__device__ __forceinline__ void store_tile_swiglu(
+    __nv_bfloat16* X2,
+    int64_t I,
+    int64_t m_base, int64_t m_end,
+    int groupID, int t,
+    int64_t oc_base,
+    const float* gate4,
+    const float* up4
+){
+    #pragma unroll
+    for (int j=0;j<4;++j){
+        int row = groupID + ((j>=2) ? 8 : 0);
+        int tok = (t<<1) + (j&1);
+        int64_t m = m_base + tok;
+        if (m < m_end){
+            int64_t col = oc_base + row;
+            float g = gate4[j];
+            float u = up4[j];
+            float sig = 1.0f / (1.0f + expf(-g));
+            float y = (g * sig) * u;                // silu(g)*u
+            X2[m*I + col] = __float2bfloat16_rn(y);
+        }
+    }
+}
+
+
+
 //@TODO mma.sp::ordered_metadata.sync.aligned.m16n8k32.row.col.f32.bf16.bf16.f32 wrapper
 //------------------------------------------------------------------------------------------------------
 // A -> Fragments "A vector expression containing 4 .b32 regs with each reg containing 2 non-zero .bf16"
@@ -262,9 +288,8 @@ __device__ __forceinline__ uint32_t park(const StageOut& out, int t) {
 
 __device__ __forceinline__ void ldsmB(
     const __nv_bfloat16* XS,
-    uint4 b
+    uint4& b
 ) {
-    
     uint32_t smem = static_cast<uint32_t>(__cvta_generic_to_shared(XS));
     asm volatile(
         "ldmatrix.sync.aligned.m8n8.x4.trans.shared.b16 {%0, %1, %2, %3}, [%4];\n"
@@ -273,36 +298,34 @@ __device__ __forceinline__ void ldsmB(
     );
 }
 
-__device__ __forceinline__ void mma(
-    const uint4 a,
-    const uint4 b,
-    const uint32_t meta_data,
-    float* c,
-    const int8_t h
-) {
 
-    if (h==0) {
-        asm volatile(
-            "mma.sp::ordered_metadata.sync.aligned.m16n8k32.row.col.f32.bf16.bf16.f32 "
-            "{%0, %1, %2, %3}, {%4, %5, %6, %7}, {%8, %9, %10, %11}, {%12, %13, %14, %15}, {%16}, 0x0;\n"
-            : "=f"(c[0]), "=f"(c[1]), "=f"(c[2]), "=f"(c[3])
-            : "r"(a.x), "r"(a.y), "r"(a.z), "r"(a.w),
-              "r"(b.x), "r"(b.y), "r"(b.z), "r"(b.w),
-              "f"(c[0]), "f"(c[1]), "f"(c[2]), "f"(c[3]),
-              "r"(meta_data)
-        )
-    }
-    else {
-        asm volatile(
-            "mma.sp::ordered_metadata.sync.aligned.m16n8k32.row.col.f32.bf16.bf16.f32 "
-            "{%0, %1, %2, %3}, {%4, %5, %6, %7}, {%8, %9, %10, %11}, {%12, %13, %14, %15}, {%16}, 0x1;\n"
-            : "=f"(c[0]), "=f"(c[1]), "=f"(c[2]), "=f"(c[3])
-            : "r"(a.x), "r"(a.y), "r"(a.z), "r"(a.w),
-              "r"(b.x), "r"(b.y), "r"(b.z), "r"(b.w),
-              "f"(c[0]), "f"(c[1]), "f"(c[2]), "f"(c[3]),
-              "r"(meta_data)
-        )
-    }
+template<int F>
+__device__ __forceinline__ void mma(const uint4 a, const uint4 b, uint32_t e, float* c) {
+  
+  static_assert(F==0 || F==1);
+  const float z = 0.0f;
+
+  if constexpr (F==0) {
+    asm volatile(
+      "mma.sp::ordered_metadata.sync.aligned.m16n8k32.row.col.f32.bf16.bf16.f32 "
+      "{%0,%1,%2,%3}, {%4,%5,%6,%7}, {%8,%9,%10,%11}, {%12,%13,%14,%15}, {%16}, 0x0;\n"
+      : "=f"(c[0]), "=f"(c[1]), "=f"(c[2]), "=f"(c[3])
+      : "r"(a.x), "r"(a.y), "r"(a.z), "r"(a.w),
+        "r"(b.x), "r"(b.y), "r"(b.z), "r"(b.w),
+        "f"(z), "f"(z), "f"(z), "f"(z),
+        "r"(e)
+    );
+  } else {
+    asm volatile(
+      "mma.sp::ordered_metadata.sync.aligned.m16n8k32.row.col.f32.bf16.bf16.f32 "
+      "{%0,%1,%2,%3}, {%4,%5,%6,%7}, {%8,%9,%10,%11}, {%12,%13,%14,%15}, {%16}, 0x1;\n"
+      : "=f"(c[0]), "=f"(c[1]), "=f"(c[2]), "=f"(c[3])
+      : "r"(a.x), "r"(a.y), "r"(a.z), "r"(a.w),
+        "r"(b.x), "r"(b.y), "r"(b.z), "r"(b.w),
+        "f"(z), "f"(z), "f"(z), "f"(z),
+        "r"(e)
+    );
+  }
 }
 
 
@@ -312,9 +335,9 @@ template <int64_t NTOK, int64_t OTILE, int64_t CTA>
 __global__ void phantom_usp14_w4a16_sym_sm80_fmoe_w13AS_mm_phase(
     const ulonglong2* __restrict__ W13, //[E, G2, R] | G32=(C/32), G2 = G32/2 | R=2I | C=H
     const __nv_bfloat16* __restrict__ X, //[N, C] permuted
-    __nv_bfloat16* X2, // [N, R] permuted
+    __nv_bfloat16* X2, // [N, R/2] permuted
     const int64_t* __restrict__ offsets, // [E+1]
-    const uint8_t* _restrict__ U, // [#active expert ids]
+    const uint8_t* __restrict__ U, // [#active expert ids]
     const int64_t N,
     const int64_t C,
     const int64_t R,
@@ -324,13 +347,13 @@ __global__ void phantom_usp14_w4a16_sym_sm80_fmoe_w13AS_mm_phase(
     const int64_t m_base = offsets[uid] + (((int64_t)(blockIdx.x)) * NTOK);
     const int64_t m_end = offsets[uid + 1];
 
-    if (m_base > m_end) return;
+    if (m_base >= m_end) return;
     
     const int64_t tid = (int64_t)threadIdx.x;
 
-    __shared__ __nv_bfloat16 XS[];
+    extern __shared__ __nv_bfloat16 XS[];
     
-    stage_XS<NTOK, CTA>(X, XS, tid, m_base, m_end);
+    stage_XS<NTOK, CTA>(X, XS, tid, m_base, m_end, C);
     __syncthreads();
     
     const int64_t wid = tid >> 5;
@@ -339,68 +362,159 @@ __global__ void phantom_usp14_w4a16_sym_sm80_fmoe_w13AS_mm_phase(
     const int64_t t = lane & 3;
     const int64_t i_base = (((int64_t)(blockIdx.z)) * OTILE);
     
-    float C1[4];
-    float C3[4];
+    
+
+    float D1[4];
+    float D3[4];
     
     StageOut gate;
-    uint4 ah0 = make_uint4(0, 0, 0, 0);
-    uint4 ah1 = make_uint4(0, 0, 0, 0);
+    uint4 gate_ah0 = make_uint4(0, 0, 0, 0);
+    uint4 gate_ah1 = make_uint4(0, 0, 0, 0);
     uint4 bh0 = make_uint4(0, 0, 0, 0);
     uint4 bh1 = make_uint4(0, 0, 0, 0);
     uint32_t metadata_gate = 0u;
 
+    StageOut up;
+    uint4 up_ah0 = make_uint4(0, 0, 0, 0);
+    uint4 up_ah1 = make_uint4(0, 0, 0, 0);
+    uint32_t metadata_up = 0u;
 
+    ushort4 scales_gate = make_ushort4(0, 0, 0, 0);
+    ushort4 scales_up = make_ushort4(0, 0, 0, 0);
+
+    float scale = 0.0f;
 
     for (int64_t phase = 0; phase < 2; ++phase) {
         
         int64_t oc_base = i_base + (phase * 64) + (wid * 16);
 
-        zero<4>(C1);
-        zero<4>(C3);
+        zero<4>(D1);
+        zero<4>(D3);
 
         stage(
                 W13, 
                 (int)t, 0, 
                 uid, 0, G2, R, oc_base, groupID,
-                &gate
+                gate
             );
-        ldsmB(XS[((0 << 6) + ((int64_t)0 << 5)) * NTOK + groupID], bh0);
-        ldsmB(XS[((0 << 6) + ((int64_t)1 << 5)) * NTOK + groupID], bh1);
+
+        scales_gate = gate.sc_pack;
+
+        stage(
+                W13, 
+                (int)t, 2, 
+                uid, 0, G2, R, oc_base + (R/2), groupID,
+                up
+            );
+
+        scales_up = up.sc_pack;
+
+
+        metadata_gate = park(gate, (int)t);
+        metadata_up = park(up, (int)t);
+
+        ldsmB(&XS[((0 << 6) + ((int64_t)0ll << 5)) * NTOK], bh0);
+        ldsmB(&XS[((0 << 6) + ((int64_t)1ll << 5)) * NTOK], bh1);
+        
 
         
-        metadata = park(&gate, (int)t);
+        for (int64_t g2 = 1; g2 < G2+1; ++g2) {
 
-        for (int64_t g2 = 1; g2 < G2; ++g2) {
+            bf16x2x2_from_i8x4(gate.top_h0, gate_ah0.x, gate_ah0.y);
+            bf16x2x2_from_i8x4(gate.bot_h0, gate_ah0.z, gate_ah0.w);
 
-            bf16x2x2_from_i8x4(gate.top_h0, ah0.x, ah0.y);
-            bf16x2x2_from_i8x4(gate.bot_h0, ah0.z, ah0.w);
-            bf16x2x2_from_i8x4(gate.top_h1, ah1.x, ah1.y);
-            bf16x2x2_from_i8x4(gate.bot_h1, ah1.z, ah1.w);
+            float C1[4];
 
-            mma(ah0, bh0, metadata_gate, C1, 0);
+            mma<0>(gate_ah0, bh0, metadata_gate, C1);
 
-            stage(
-                W13, 
-                (int)t, 0, 
-                uid, g2, G2, R, oc_base, groupID,
-                &gate
-            );
+            scale = bf16_bits_to_f32(scales_gate.x);
 
-            mma(ah1, bh1, metadata_gate, C1, 1);
+            D1[0] = __fmaf_rn(C1[0], scale, D1[0]);
+            D1[1] = __fmaf_rn(C1[1], scale, D1[1]);
 
-            metadata_gate = park(&gate, (int)t);
+            scale = bf16_bits_to_f32(scales_gate.y);
+
+            D1[2] = __fmaf_rn(C1[2], scale, D1[2]);
+            D1[3] = __fmaf_rn(C1[3], scale, D1[3]);
+
+            bf16x2x2_from_i8x4(gate.top_h1, gate_ah1.x, gate_ah1.y);
+            bf16x2x2_from_i8x4(gate.bot_h1, gate_ah1.z, gate_ah1.w);
+
+            if (g2 < G2) {
+                stage(
+                    W13, 
+                    (int)t, 2, 
+                    uid, g2, G2, R, oc_base, groupID,
+                    gate
+                );
+            }
+
+            bf16x2x2_from_i8x4(up.top_h0, up_ah0.x, up_ah0.y);
+            bf16x2x2_from_i8x4(up.bot_h0, up_ah0.z, up_ah0.w);
+
+            float C3[4];
+
+            mma<0>(up_ah0, bh0, metadata_up, C3);
+
+            scale = bf16_bits_to_f32(scales_up.x);
+
+            D3[0] = __fmaf_rn(C3[0], scale, D3[0]);
+            D3[1] = __fmaf_rn(C3[1], scale, D3[1]);
+
+            scale = bf16_bits_to_f32(scales_up.y);
+
+            D3[2] = __fmaf_rn(C3[2], scale, D3[2]);
+            D3[3] = __fmaf_rn(C3[3], scale, D3[3]);
+
+            mma<1>(gate_ah1, bh1, metadata_gate, C1);
+
+            scale = bf16_bits_to_f32(scales_gate.z);
+
+            D1[0] = __fmaf_rn(C1[0], scale, D1[0]);
+            D1[1] = __fmaf_rn(C1[1], scale, D1[1]);
+
+            scale = bf16_bits_to_f32(scales_gate.w);
+
+            D1[2] = __fmaf_rn(C1[2], scale, D1[2]);
+            D1[3] = __fmaf_rn(C1[3], scale, D1[3]);
 
 
-            ldsmB(XS[((g2 << 6) + ((int64_t)0 << 5)) * NTOK + groupID], bh0);
-            ldsmB(XS[((g2 << 6) + ((int64_t)1 << 5)) * NTOK + groupID], bh1);
+            bf16x2x2_from_i8x4(up.top_h1, up_ah1.x, up_ah1.y);
+            bf16x2x2_from_i8x4(up.bot_h1, up_ah1.z, up_ah1.w);
 
+            if (g2 < G2) {
+                stage(
+                    W13, 
+                    (int)t, 0, 
+                    uid, g2, G2, R, oc_base + 2048, groupID,
+                    up
+                );
+                
+            }
 
+            mma<1>(up_ah1, bh1, metadata_up, C3);
+
+            scale = bf16_bits_to_f32(scales_up.z);
+
+            D3[0] = __fmaf_rn(C3[0], scale, D3[0]);
+            D3[1] = __fmaf_rn(C3[1], scale, D3[1]);
+
+            scale = bf16_bits_to_f32(scales_up.w);
+
+            D3[2] = __fmaf_rn(C3[2], scale, D3[2]);
+            D3[3] = __fmaf_rn(C3[3], scale, D3[3]);
+
+            if (g2 < G2) {
+                metadata_gate = park(gate, (int)t);
+                metadata_up = park(up, (int)t);
+                ldsmB(&XS[((g2 << 6) + ((int64_t)0ll << 5)) * NTOK], bh0);
+                ldsmB(&XS[((g2 << 6) + ((int64_t)1ll << 5)) * NTOK], bh1);
+            }
+
+            scales_up = up.sc_pack;
+            scales_gate = gate.sc_pack;
         }
 
-        
+        store_tile_swiglu(X2, R/2, m_base, m_end, (int)groupID, (int)t, oc_base, D1, D3);
     }
-
-    
-
-
 }
