@@ -26,6 +26,7 @@ __device__ __forceinline__ void stage_XS(
     for (int64_t c = tid; c < C; c += CTA) {
         #pragma unroll NTOK
         for (int64_t n = 0; n < NTOK; ++n) {
+            //contiguous along N is cleaner
             XS[c * NTOK + n] = ((m_base + n) < m_end) ? X[(m_base + n) * C + c] : (__nv_bfloat16)(0.0f);
         }
     }
@@ -95,11 +96,7 @@ struct StageOut {
     
     uint32_t top_h0, bot_h0;
     uint32_t top_h1, bot_h1;
-
-    
     uint64_t sc_pack;
-
-    
     uint16_t nib_h0_lo, nib_h0_hi;
     uint16_t nib_h1_lo, nib_h1_hi;
 };
@@ -110,7 +107,7 @@ __device__ __forceinline__ void decode(
     uint64_t u64,
     int chunk_i,
     int16_t& v01_packed,    
-    uint8_t& meta_nibble,   
+    uint8_t& meta_nibble
 ) {
     const uint32_t qw32  = (uint32_t)(u64 & 0xFFFFFFFFull);
     const uint32_t hi32  = (uint32_t)(u64 >> 32);
@@ -217,38 +214,55 @@ __device__ __forceinline__ void stage(
     out.top_h1 = pack_i8x4_from_i16x2(top_h1_lo, top_h1_hi);
     out.bot_h1 = pack_i8x4_from_i16x2(bot_h1_lo, bot_h1_hi);
 
-    out.nib_h0_lo = pack_nib2(meta_nib_top_h0_lo, meta_nib_bot_h0_lo);
-    out.nib_h0_hi = pack_nib2(meta_nib_top_h0_hi, meta_nib_bot_h0_hi);
+    out.nib_h0_lo = pack_nib2(meta_nib_top_h0_lo, meta_nib_bot_h0_lo); // 0...3
+    out.nib_h0_hi = pack_nib2(meta_nib_top_h0_hi, meta_nib_bot_h0_hi); // 4...7
     out.nib_h1_lo = pack_nib2(meta_nib_top_h1_lo, meta_nib_bot_h1_lo);
     out.nib_h1_hi = pack_nib2(meta_nib_top_h1_hi, meta_nib_bot_h1_hi);
 }
 
-__device__ __forceinline__ uint32_t park(
-    const StageOut& out,
-    const int t
-) {
 
-    uint32_t tok;
-    if      (t == 0) tok = (uint32_t)out.nib_h0_lo;
-    else if (t == 1) tok = (uint32_t)out.nib_h0_hi;
-    else if (t == 2) tok = (uint32_t)out.nib_h1_lo;
-    else if (t == 3) tok = (uint32_t)out.nib_h1_hi;
-    else return 0u;
-
-    uint32_t meta_top = 0u;
-    uint32_t meta_bot = 0u;
-
+__device__ __forceinline__ uint32_t park_tok(uint32_t tok, int t) {
+    uint32_t meta_top = 0u, meta_bot = 0u;
     #pragma unroll
     for (int i = 0; i < 4; ++i) {
-        uint32_t pkt = __shfl_xor_sync(0xFFFFFFFFu, tok, (t ^ i), 4); // nvidia programming guide 4<WarpSize
+        uint32_t pkt = __shfl_xor_sync(0xFFFFFFFFu, tok, (t ^ i), 4);
         meta_top |= (pkt & 0xFu)        << (i << 2);
         meta_bot |= ((pkt >> 4) & 0xFu) << (i << 2);
     }
-
     return meta_top | (meta_bot << 16);
 }
 
+__device__ __forceinline__ uint32_t park(const StageOut& out, int t) {
+    
+    const uint32_t e0_0_3 = park_tok((uint32_t)out.nib_h0_lo & 0xFFu, t); //0...3
+    const uint32_t e0_4_7 = park_tok((uint32_t)out.nib_h0_hi & 0xFFu, t); //4...7
+    const uint32_t e1_0_3 = park_tok((uint32_t)out.nib_h1_lo & 0xFFu, t);
+    const uint32_t e1_4_7 = park_tok((uint32_t)out.nib_h1_hi & 0xFFu, t);
+
+    if (t == 0) return e0_0_3;
+    if (t == 1) return e0_4_7;
+    if (t == 2) return e1_0_3;
+    if (t == 3) return e1_4_7;
+    return 0u;
+}
+
+
 //@TODO mma.sp::ordered_metadata.sync.aligned.m16n8k32.row.col.f32.bf16.bf16.f32 wrapper
+//------------------------------------------------------------------------------------------------------
+// A -> Fragments "A vector expression containing 4 .b32 regs with each reg containing 2 non-zero .bf16"
+//     a0       a1         R      C'
+// top_h*_lo, top_h*_hi (0...7, 0...7) 32 (8*4)
+//     a2       a3
+// bot_h*_lo, bot_h*_hi (8...15, 0...7) 32 (8*4)
+//------------------------------------------------------------------------------------------------------
+// B -> Fragments "A vector expression containing 4 .b32 regs, each containing 2 .bf16 elements from B (XS)"
+//    b0                       b1                  b2                b3  
+//    b+0+16t+(0, 1)      b+8+16t+(0, 1)     b+16+16t+(0, 1)   b+24+16t+(0, 1)  for +n=groupID forall (b=base)
+
+
+
+
+
 //@TODO ldmatrix.x4.trans wrapper
 
 /*
