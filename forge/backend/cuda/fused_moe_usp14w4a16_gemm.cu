@@ -486,7 +486,7 @@ __global__ void phantom_usp14_w4a16_sym_sm80_fmoe_w13AS_mm_phase(
                 stage(
                     W13, 
                     (int)t, 0, 
-                    uid, g2, G2, R, oc_base + 2048, groupID,
+                    uid, g2, G2, R, oc_base + (R/2), groupID,
                     up
                 );
                 
