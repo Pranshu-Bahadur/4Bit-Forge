@@ -178,46 +178,39 @@ __device__ __forceinline__ void stage(
     qwTop = shfl_u64x2(qwTop, ((int)groupID << 2) + src_t, mask);
     qwBot = shfl_u64x2(qwBot, ((int)groupID << 2) + (src_t + 1), mask);
 
+    out.sc_pack.x = (uint16_t)(qwTop.x >> 48);
+    out.sc_pack.y = (uint16_t)(qwBot.x >> 48);
+    out.sc_pack.z = (uint16_t)(qwTop.y >> 48);
+    out.sc_pack.w = (uint16_t)(qwBot.y >> 48);
 
-    uint16_t sc_top_h0 = (uint16_t)(qwTop.x >> 48);
-    uint16_t sc_bot_h0 = (uint16_t)(qwBot.x >> 48);
-    uint16_t sc_top_h1 = (uint16_t)(qwTop.y >> 48);
-    uint16_t sc_bot_h1 = (uint16_t)(qwBot.y >> 48);
+    short4 top = make_short4(0, 0, 0, 0);
+    short4 bot = make_short4(0, 0, 0, 0);
 
-    out.sc_pack.x = sc_top_h0;
-    out.sc_pack.y = sc_bot_h0;
-    out.sc_pack.z = sc_top_h1;
-    out.sc_pack.w = sc_bot_h1;
-
-
-    int16_t top_h0_lo, top_h0_hi, top_h1_lo, top_h1_hi;
-    int16_t bot_h0_lo, bot_h0_hi, bot_h1_lo, bot_h1_hi;
-
-    uint8_t meta_nib_top_h0_lo, meta_nib_top_h0_hi, meta_nib_top_h1_lo, meta_nib_top_h1_hi;
-    uint8_t meta_nib_bot_h0_lo, meta_nib_bot_h0_hi, meta_nib_bot_h1_lo, meta_nib_bot_h1_hi;
+    uchar4 meta_nib_top = make_uchar4(0, 0, 0, 0);
+    uchar4 meta_nib_bot = make_uchar4(0, 0, 0, 0);
 
     const int i_lo = curr_t;      // 0..3
     const int i_hi = curr_t + 4;  // 4..7
 
-    decode(qwTop.x, i_lo, top_h0_lo, meta_nib_top_h0_lo);
-    decode(qwTop.x, i_hi, top_h0_hi, meta_nib_top_h0_hi);
-    decode(qwTop.y, i_lo, top_h1_lo, meta_nib_top_h1_lo);
-    decode(qwTop.y, i_hi, top_h1_hi, meta_nib_top_h1_hi);
+    decode(qwTop.x, i_lo, top.x, meta_nib_top.x);
+    decode(qwTop.x, i_hi, top.y, meta_nib_top.y);
+    decode(qwTop.y, i_lo, top.z, meta_nib_top.z);
+    decode(qwTop.y, i_hi, top.w, meta_nib_top.w);
 
-    decode(qwBot.x, i_lo, bot_h0_lo, meta_nib_bot_h0_lo);
-    decode(qwBot.x, i_hi, bot_h0_hi, meta_nib_bot_h0_hi);
-    decode(qwBot.y, i_lo, bot_h1_lo, meta_nib_bot_h1_lo);
-    decode(qwBot.y, i_hi, bot_h1_hi, meta_nib_bot_h1_hi);
+    decode(qwBot.x, i_lo, bot.x, meta_nib_bot.x);
+    decode(qwBot.x, i_hi, bot.y, meta_nib_bot.y);
+    decode(qwBot.y, i_lo, bot.z, meta_nib_bot.z);
+    decode(qwBot.y, i_hi, bot.w, meta_nib_bot.w);
 
-    out.top_h0 = pack_i8x4_from_i16x2(top_h0_lo, top_h0_hi);
-    out.bot_h0 = pack_i8x4_from_i16x2(bot_h0_lo, bot_h0_hi);
-    out.top_h1 = pack_i8x4_from_i16x2(top_h1_lo, top_h1_hi);
-    out.bot_h1 = pack_i8x4_from_i16x2(bot_h1_lo, bot_h1_hi);
+    out.top_h0 = pack_i8x4_from_i16x2(top.x, top.y);
+    out.bot_h0 = pack_i8x4_from_i16x2(bot.x, bot.y);
+    out.top_h1 = pack_i8x4_from_i16x2(top.z, top.w);
+    out.bot_h1 = pack_i8x4_from_i16x2(bot.z, bot.w);
 
-    out.nib_h0_lo = pack_nib2(meta_nib_top_h0_lo, meta_nib_bot_h0_lo); // 0...3
-    out.nib_h0_hi = pack_nib2(meta_nib_top_h0_hi, meta_nib_bot_h0_hi); // 4...7
-    out.nib_h1_lo = pack_nib2(meta_nib_top_h1_lo, meta_nib_bot_h1_lo);
-    out.nib_h1_hi = pack_nib2(meta_nib_top_h1_hi, meta_nib_bot_h1_hi);
+    out.nib_h0_lo = pack_nib2(meta_nib_top.x, meta_nib_bot.x); // 0...3
+    out.nib_h0_hi = pack_nib2(meta_nib_top.y, meta_nib_bot.y); // 4...7
+    out.nib_h1_lo = pack_nib2(meta_nib_top.z, meta_nib_bot.z);
+    out.nib_h1_hi = pack_nib2(meta_nib_top.w, meta_nib_bot.w);
 }
 
 
@@ -391,24 +384,13 @@ __global__ void phantom_usp14_w4a16_sym_sm80_fmoe_w13AS_mm_phase(
         zero<4>(D1);
         zero<4>(D3);
 
-        stage(
-                W13, 
-                (int)t, 0, 
-                uid, 0, G2, R, oc_base, groupID,
-                gate
-            );
+        stage(W13, (int)t, 0, uid, 0, G2, R, oc_base, groupID, gate);
 
         scales_gate = gate.sc_pack;
 
-        stage(
-                W13, 
-                (int)t, 2, 
-                uid, 0, G2, R, oc_base + (R/2), groupID,
-                up
-            );
+        stage(W13, (int)t, 2, uid, 0, G2, R, oc_base + (R/2), groupID, up);
 
         scales_up = up.sc_pack;
-
 
         metadata_gate = park(gate, (int)t);
         metadata_up = park(up, (int)t);
@@ -441,12 +423,7 @@ __global__ void phantom_usp14_w4a16_sym_sm80_fmoe_w13AS_mm_phase(
             bf16x2x2_from_i8x4(gate.bot_h1, gate_ah1.z, gate_ah1.w);
 
             if (g2 < G2) {
-                stage(
-                    W13, 
-                    (int)t, 2, 
-                    uid, g2, G2, R, oc_base, groupID,
-                    gate
-                );
+                stage(W13, (int)t, 2, uid, g2, G2, R, oc_base, groupID, gate);
             }
 
             bf16x2x2_from_i8x4(up.top_h0, up_ah0.x, up_ah0.y);
@@ -483,12 +460,7 @@ __global__ void phantom_usp14_w4a16_sym_sm80_fmoe_w13AS_mm_phase(
             bf16x2x2_from_i8x4(up.bot_h1, up_ah1.z, up_ah1.w);
 
             if (g2 < G2) {
-                stage(
-                    W13, 
-                    (int)t, 0, 
-                    uid, g2, G2, R, oc_base + (R/2), groupID,
-                    up
-                );
+                stage(W13, (int)t, 0, uid, g2, G2, R, oc_base + (R/2), groupID, up);
                 
             }
 
