@@ -52,9 +52,7 @@ __device__ __forceinline__ uint64_t shfl_u64(uint64_t v, int src_lane, unsigned 
 }
 
 __device__ __forceinline__ ulonglong2 shfl_u64x2(ulonglong2 v, int src_lane, unsigned mask=0xFFFFFFFFu) {
-    v.x = shfl_u64(v.x, src_lane, mask);
-    v.y = shfl_u64(v.y, src_lane, mask);
-    return v;
+    return make_ulonglong2(shfl_u64(v.x, src_lane, mask), shfl_u64(v.y, src_lane, mask));
 }
 
 __device__ __constant__ uint16_t k_bf16_m8_p7[16] = {
@@ -147,8 +145,10 @@ __device__ __forceinline__ uint16_t pack_nib2(
 }
 
 
-__device__ __forceinline__ void stage(
-    const ulonglong2* __restrict__ W,
+__device__ __forceinline__ void stage_load(
+    const __restrict__ ulonglong2* W,
+    ulonglong2& qwTop,
+    ulonglong2& qwBot,
     const int curr_t, // 0,...,3
     const int src_t, // t=0 (f=0), t=2 (f=1)
     const int64_t uid,
@@ -156,14 +156,9 @@ __device__ __forceinline__ void stage(
     const int64_t G2,
     const int64_t R,
     const int64_t oc_base,
-    const int64_t groupID,
-    StageOut& out
+    const int64_t groupID
 ) {
 
-    ulonglong2 qwTop = make_ulonglong2(0, 0);
-    ulonglong2 qwBot = make_ulonglong2(0, 0);
-
-    //vec2 load vs slight divergence tradeoff
     if (curr_t==src_t) {
         qwTop = W[(uid * G2 + g2) * R  + oc_base + groupID];
     }
@@ -172,11 +167,22 @@ __device__ __forceinline__ void stage(
         qwBot = W[(uid * G2 + g2) * R + oc_base + groupID + 8];
     }
 
+}
+
+__device__ __forceinline__ void stage_decode(
+    const ulonglong2 qwT,
+    const ulonglong2 qwB,
+    const int curr_t, // 0,...,3
+    const int src_t, // t=0 (f=0), t=2 (f=1)
+    const int64_t groupID,
+    StageOut& out
+) {    
+
     //__activemask(); better to use entire warp acc to nvidia programming guide
     unsigned mask = 0xFFFFFFFF; 
 
-    qwTop = shfl_u64x2(qwTop, ((int)groupID << 2) + src_t, mask);
-    qwBot = shfl_u64x2(qwBot, ((int)groupID << 2) + (src_t + 1), mask);
+    const ulonglong2 qwTop = shfl_u64x2(qwT, ((int)groupID << 2) + src_t, mask);
+    const ulonglong2 qwBot = shfl_u64x2(qwB, ((int)groupID << 2) + (src_t + 1), mask);
 
     out.sc_pack.x = (uint16_t)(qwTop.x >> 48);
     out.sc_pack.y = (uint16_t)(qwBot.x >> 48);
@@ -245,8 +251,8 @@ __device__ __forceinline__ void store_tile_swiglu(
     int64_t m_base, int64_t m_end,
     int groupID, int t,
     int64_t oc_base,
-    const float* gate4,
-    const float* up4
+    const float4& gate4,
+    const float4& up4
 ){
     #pragma unroll
     for (int j=0;j<4;++j){
@@ -255,8 +261,26 @@ __device__ __forceinline__ void store_tile_swiglu(
         int64_t m = m_base + tok;
         if (m < m_end){
             int64_t col = oc_base + row;
-            float g = gate4[j];
-            float u = up4[j];
+            float g = 0.0f;
+            float u = 0.0f;
+
+            if (j == 0) {
+                g = gate4.x;
+                u = up4.x;
+            }
+            if (j == 1) {
+                g = gate4.y;
+                u = up4.y;
+            }
+            if (j == 2) {
+                g = gate4.z;
+                u = up4.z;
+            }
+            if (j == 3) {
+                g = gate4.w;
+                u = up4.w;
+            }
+            
             float sig = 1.0f / (1.0f + expf(-g));
             float y = (g * sig) * u;                // silu(g)*u
             X2[m*I + col] = __float2bfloat16_rn(y);
@@ -293,7 +317,7 @@ __device__ __forceinline__ void ldsmB(
 
 
 template<int F>
-__device__ __forceinline__ void mma(const uint4 a, const uint4 b, uint32_t e, float* c) {
+__device__ __forceinline__ void mma(const uint4 a, const uint4 b, uint32_t e, float4& c) {
   
   static_assert(F==0 || F==1);
   const float z = 0.0f;
@@ -302,7 +326,7 @@ __device__ __forceinline__ void mma(const uint4 a, const uint4 b, uint32_t e, fl
     asm volatile(
       "mma.sp::ordered_metadata.sync.aligned.m16n8k32.row.col.f32.bf16.bf16.f32 "
       "{%0,%1,%2,%3}, {%4,%5,%6,%7}, {%8,%9,%10,%11}, {%12,%13,%14,%15}, {%16}, 0x0;\n"
-      : "=f"(c[0]), "=f"(c[1]), "=f"(c[2]), "=f"(c[3])
+      : "=f"(c.x), "=f"(c.y), "=f"(c.z), "=f"(c.w)
       : "r"(a.x), "r"(a.y), "r"(a.z), "r"(a.w),
         "r"(b.x), "r"(b.y), "r"(b.z), "r"(b.w),
         "f"(z), "f"(z), "f"(z), "f"(z),
@@ -312,7 +336,7 @@ __device__ __forceinline__ void mma(const uint4 a, const uint4 b, uint32_t e, fl
     asm volatile(
       "mma.sp::ordered_metadata.sync.aligned.m16n8k32.row.col.f32.bf16.bf16.f32 "
       "{%0,%1,%2,%3}, {%4,%5,%6,%7}, {%8,%9,%10,%11}, {%12,%13,%14,%15}, {%16}, 0x1;\n"
-      : "=f"(c[0]), "=f"(c[1]), "=f"(c[2]), "=f"(c[3])
+      : "=f"(c.x), "=f"(c.y), "=f"(c.z), "=f"(c.w)
       : "r"(a.x), "r"(a.y), "r"(a.z), "r"(a.w),
         "r"(b.x), "r"(b.y), "r"(b.z), "r"(b.w),
         "f"(z), "f"(z), "f"(z), "f"(z),
@@ -356,9 +380,8 @@ __global__ void phantom_usp14_w4a16_sym_sm80_fmoe_w13AS_mm_phase(
     const int64_t i_base = (((int64_t)(blockIdx.z)) * OTILE);
     
     
-
-    float D1[4];
-    float D3[4];
+    float4 D1 = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
+    float4 D3 = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
     
     StageOut gate;
     uint4 gate_ah0 = make_uint4(0, 0, 0, 0);
@@ -375,116 +398,134 @@ __global__ void phantom_usp14_w4a16_sym_sm80_fmoe_w13AS_mm_phase(
     ushort4 scales_gate = make_ushort4(0, 0, 0, 0);
     ushort4 scales_up = make_ushort4(0, 0, 0, 0);
 
-    float scale = 0.0f;
+    float4 fscales_gate = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
+    float4 fscales_up = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
+
+    ulonglong2 qwTop = make_ulonglong2(0, 0);
+    ulonglong2 qwBot = make_ulonglong2(0, 0);
 
     for (int64_t phase = 0; phase < 2; ++phase) {
         
         int64_t oc_base = i_base + (phase * 64) + (wid * 16);
 
-        zero<4>(D1);
-        zero<4>(D3);
+        D1 = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
+        D3 = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
 
-        stage(W13, (int)t, 0, uid, 0, G2, R, oc_base, groupID, gate);
+        stage_load(W13, qwTop, qwBot, (int)t, 0, uid, 0, G2, R, oc_base, groupID);
+        stage_load(W13, qwTop, qwBot, (int)t, 2, uid, 0, G2, R, oc_base + (R/2), groupID);
+
+        stage_decode(qwTop, qwBot, (int)t, 0, gate);
+        stage_decode(qwTop, qwBot, (int)t, 2, up);
 
         scales_gate = gate.sc_pack;
-
-        stage(W13, (int)t, 2, uid, 0, G2, R, oc_base + (R/2), groupID, up);
-
         scales_up = up.sc_pack;
 
         metadata_gate = park(gate, (int)t);
         metadata_up = park(up, (int)t);
 
+        fscales_gate.x = bf16_bits_to_f32(scales_gate.x);
+        fscales_gate.y = bf16_bits_to_f32(scales_gate.y);
+        fscales_gate.z = bf16_bits_to_f32(scales_gate.z);
+        fscales_gate.w = bf16_bits_to_f32(scales_gate.w);
+
+        fscales_up.x = bf16_bits_to_f32(scales_up.x);
+        fscales_up.y = bf16_bits_to_f32(scales_up.y);
+        fscales_up.z = bf16_bits_to_f32(scales_up.z);
+        fscales_up.w = bf16_bits_to_f32(scales_up.w);
+
         ldsmB(&XS[((0 << 6) + ((int64_t)0ll << 5)) * NTOK], bh0);
         ldsmB(&XS[((0 << 6) + ((int64_t)1ll << 5)) * NTOK], bh1);
-        
 
+        bf16x2x2_from_i8x4(gate.top_h0, gate_ah0.x, gate_ah0.y);
+        bf16x2x2_from_i8x4(gate.bot_h0, gate_ah0.z, gate_ah0.w);
+        bf16x2x2_from_i8x4(gate.top_h1, gate_ah1.x, gate_ah1.y);
+        bf16x2x2_from_i8x4(gate.bot_h1, gate_ah1.z, gate_ah1.w);
+        bf16x2x2_from_i8x4(up.top_h0, up_ah0.x, up_ah0.y);
+        bf16x2x2_from_i8x4(up.bot_h0, up_ah0.z, up_ah0.w);
+        bf16x2x2_from_i8x4(up.top_h1, up_ah1.x, up_ah1.y);
+        bf16x2x2_from_i8x4(up.bot_h1, up_ah1.z, up_ah1.w);
         
         for (int64_t g2 = 1; g2 < G2+1; ++g2) {
 
-            bf16x2x2_from_i8x4(gate.top_h0, gate_ah0.x, gate_ah0.y);
-            bf16x2x2_from_i8x4(gate.bot_h0, gate_ah0.z, gate_ah0.w);
-
-            float C1[4];
+            float4 C1 = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
+            float4 C3 = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
 
             mma<0>(gate_ah0, bh0, metadata_gate, C1);
 
-            scale = bf16_bits_to_f32(scales_gate.x);
-
-            D1[0] = __fmaf_rn(C1[0], scale, D1[0]);
-            D1[1] = __fmaf_rn(C1[1], scale, D1[1]);
-
-            scale = bf16_bits_to_f32(scales_gate.y);
-
-            D1[2] = __fmaf_rn(C1[2], scale, D1[2]);
-            D1[3] = __fmaf_rn(C1[3], scale, D1[3]);
-
-            bf16x2x2_from_i8x4(gate.top_h1, gate_ah1.x, gate_ah1.y);
-            bf16x2x2_from_i8x4(gate.bot_h1, gate_ah1.z, gate_ah1.w);
-
             if (g2 < G2) {
-                stage(W13, (int)t, 2, uid, g2, G2, R, oc_base, groupID, gate);
+                stage_load(W13, qwTop, qwBot, (int)t, 2, uid, g2, G2, R, oc_base, groupID);
             }
-
-            bf16x2x2_from_i8x4(up.top_h0, up_ah0.x, up_ah0.y);
-            bf16x2x2_from_i8x4(up.bot_h0, up_ah0.z, up_ah0.w);
-
-            float C3[4];
-
-            mma<0>(up_ah0, bh0, metadata_up, C3);
-
-            scale = bf16_bits_to_f32(scales_up.x);
-
-            D3[0] = __fmaf_rn(C3[0], scale, D3[0]);
-            D3[1] = __fmaf_rn(C3[1], scale, D3[1]);
-
-            scale = bf16_bits_to_f32(scales_up.y);
-
-            D3[2] = __fmaf_rn(C3[2], scale, D3[2]);
-            D3[3] = __fmaf_rn(C3[3], scale, D3[3]);
-
-            mma<1>(gate_ah1, bh1, metadata_gate, C1);
-
-            scale = bf16_bits_to_f32(scales_gate.z);
-
-            D1[0] = __fmaf_rn(C1[0], scale, D1[0]);
-            D1[1] = __fmaf_rn(C1[1], scale, D1[1]);
-
-            scale = bf16_bits_to_f32(scales_gate.w);
-
-            D1[2] = __fmaf_rn(C1[2], scale, D1[2]);
-            D1[3] = __fmaf_rn(C1[3], scale, D1[3]);
-
-
-            bf16x2x2_from_i8x4(up.top_h1, up_ah1.x, up_ah1.y);
-            bf16x2x2_from_i8x4(up.bot_h1, up_ah1.z, up_ah1.w);
-
-            if (g2 < G2) {
-                stage(W13, (int)t, 0, uid, g2, G2, R, oc_base + (R/2), groupID, up);
-                
-            }
+            
 
             mma<1>(up_ah1, bh1, metadata_up, C3);
 
-            scale = bf16_bits_to_f32(scales_up.z);
+            if (g2 < G2) {
+                stage_load(W13, qwTop, qwBot, (int)t, 0, uid, g2, G2, R, oc_base + (R/2), groupID);
+            }
 
-            D3[0] = __fmaf_rn(C3[0], scale, D3[0]);
-            D3[1] = __fmaf_rn(C3[1], scale, D3[1]);
+            D3.x = __fmaf_rn(C3.x, fscales_up.z, D3.x);
+            D3.y = __fmaf_rn(C3.y, fscales_up.z, D3.y);
+            D3.z = __fmaf_rn(C3.z, fscales_up.w, D3.z);
+            D3.w = __fmaf_rn(C3.w, fscales_up.w, D3.w);
 
-            scale = bf16_bits_to_f32(scales_up.w);
-
-            D3[2] = __fmaf_rn(C3[2], scale, D3[2]);
-            D3[3] = __fmaf_rn(C3[3], scale, D3[3]);
+            mma<0>(up_ah0, bh0, metadata_up, C3);
 
             if (g2 < G2) {
-                metadata_gate = park(gate, (int)t);
-                metadata_up = park(up, (int)t);
                 ldsmB(&XS[((g2 << 6) + ((int64_t)0ll << 5)) * NTOK], bh0);
+            }
+
+            D1.x = __fmaf_rn(C1.x, fscales_gate.x, D1.x);
+            D1.y = __fmaf_rn(C1.y, fscales_gate.x, D1.y);
+            D1.z = __fmaf_rn(C1.z, fscales_gate.y, D1.z);
+            D1.w = __fmaf_rn(C1.w, fscales_gate.y, D1.w);
+
+            mma<1>(gate_ah1, bh1, metadata_gate, C1);
+
+            if (g2 < G2) {
                 ldsmB(&XS[((g2 << 6) + ((int64_t)1ll << 5)) * NTOK], bh1);
             }
 
-            scales_up = up.sc_pack;
-            scales_gate = gate.sc_pack;
+            D3.x = __fmaf_rn(C3.x, fscales_up.x, D3.x);
+            D3.y = __fmaf_rn(C3.y, fscales_up.x, D3.y);
+            D3.z = __fmaf_rn(C3.z, fscales_up.y, D3.z);
+            D3.w = __fmaf_rn(C3.w, fscales_up.y, D3.w);
+           
+
+            D1.x = __fmaf_rn(C1.x, fscales_gate.z, D1.x);
+            D1.y = __fmaf_rn(C1.y, fscales_gate.z, D1.y);
+            D1.z = __fmaf_rn(C1.z, fscales_gate.w, D1.z);
+            D1.w = __fmaf_rn(C1.w, fscales_gate.w, D1.w);
+
+            if (g2 < G2) {
+
+                stage_decode(qwTop, qwBot, (int)t, 0, groupID, up);
+                stage_decode(qwTop, qwBot, (int)t, 2, groupID, gate);
+                scales_gate = gate.sc_pack;
+
+                fscales_gate.x = bf16_bits_to_f32(scales_gate.x);
+                fscales_gate.y = bf16_bits_to_f32(scales_gate.y);
+                fscales_gate.z = bf16_bits_to_f32(scales_gate.z);
+                fscales_gate.w = bf16_bits_to_f32(scales_gate.w);
+                
+                metadata_gate = park(gate, (int)t);
+                metadata_up = park(up, (int)t);
+
+                scales_up = up.sc_pack;
+                
+                fscales_up.x = bf16_bits_to_f32(scales_up.x);
+                fscales_up.y = bf16_bits_to_f32(scales_up.y);
+                fscales_up.z = bf16_bits_to_f32(scales_up.z);
+                fscales_up.w = bf16_bits_to_f32(scales_up.w);
+
+                bf16x2x2_from_i8x4(gate.top_h0, gate_ah0.x, gate_ah0.y);
+                bf16x2x2_from_i8x4(gate.bot_h0, gate_ah0.z, gate_ah0.w);
+                bf16x2x2_from_i8x4(gate.top_h1, gate_ah1.x, gate_ah1.y);
+                bf16x2x2_from_i8x4(gate.bot_h1, gate_ah1.z, gate_ah1.w);
+                bf16x2x2_from_i8x4(up.top_h0, up_ah0.x, up_ah0.y);
+                bf16x2x2_from_i8x4(up.bot_h0, up_ah0.z, up_ah0.w);
+                bf16x2x2_from_i8x4(up.top_h1, up_ah1.x, up_ah1.y);
+                bf16x2x2_from_i8x4(up.bot_h1, up_ah1.z, up_ah1.w);
+            }
         }
 
         store_tile_swiglu(X2, R/2, m_base, m_end, (int)groupID, (int)t, oc_base, D1, D3);
