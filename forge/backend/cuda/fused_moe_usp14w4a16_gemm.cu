@@ -290,6 +290,43 @@ __device__ __forceinline__ void store_tile_swiglu(
 
 
 
+__device__ __forceinline__ void store(
+    __nv_bfloat16* Y,
+    int64_t H,
+    int64_t m_base, int64_t m_end,
+    int groupID, int t,
+    int64_t oc_base,
+    const float4& D4
+){
+    #pragma unroll
+    for (int j=0;j<4;++j){
+        int row = groupID + ((j>=2) ? 8 : 0);
+        int tok = (t<<1) + (j&1);
+        int64_t m = m_base + tok;
+        if (m < m_end){
+            int64_t col = oc_base + row;
+            float d = 0.0f;
+
+            if (j == 0) {
+                d = D4.x;
+            }
+            if (j == 1) {
+                d = D4.y;
+            }
+            if (j == 2) {
+                d = D4.z;
+            }
+            if (j == 3) {
+                d = D4.w;
+            }
+            
+            Y[m*H + col] = __float2bfloat16_rn(d);
+        }
+    }
+}
+
+
+
 //@TODO mma.sp::ordered_metadata.sync.aligned.m16n8k32.row.col.f32.bf16.bf16.f32 wrapper
 //------------------------------------------------------------------------------------------------------
 // A -> Fragments "A vector expression containing 4 .b32 regs with each reg containing 2 non-zero .bf16"
@@ -530,4 +567,134 @@ __global__ void phantom_usp14_w4a16_sym_sm80_fmoe_w13AS_mm_phase(
 
         store_tile_swiglu(X2, R/2, m_base, m_end, (int)groupID, (int)t, oc_base, D1, D3);
     }
+}
+
+
+// assuming C <= 2048 | C is K in nvidia notation
+//NTOK=8, OTILE=128, CTA=256 (Half the reg pressure and smem allows it)
+template <int64_t NTOK, int64_t OTILE, int64_t CTA>
+__global__ void phantom_usp14_w4a16_sym_sm80_fmoe_w2AS_mm(
+    const ulonglong2* __restrict__ W2, //[E, G2, R] | G32=(C/32), G2 = G32/2 | R=H | C=I
+    const __nv_bfloat16* __restrict__ X2, //[N, C] permuted
+    __nv_bfloat16* Y, // [N, R] permuted
+    const int64_t* __restrict__ offsets, // [E+1]
+    const uint8_t* __restrict__ U, // [#active expert ids]
+    const int64_t N,
+    const int64_t C,
+    const int64_t R,
+    const int64_t G2
+) {
+    const int64_t uid = U[blockIdx.y];
+    const int64_t m_base = offsets[uid] + (((int64_t)(blockIdx.x)) * NTOK);
+    const int64_t m_end = offsets[uid + 1];
+
+    if (m_base >= m_end) return;
+    
+    const int64_t tid = (int64_t)threadIdx.x;
+
+    extern __shared__ __nv_bfloat16 XS[];
+    
+    stage_XS<NTOK, CTA>(X2, XS, tid, m_base, m_end, C);
+    __syncthreads();
+    
+    const int64_t wid = tid >> 5;
+    const int64_t lane = tid & 31;
+    const int64_t groupID = lane >> 2;
+    const int64_t t = lane & 3;
+    const int64_t i_base = (((int64_t)(blockIdx.z)) * OTILE);
+    
+    float4 D = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
+    
+    StageOut out;
+    uint4 out_h0 = make_uint4(0, 0, 0, 0);
+    uint4 out_h1 = make_uint4(0, 0, 0, 0);
+    uint4 bh0 = make_uint4(0, 0, 0, 0);
+    uint4 bh1 = make_uint4(0, 0, 0, 0);
+    uint32_t metadata_out = 0u;
+
+    ushort4 scales_out = make_ushort4(0, 0, 0, 0);
+
+    float4 fscales_out = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
+
+    ulonglong2 qwTop = make_ulonglong2(0, 0);
+    ulonglong2 qwBot = make_ulonglong2(0, 0);
+        
+    int64_t oc_base = i_base + (wid * 16);
+
+    D = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
+
+    stage_load(W2, qwTop, qwBot, (int)t, 0, uid, 0, G2, R, oc_base, groupID);
+
+    stage_decode(qwTop, qwBot, (int)t, 0, out);
+
+    scales_out = out.sc_pack;
+
+    metadata_out = park(out, (int)t);
+
+    fscales_out.x = bf16_bits_to_f32(scales_out.x);
+    fscales_out.y = bf16_bits_to_f32(scales_out.y);
+    fscales_out.z = bf16_bits_to_f32(scales_out.z);
+    fscales_out.w = bf16_bits_to_f32(scales_out.w);
+
+
+    ldsmB(&XS[((0 << 6) + ((int64_t)0ll << 5)) * NTOK], bh0);
+    ldsmB(&XS[((0 << 6) + ((int64_t)1ll << 5)) * NTOK], bh1);
+
+    bf16x2x2_from_i8x4(out.top_h0, out_ah0.x, out_ah0.y);
+    bf16x2x2_from_i8x4(out.bot_h0, out_ah0.z, out_ah0.w);
+    bf16x2x2_from_i8x4(out.top_h1, out_ah1.x, out_ah1.y);
+    bf16x2x2_from_i8x4(out.bot_h1, out_ah1.z, out_ah1.w);
+        
+    for (int64_t g2 = 1; g2 < G2+1; ++g2) {
+
+            float4 C1 = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
+            float4 C2 = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
+
+            if (g2 < G2) {
+                stage_load(W2, qwTop, qwBot, (int)t, 2, uid, g2, G2, R, oc_base, groupID);
+            }
+
+            mma<1>(out_ah1, bh1, metadata_out, C2);
+
+             if (g2 < G2) {
+                ldsmB(&XS[((g2 << 6) + ((int64_t)1ll << 5)) * NTOK], bh1);
+            }
+
+
+            mma<0>(out_ah0, bh0, metadata_out, C1);
+
+            if (g2 < G2) {
+                ldsmB(&XS[((g2 << 6) + ((int64_t)0ll << 5)) * NTOK], bh0);
+            }
+
+            D.x = __fmaf_rn(C1.x, fscales_out.x, D.x);
+            D.y = __fmaf_rn(C1.y, fscales_out.x, D.y);
+            D.z = __fmaf_rn(C1.z, fscales_out.y, D.z);
+            D.w = __fmaf_rn(C1.w, fscales_out.y, D.w);
+
+            D.x = __fmaf_rn(C2.x, fscales_out.z, D.x);
+            D.y = __fmaf_rn(C2.y, fscales_out.z, D.y);
+            D.z = __fmaf_rn(C2.z, fscales_out.w, D.z);
+            D.w = __fmaf_rn(C2.w, fscales_out.w, D.w);
+
+            if (g2 < G2) {
+
+                stage_decode(qwTop, qwBot, (int)t, 2, groupID, out);
+                
+                scales_out = out.sc_pack;
+
+                fscales_out.x = bf16_bits_to_f32(scales_out.x);
+                fscales_out.y = bf16_bits_to_f32(scales_out.y);
+                fscales_out.z = bf16_bits_to_f32(scales_out.z);
+                fscales_out.w = bf16_bits_to_f32(scales_out.w);
+                
+                metadata_out = park(out, (int)t);
+
+                bf16x2x2_from_i8x4(out.top_h0, out_ah0.x, out_ah0.y);
+                bf16x2x2_from_i8x4(out.bot_h0, out_ah0.z, out_ah0.w);
+                bf16x2x2_from_i8x4(out.top_h1, out_ah1.x, out_ah1.y);
+                bf16x2x2_from_i8x4(out.bot_h1, out_ah1.z, out_ah1.w);
+            }
+    }
+    store(Y, R, m_base, m_end, (int)groupID, (int)t, oc_base, D);
 }
