@@ -605,8 +605,8 @@ __global__ void phantom_usp14_w4a16_sym_sm80_fmoe_w2AS_mm(
     float4 D = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
     
     StageOut out;
-    uint4 out_h0 = make_uint4(0, 0, 0, 0);
-    uint4 out_h1 = make_uint4(0, 0, 0, 0);
+    uint4 out_ah0 = make_uint4(0, 0, 0, 0);
+    uint4 out_ah1 = make_uint4(0, 0, 0, 0);
     uint4 bh0 = make_uint4(0, 0, 0, 0);
     uint4 bh1 = make_uint4(0, 0, 0, 0);
     uint32_t metadata_out = 0u;
