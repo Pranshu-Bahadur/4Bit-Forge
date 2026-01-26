@@ -718,6 +718,8 @@ torch::Tensor usp14w4a16sym_sm80_fused_moe_w13_gemm(
     const int64_t N = X.size(0);
     const int64_t C = X.size(1);
 
+    U = U.contiguous();
+
     const int64_t num_active_E = U.size(0);
 
     auto X2 = torch::empty({N, (R/2)}, X.options()).contiguous();
@@ -767,6 +769,7 @@ torch::Tensor usp14w4a16sym_sm80_fused_moe_w2_gemm(
     X2 = X2.contiguous();
     const int64_t N = X2.size(0);
     const int64_t C = X2.size(1);
+    U = U.contiguous();
 
     const int64_t num_active_E = U.size(0);
 
