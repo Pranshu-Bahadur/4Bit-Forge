@@ -54,7 +54,8 @@ def _load_extension() -> ModuleType:
         str(src_dir / "solver_babai.cu"),
         str(src_dir / "bitpacking_sparsegptq14.cu"),
         str(src_dir / "sparse14_gemm.cu"),
-        str(src_dir / "solver_sparsegptq14.cu")
+        str(src_dir / "solver_sparsegptq14.cu"),
+        str(src_dir / "fused_moe_usp14w4a16_gemm.cu")
     ]
 
     # Method 1: Using platform module
