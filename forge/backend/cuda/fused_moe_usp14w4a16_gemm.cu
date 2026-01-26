@@ -3,10 +3,9 @@
 #include <cuda.h>
 #include <cuda_runtime.h>
 #include <cuda_bf16.h>
+#include <cstdint>
 
-
-
-//this is currently being built for A100 first because 4BF is for the gpu poor
+//this is currently being built for A100 first because 4BF is for the gpu poor, by the gpu poor
 
 __device__ __forceinline__ float bf16_bits_to_f32(uint16_t bits) {
     union { __nv_bfloat16 b; uint16_t u; } cvt;
@@ -391,13 +390,13 @@ __global__ void phantom_usp14_w4a16_sym_sm80_fmoe_w13AS_mm_phase(
     const __nv_bfloat16* __restrict__ X, //[N, C] permuted
     __nv_bfloat16* X2, // [N, R/2] permuted
     const int64_t* __restrict__ offsets, // [E+1]
-    const uint8_t* __restrict__ U, // [#active expert ids]
+    const int32_t* __restrict__ U, // [#active expert ids]
     const int64_t N,
     const int64_t C,
     const int64_t R,
     const int64_t G2
 ) {
-    const int64_t uid = U[blockIdx.y];
+    const int64_t uid = (int64_t)U[blockIdx.y];
     const int64_t m_base = offsets[uid] + (((int64_t)(blockIdx.x)) * NTOK);
     const int64_t m_end = offsets[uid + 1];
 
@@ -578,13 +577,13 @@ __global__ void phantom_usp14_w4a16_sym_sm80_fmoe_w2AS_mm(
     const __nv_bfloat16* __restrict__ X2, //[N, C] permuted
     __nv_bfloat16* Y, // [N, R] permuted
     const int64_t* __restrict__ offsets, // [E+1]
-    const uint8_t* __restrict__ U, // [#active expert ids]
+    const int32_t* __restrict__ U, // [#active expert ids]
     const int64_t N,
     const int64_t C,
     const int64_t R,
     const int64_t G2
 ) {
-    const int64_t uid = U[blockIdx.y];
+    const int64_t uid = (int64_t)U[blockIdx.y];
     const int64_t m_base = offsets[uid] + (((int64_t)(blockIdx.x)) * NTOK);
     const int64_t m_end = offsets[uid + 1];
 
@@ -697,4 +696,105 @@ __global__ void phantom_usp14_w4a16_sym_sm80_fmoe_w2AS_mm(
             }
     }
     store(Y, R, m_base, m_end, (int)groupID, (int)t, oc_base, D);
+}
+
+
+torch::Tensor usp14w4a16sym_sm80_fused_moe_w13_gemm(
+    torch::Tensor W13,  //[E, G2, R] | G32=(C/32), G2 = G32/2 | R=2I | C=H
+    torch::Tensor X, //[N, C] permuted along N
+    torch::Tensor offsets, // [E+1]
+    torch::Tensor U //[#active experts <= E]
+) {
+
+    const int64_t NTOK = 8;
+    const int64_t OTILE = 128;
+    const int64_t CTA = 128;
+
+    W13 = W13.contiguous();
+    const int64_t G2 = W13.size(1);
+    const int64_t R  = W13.size(2);
+
+    X = X.contiguous();
+    const int64_t N = X.size(0);
+    const int64_t C = X.size(1);
+
+    const int64_t num_active_E = U.size(0);
+
+    auto X2 = torch::empty({N, (R/2)}, X.options()).contiguous();
+
+    const int64_t smem_bytes = NTOK * C * (int64_t)sizeof(__nv_bfloat16);
+
+    cudaFuncSetAttribute(
+        phantom_usp14_w4a16_sym_sm80_fmoe_w13AS_mm_phase<NTOK, OTILE, CTA>,
+        cudaFuncAttributeMaxDynamicSharedMemorySize,
+        smem_bytes
+    );
+
+    auto stream = at::cuda::getCurrentCUDAStream();
+
+    dim3 block(CTA);
+    dim3 grid((unsigned)((N + NTOK - 1)/NTOK), (unsigned)num_active_E, (unsigned)(((R/2) + OTILE - 1)/OTILE));
+
+    auto W13_ptr = reinterpret_cast<const ulonglong2*>(W13.data_ptr<uint64_t>());
+
+    phantom_usp14_w4a16_sym_sm80_fmoe_w13AS_mm_phase<NTOK, OTILE, CTA><<<grid, block, (size_t)smem_bytes, stream>>>(
+        W13_ptr,
+        (const __nv_bfloat16*)X.data_ptr<torch::BFloat16>(),
+        (__nv_bfloat16*)X2.data_ptr<torch::BFloat16>(),
+        offsets.data_ptr<int64_t>(),
+        U.data_ptr<int32_t>(),
+        N, C, R, G2
+    );
+
+    return X2;
+}
+
+torch::Tensor usp14w4a16sym_sm80_fused_moe_w2_gemm(
+    torch::Tensor W2,  //[E, G2, R] | G32=(C/32), G2 = G32/2 | R=H | C=I
+    torch::Tensor X2, //[N, C] permuted along N
+    torch::Tensor offsets, // [E+1]
+    torch::Tensor U //[#active experts <= E]
+) {
+
+    const int64_t NTOK = 8;
+    const int64_t OTILE = 128;
+    const int64_t CTA = 256;
+
+    W2 = W2.contiguous();
+    const int64_t G2 = W2.size(1);
+    const int64_t R  = W2.size(2);
+
+    X2 = X2.contiguous();
+    const int64_t N = X2.size(0);
+    const int64_t C = X2.size(1);
+
+    const int64_t num_active_E = U.size(0);
+
+    auto Y = torch::empty({N, R}, X2.options()).contiguous();
+
+    const int64_t smem_bytes = NTOK * C * (int64_t)sizeof(__nv_bfloat16);
+
+    cudaFuncSetAttribute(
+        phantom_usp14_w4a16_sym_sm80_fmoe_w2AS_mm<NTOK, OTILE, CTA>,
+        cudaFuncAttributeMaxDynamicSharedMemorySize,
+        smem_bytes
+    );
+
+    auto stream = at::cuda::getCurrentCUDAStream();
+
+    dim3 block(CTA);
+    dim3 grid((unsigned)((N + NTOK - 1)/NTOK), (unsigned)num_active_E, (unsigned)((R + OTILE - 1)/OTILE));
+
+    auto W2_ptr = reinterpret_cast<const ulonglong2*>(W2.data_ptr<uint64_t>());
+
+    phantom_usp14_w4a16_sym_sm80_fmoe_w2AS_mm<NTOK, OTILE, CTA><<<grid, block, (size_t)smem_bytes, stream>>>(
+        W2_ptr,
+        (const __nv_bfloat16*)X2.data_ptr<torch::BFloat16>(),
+        (__nv_bfloat16*)Y.data_ptr<torch::BFloat16>(),
+        offsets.data_ptr<int64_t>(),
+        U.data_ptr<int32_t>(),
+        N, C, R, G2
+    );
+
+    return Y;
 }
