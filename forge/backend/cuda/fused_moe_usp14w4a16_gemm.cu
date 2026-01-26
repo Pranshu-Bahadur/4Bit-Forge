@@ -450,8 +450,8 @@ __global__ void phantom_usp14_w4a16_sym_sm80_fmoe_w13AS_mm_phase(
         stage_load(W13, qwTop, qwBot, (int)t, 0, uid, 0, G2, R, oc_base, groupID);
         stage_load(W13, qwTop, qwBot, (int)t, 2, uid, 0, G2, R, oc_base + (R/2), groupID);
 
-        stage_decode(qwTop, qwBot, (int)t, 0, gate);
-        stage_decode(qwTop, qwBot, (int)t, 2, up);
+        stage_decode(qwTop, qwBot, (int)t, 0, groupID, gate);
+        stage_decode(qwTop, qwBot, (int)t, 2, groupID, up);
 
         scales_gate = gate.sc_pack;
         scales_up = up.sc_pack;
@@ -624,7 +624,7 @@ __global__ void phantom_usp14_w4a16_sym_sm80_fmoe_w2AS_mm(
 
     stage_load(W2, qwTop, qwBot, (int)t, 0, uid, 0, G2, R, oc_base, groupID);
 
-    stage_decode(qwTop, qwBot, (int)t, 0, out);
+    stage_decode(qwTop, qwBot, (int)t, 0, groupID, out);
 
     scales_out = out.sc_pack;
 
