@@ -26,7 +26,7 @@ __device__ __forceinline__ void stage_XS(
         #pragma unroll NTOK
         for (int64_t n = 0; n < NTOK; ++n) {
             //contiguous along N is cleaner
-            XS[c * NTOK + n] = ((m_base + n) < m_end) ? X[(m_base + n) * C + c] : (__nv_bfloat16)(0.0f);
+            XS[c * NTOK + n] = ((m_base + n) < m_end) ? X[(m_base + n) * C + c] : __float2bfloat16_rn(0.0f);
         }
     }
 }
