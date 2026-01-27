@@ -760,7 +760,7 @@ torch::Tensor usp14w4a16sym_sm80_fused_moe_w2_gemm(
 
     const int64_t NTOK = 8;
     const int64_t OTILE = 128;
-    const int64_t CTA = 256;
+    const int64_t CTA = 128;
 
     W2 = W2.contiguous();
     const int64_t G2 = W2.size(1);
