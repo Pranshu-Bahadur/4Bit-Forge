@@ -254,8 +254,8 @@ __device__ __forceinline__ uint32_t park(const StageOut& out, int t) {
     const uint32_t e1_4_7 = park_tok((uint32_t)out.nib_h1_hi, t);
 
     if (t == 0) return e0_0_3;
-    if (t == 1) return e0_4_7;
-    if (t == 2) return e1_0_3;
+    if (t == 2) return e0_4_7;
+    if (t == 1) return e1_0_3;
     if (t == 3) return e1_4_7;
     return 0u;
 }
@@ -370,7 +370,7 @@ __device__ __forceinline__ void ldsmB(
 
 
 template<int F>
-__device__ __forceinline__ void mma(const uint4 a, const uint4 b, uint32_t e, float4& c) {
+__device__ __forceinline__ void mma(const uint4 a, const uint4 b, const uint32_t e, float4& c) {
   
   static_assert(F==0 || F==1);
   const float z = 0.0f;
