@@ -525,14 +525,14 @@ __global__ void phantom_usp14_w4a16_sym_sm80_fmoe_w13AS_mm_phase(
             float4 C1 = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
             float4 C3 = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
 
-            mma<0>(gate_ah0, bh0, metadata_gate, C1);
+            mma<0>(gate_ah0, bh0, (t==0 || t==1) ? metadata_gate : 0u, C1);
 
             if (g2 < G2) {
                 stage_load(W13, qwTop, qwBot, (int)t, 2, uid, g2, G2, R, oc_base, groupID);
             }
             
 
-            mma<1>(up_ah1, bh1, metadata_up, C3);
+            mma<1>(up_ah1, bh1, (t==2 || t==3) ? metadata_up : 0u, C3);
 
             if (g2 < G2) {
                 stage_load(W13, qwTop, qwBot, (int)t, 0, uid, g2, G2, R, oc_base + (R/2), groupID);
@@ -543,7 +543,7 @@ __global__ void phantom_usp14_w4a16_sym_sm80_fmoe_w13AS_mm_phase(
             D3.z = __fmaf_rn(C3.z, fscales_up.w, D3.z);
             D3.w = __fmaf_rn(C3.w, fscales_up.w, D3.w);
 
-            mma<0>(up_ah0, bh0, metadata_up, C3);
+            mma<0>(up_ah0, bh0, (t==0 || t==1) ? metadata_up : 0u, C3);
 
             if (g2 < G2) {
                 ldsmB(&XS[((g2 << 6) + ((int64_t)0ll << 5)) * NTOK], bh0);
@@ -554,7 +554,7 @@ __global__ void phantom_usp14_w4a16_sym_sm80_fmoe_w13AS_mm_phase(
             D1.z = __fmaf_rn(C1.z, fscales_gate.y, D1.z);
             D1.w = __fmaf_rn(C1.w, fscales_gate.y, D1.w);
 
-            mma<1>(gate_ah1, bh1, metadata_gate, C1);
+            mma<1>(gate_ah1, bh1, (t==2 || t==3) ? metadata_gate : 0u, C1);
 
             if (g2 < G2) {
                 ldsmB(&XS[((g2 << 6) + ((int64_t)1ll << 5)) * NTOK], bh1);
@@ -692,14 +692,14 @@ __global__ void phantom_usp14_w4a16_sym_sm80_fmoe_w2AS_mm(
                 stage_load(W2, qwTop, qwBot, (int)t, 2, uid, g2, G2, R, oc_base, groupID);
             }
 
-            mma<1>(out_ah1, bh1, metadata_out, C2);
+            mma<1>(out_ah1, bh1, (t==2 || t==3) ? metadata_out : 0u, C2);
 
              if (g2 < G2) {
                 ldsmB(&XS[((g2 << 6) + ((int64_t)1ll << 5)) * NTOK], bh1);
             }
 
 
-            mma<0>(out_ah0, bh0, metadata_out, C1);
+            mma<0>(out_ah0, bh0, (t==0 || t==1) ? metadata_out : 0u, C1);
 
             if (g2 < G2) {
                 ldsmB(&XS[((g2 << 6) + ((int64_t)0ll << 5)) * NTOK], bh0);
