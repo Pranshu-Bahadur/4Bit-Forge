@@ -135,7 +135,7 @@ __device__ __forceinline__ void decode(
     const uint32_t pair = idx2 >> 1;
     const uint32_t slot = idx2 & 1;
 
-    meta_nibble = (pair == 0) ? (uint8_t)0xE : (uint8_t)0x4;
+    meta_nibble = (pair == 0) ? (uint8_t)0x4 : (uint8_t)0xE;
     
     const int8_t v0 = (slot == 0) ? w : (int8_t)0;
     const int8_t v1 = (slot == 0) ? (int8_t)0 : w;
@@ -156,7 +156,7 @@ __device__ __forceinline__ uint16_t pack_nib2(
     uint8_t top,
     uint8_t bot
 ) {
-    return ((uint16_t)(top & 0xF)) | (((uint16_t)(bot & 0xF)) << 4);
+    return ((uint16_t)(bot & 0xF)) | (((uint16_t)(top & 0xF)) << 4);
 
 }
 
