@@ -724,14 +724,14 @@ __global__ void phantom_usp14_w4a16_sym_sm80_fmoe_w2AS_mm(
                 stage_load(W2, qwTop, qwBot, (int)t, 2, uid, g2, G2, R, oc_base, groupID);
             }
 
-            mma<1>(out_ah1, bh1, metadata_out, C2);
+            mma<1>(out_ah1, bh1, metadata_out1, C2);
 
              if (g2 < G2) {
                 ldsmB(&XS[((g2 << 6) + ((int64_t)1 << 5)) * NTOK], bh1);
             }
 
 
-            mma<0>(out_ah0, bh0, metadata_out, C1);
+            mma<0>(out_ah0, bh0, metadata_out0, C1);
 
             if (g2 < G2) {
                 ldsmB(&XS[((g2 << 6) + ((int64_t)0 << 5)) * NTOK], bh0);
