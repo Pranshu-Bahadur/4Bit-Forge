@@ -55,10 +55,27 @@ __device__ __forceinline__ ulonglong2 shfl_u64x2(ulonglong2 v, int src_lane, uns
 }
 
 __device__ __constant__ uint16_t k_bf16_m8_p7[16] = {
-  /* -8 .. 7 bf16 bit patterns */
-  0xC100, 0xC0E0, 0xC0C0, 0xC0A0, 0xC080, 0xC060, 0xC040, 0xC020,
-  0x0000, 0x3F80, 0x4000, 0x4040, 0x4080, 0x40A0, 0x40C0, 0x40E0
+  // -8 .. -1
+  0xC100, // -8.0
+  0xC0E0, // -7.0
+  0xC0C0, // -6.0
+  0xC0A0, // -5.0
+  0xC080, // -4.0
+  0xC040, // -3.0 
+  0xC000, // -2.0 
+  0xBF80, // -1.0
+
+  // 0 .. 7
+  0x0000, //  0.0
+  0x3F80, //  1.0
+  0x4000, //  2.0
+  0x4040, //  3.0
+  0x4080, //  4.0
+  0x40A0, //  5.0
+  0x40C0, //  6.0
+  0x40E0  //  7.0
 };
+
 
 __device__ __forceinline__ uint16_t bf16bits_from_i8_small(int8_t v) {
     // v in [-8..7]
@@ -724,7 +741,7 @@ torch::Tensor usp14w4a16sym_sm80_fused_moe_w13_gemm(
 
     auto X2 = torch::empty({N, (R/2)}, X.options()).contiguous();
 
-    const int64_t smem_bytes = NTOK * C * (int64_t)sizeof(__nv_bfloat16);
+    int64_t smem_bytes = NTOK * C * (int64_t)sizeof(__nv_bfloat16);
 
     cudaFuncSetAttribute(
         phantom_usp14_w4a16_sym_sm80_fmoe_w13AS_mm_phase<NTOK, OTILE, CTA>,
@@ -760,7 +777,7 @@ torch::Tensor usp14w4a16sym_sm80_fused_moe_w2_gemm(
 
     const int64_t NTOK = 8;
     const int64_t OTILE = 128;
-    const int64_t CTA = 128;
+    const int64_t CTA = 256;
 
     W2 = W2.contiguous();
     const int64_t G2 = W2.size(1);
@@ -775,7 +792,7 @@ torch::Tensor usp14w4a16sym_sm80_fused_moe_w2_gemm(
 
     auto Y = torch::empty({N, R}, X2.options()).contiguous();
 
-    const int64_t smem_bytes = NTOK * C * (int64_t)sizeof(__nv_bfloat16);
+    int64_t smem_bytes = NTOK * C * (int64_t)sizeof(__nv_bfloat16);
 
     cudaFuncSetAttribute(
         phantom_usp14_w4a16_sym_sm80_fmoe_w2AS_mm<NTOK, OTILE, CTA>,
