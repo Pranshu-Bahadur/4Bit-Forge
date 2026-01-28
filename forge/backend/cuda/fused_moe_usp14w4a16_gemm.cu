@@ -678,7 +678,8 @@ __global__ void phantom_usp14_w4a16_sym_sm80_fmoe_w2AS_mm(
     uint4 out_ah1 = make_uint4(0u, 0u, 0u, 0u);
     uint4 bh0 = make_uint4(0u, 0u, 0u, 0u);
     uint4 bh1 = make_uint4(0u, 0u, 0u, 0u);
-    uint32_t metadata_out = 0u;
+    uint32_t metadata_out0 = 0u;
+    uint32_t metadata_out1 = 0u;
 
     ushort4 scales_out = make_ushort4(0u, 0u, 0u, 0u);
 
@@ -697,7 +698,8 @@ __global__ void phantom_usp14_w4a16_sym_sm80_fmoe_w2AS_mm(
 
     scales_out = out.sc_pack;
 
-    metadata_out = park(out, (int)t);
+    metadata_out0 = park_h0(out, (int)t);
+    metadata_out1 = park_h1(out, (int)t);
 
     fscales_out.x = bf16_bits_to_f32(scales_out.x);
     fscales_out.y = bf16_bits_to_f32(scales_out.y);
@@ -756,7 +758,8 @@ __global__ void phantom_usp14_w4a16_sym_sm80_fmoe_w2AS_mm(
                 fscales_out.z = bf16_bits_to_f32(scales_out.z);
                 fscales_out.w = bf16_bits_to_f32(scales_out.w);
                 
-                metadata_out = park(out, (int)t);
+                metadata_out0 = park_h0(out, (int)t);
+                metadata_out1 = park_h1(out, (int)t);
 
                 bf16x2x2_from_i8x4(out.top_h0, out_ah0.x, out_ah0.y);
                 bf16x2x2_from_i8x4(out.bot_h0, out_ah0.z, out_ah0.w);
