@@ -141,8 +141,8 @@ __device__ __forceinline__ void decode(
     const int8_t v1 = (slot == 0) ? (int8_t)0 : w;
 
     const uint16_t u =
-        (uint16_t)(uint8_t)v1 |
-        ((uint16_t)(uint8_t)v0 << 8);
+        (uint16_t)(uint8_t)v0 |
+        ((uint16_t)(uint8_t)v1 << 8);
     v01_packed = (int16_t)u;
 }
 
@@ -240,7 +240,7 @@ __device__ __forceinline__ uint32_t park_tok(uint32_t tok, int t) {
     uint32_t meta_top = 0u, meta_bot = 0u;
     #pragma unroll
     for (int i = 0; i < 4; ++i) {
-        uint32_t pkt = __shfl_xor_sync(0xFFFFFFFFu, tok, (t ^ i), 4);
+        uint32_t pkt = (t==i)? tok : __shfl_xor_sync(0xFFFFFFFFu, tok, (t ^ i), 4);
         meta_top |= (pkt & 0xFu)        << (i << 2);
         meta_bot |= ((pkt >> 4) & 0xFu) << (i << 2);
     }
