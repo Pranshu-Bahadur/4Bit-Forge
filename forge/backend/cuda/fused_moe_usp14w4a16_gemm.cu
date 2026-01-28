@@ -247,11 +247,13 @@ __device__ __forceinline__ uint32_t park_tok(uint32_t tok, int t) {
     return meta_top | (meta_bot << 16);
 }
 
+
+/*
 __device__ __forceinline__ uint32_t park(const StageOut& out, int t) {
-    const uint32_t e0_0_3 = park_tok((uint32_t)out.nib_h0_hi, t); //0...3
-    const uint32_t e0_4_7 = park_tok((uint32_t)out.nib_h0_lo, t); //4...7
-    const uint32_t e1_0_3 = park_tok((uint32_t)out.nib_h1_hi, t);
-    const uint32_t e1_4_7 = park_tok((uint32_t)out.nib_h1_lo, t);
+    const uint32_t e0_0_3 = park_tok((uint32_t)out.nib_h0_lo, t); //0...3
+    const uint32_t e0_4_7 = park_tok((uint32_t)out.nib_h0_hi, t); //4...7
+    const uint32_t e1_0_3 = park_tok((uint32_t)out.nib_h1_lo, t);
+    const uint32_t e1_4_7 = park_tok((uint32_t)out.nib_h1_hi, t);
 
     if (t == 0) return e0_0_3;
     if (t == 1) return e0_4_7;
@@ -259,6 +261,24 @@ __device__ __forceinline__ uint32_t park(const StageOut& out, int t) {
     if (t == 3) return e1_4_7;
     return 0u;
 }
+*/
+
+__device__ __forceinline__ uint32_t park(const StageOut& out, int t) {
+    const uint32_t e0_0_3 = park_tok((uint32_t)out.nib_h0_lo, t);
+    const uint32_t e0_4_7 = park_tok((uint32_t)out.nib_h0_hi, t);
+    const uint32_t e1_0_3 = park_tok((uint32_t)out.nib_h1_lo, t);
+    const uint32_t e1_4_7 = park_tok((uint32_t)out.nib_h1_hi, t);
+
+    // Merge low+high into one 32-bit word per half (just concatenate nibbles)
+    const uint32_t e0 = (e0_0_3 & 0x0000FFFFu) | (e0_4_7 & 0xFFFF0000u);
+    const uint32_t e1 = (e1_0_3 & 0x0000FFFFu) | (e1_4_7 & 0xFFFF0000u);
+
+    // selector 0 uses t=0,1 => return e0 in both
+    // selector 1 uses t=2,3 => return e1 in both
+    if (t < 2) return e0;
+    else       return e1;
+}
+
 
 
 __device__ __forceinline__ void store_tile_swiglu(
