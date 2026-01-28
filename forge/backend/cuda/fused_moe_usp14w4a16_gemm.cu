@@ -45,8 +45,8 @@ __device__ __forceinline__ void zero(
 __device__ __forceinline__ uint64_t shfl_u64(uint64_t v, int src_lane, unsigned mask=0xFFFFFFFFu) {
     uint32_t lo = (uint32_t)(v & 0xFFFFFFFFull);
     uint32_t hi = (uint32_t)(v >> 32);
-    lo = __shfl_sync(mask, lo, src_lane);
-    hi = __shfl_sync(mask, hi, src_lane);
+    lo = __shfl_sync(mask, lo, (unsigned)src_lane);
+    hi = __shfl_sync(mask, hi, (unsigned)src_lane);
     return (uint64_t)lo | ((uint64_t)hi << 32);
 }
 
@@ -199,7 +199,7 @@ __device__ __forceinline__ void stage_decode(
 ) {    
 
     //__activemask(); better to use entire warp acc to nvidia programming guide
-    unsigned mask = 0xFFFFFFFF; 
+    unsigned mask = __activemask();//0xFFFFFFFF; 
 
     const ulonglong2 qwTop = shfl_u64x2(qwT, ((int)groupID << 2) + src_t, mask);
     const ulonglong2 qwBot = shfl_u64x2(qwB, ((int)groupID << 2) + (src_t + 1), mask);
