@@ -319,7 +319,7 @@ __device__ __forceinline__ void store_tile_swiglu(
                 u = up4.w;
             }
             
-            float sig = 1.0f / (1.0f + expf(-g));
+            float sig = 1.0f / (1.0f + __expf(-g));
             float y = (g * sig) * u;                // silu(g)*u
             X2[m*I + col] = __float2bfloat16(y);
         }
