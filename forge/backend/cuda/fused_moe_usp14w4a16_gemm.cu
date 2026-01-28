@@ -82,29 +82,33 @@ __device__ __forceinline__ uint16_t bf16bits_from_i8_small(int8_t v) {
     return (uint16_t)k_bf16_m8_p7[(int)v + 8];
 }
 
+__device__ __forceinline__ uint32_t bf16x2_from_packed_i8pair(uint16_t packed_u) {
+    int8_t v0 = (int8_t)(packed_u & 0xFFu);
+    int8_t v1 = (int8_t)((packed_u >> 8) & 0xFFu);
 
-__device__ __forceinline__ uint32_t bf16x2_from_packed_i8pair(int16_t packed) {
-    int8_t v0 = (int8_t)(packed & 0xFF);
-    int8_t v1 = (int8_t)((packed >> 8) & 0xFF);
-
+    /*
     uint16_t b0 = bf16bits_from_i8_small(v0);
     uint16_t b1 = bf16bits_from_i8_small(v1);
-
     return (uint32_t)b0 | ((uint32_t)b1 << 16);
-}
+    */
 
+    __nv_bfloat16 b0 = __float2bfloat16((float)v0);
+    __nv_bfloat16 b1 = __float2bfloat16((float)v1);
+    uint32_t out = ((uint32_t)(*(uint16_t*)&b0)) | ((uint32_t)(*(uint16_t*)&b1) << 16);
+
+}
 
 __device__ __forceinline__ void bf16x2x2_from_i8x4(
     uint32_t i8x4,
     uint32_t& out_lo_bf16x2,
     uint32_t& out_hi_bf16x2
 ) {
-    int16_t lo = (int16_t)(i8x4 & 0xFFFFu);
-    int16_t hi = (int16_t)(i8x4 >> 16);
-
+    uint16_t lo = (uint16_t)(i8x4 & 0xFFFFu);
+    uint16_t hi = (uint16_t)(i8x4 >> 16);
     out_lo_bf16x2 = bf16x2_from_packed_i8pair(lo);
     out_hi_bf16x2 = bf16x2_from_packed_i8pair(hi);
 }
+
 
 struct StageOut {
     
@@ -156,7 +160,7 @@ __device__ __forceinline__ uint16_t pack_nib2(
     uint8_t top,
     uint8_t bot
 ) {
-    return ((uint16_t)(bot & 0xF)) | (((uint16_t)(top & 0xF)) << 4);
+    return ((uint16_t)(top & 0xF)) | (((uint16_t)(bot & 0xF)) << 4);
 
 }
 
