@@ -79,7 +79,7 @@ __device__ __constant__ uint16_t k_bf16_m8_p7[16] = {
 
 __device__ __forceinline__ uint16_t bf16bits_from_i8_small(int8_t v) {
     // v in [-8..7]
-    return k_bf16_m8_p7[(int)v + 8];
+    return (uint16_t)k_bf16_m8_p7[(int)v + 8];
 }
 
 
