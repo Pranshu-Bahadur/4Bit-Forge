@@ -141,8 +141,8 @@ __device__ __forceinline__ void decode(
     const int8_t v1 = (slot == 0) ? (int8_t)0 : w;
 
     const uint16_t u =
-        (uint16_t)(uint8_t)v0 |
-        ((uint16_t)(uint8_t)v1 << 8);
+        (uint16_t)(uint8_t)v1 |
+        ((uint16_t)(uint8_t)v0 << 8);
     v01_packed = (int16_t)u;
 }
 
@@ -248,7 +248,7 @@ __device__ __forceinline__ uint32_t park_tok(uint32_t tok, int t) {
 }
 
 
-/*
+
 __device__ __forceinline__ uint32_t park(const StageOut& out, int t) {
     const uint32_t e0_0_3 = park_tok((uint32_t)out.nib_h0_lo, t); //0...3
     const uint32_t e0_4_7 = park_tok((uint32_t)out.nib_h0_hi, t); //4...7
@@ -261,7 +261,8 @@ __device__ __forceinline__ uint32_t park(const StageOut& out, int t) {
     if (t == 3) return e1_4_7;
     return 0u;
 }
-*/
+
+/*
 
 __device__ __forceinline__ uint32_t park(const StageOut& out, int t) {
     const uint32_t e0_0_3 = park_tok((uint32_t)out.nib_h0_lo, t);
@@ -278,6 +279,7 @@ __device__ __forceinline__ uint32_t park(const StageOut& out, int t) {
     if (t < 2) return e0;
     else       return e1;
 }
+    */
 
 
 
