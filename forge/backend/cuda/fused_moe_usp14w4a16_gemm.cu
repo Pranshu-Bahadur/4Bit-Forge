@@ -266,6 +266,18 @@ __device__ __forceinline__ uint32_t park(const StageOut& out, int t) {
     return 0u;
 }
 
+__device__ __forceinline__ uint32_t park_h0(const StageOut& out, int t) {
+    const uint32_t e0_0_3 = park_tok((uint32_t)out.nib_h0_lo, t);
+    const uint32_t e0_4_7 = park_tok((uint32_t)out.nib_h0_hi, t);
+    return (t & 1) ? e0_4_7 : e0_0_3;
+}
+__device__ __forceinline__ uint32_t park_h1(const StageOut& out, int t) {
+    const uint32_t e1_0_3 = park_tok((uint32_t)out.nib_h1_lo, t);
+    const uint32_t e1_4_7 = park_tok((uint32_t)out.nib_h1_hi, t);
+    return (t & 1) ? e1_4_7 : e1_0_3;
+}
+
+
 /*
 
 __device__ __forceinline__ uint32_t park(const StageOut& out, int t) {
@@ -469,12 +481,14 @@ __global__ void phantom_usp14_w4a16_sym_sm80_fmoe_w13AS_mm_phase(
     uint4 gate_ah1 = make_uint4(0u, 0u, 0u, 0u);
     uint4 bh0 = make_uint4(0u, 0u, 0u, 0u);
     uint4 bh1 = make_uint4(0u, 0u, 0u, 0u);
-    uint32_t metadata_gate = 0u;
+    uint32_t metadata_gate0 = 0u;
+    uint32_t metadata_gate1 = 0u;
 
     StageOut up;
     uint4 up_ah0 = make_uint4(0u, 0u, 0u, 0u);
     uint4 up_ah1 = make_uint4(0u, 0u, 0u, 0u);
-    uint32_t metadata_up = 0u;
+    uint32_t metadata_up0 = 0u;
+    uint32_t metadata_up1 = 0u;
 
     ushort4 scales_gate = make_ushort4(0u, 0u, 0u, 0u);
     ushort4 scales_up = make_ushort4(0u, 0u, 0u, 0u);
@@ -501,8 +515,13 @@ __global__ void phantom_usp14_w4a16_sym_sm80_fmoe_w13AS_mm_phase(
         scales_gate = gate.sc_pack;
         scales_up = up.sc_pack;
 
-        metadata_gate = park(gate, (int)t);
-        metadata_up = park(up, (int)t);
+        //metadata_gate = park(gate, (int)t);
+        //metadata_up = park(up, (int)t);
+        metadata_gate0 = park_h0(gate, t);
+        metadata_gate1 = park_h1(gate, t);
+
+        metadata_up0   = park_h0(up, t);     // used with up_ah0
+        metadata_up1   = park_h1(up, t);     // used with up_ah1
 
         fscales_gate.x = bf16_bits_to_f32(scales_gate.x);
         fscales_gate.y = bf16_bits_to_f32(scales_gate.y);
@@ -531,14 +550,14 @@ __global__ void phantom_usp14_w4a16_sym_sm80_fmoe_w13AS_mm_phase(
             float4 C1 = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
             float4 C3 = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
 
-            mma<0>(gate_ah0, bh0, metadata_gate, C1);
+            mma<0>(gate_ah0, bh0, metadata_gate0, C1);
 
             if (g2 < G2) {
                 stage_load(W13, qwTop, qwBot, (int)t, 2, uid, g2, G2, R, oc_base, groupID);
             }
             
 
-            mma<1>(up_ah1, bh1, metadata_up, C3);
+            mma<1>(up_ah1, bh1, metadata_up1, C3);
 
             if (g2 < G2) {
                 stage_load(W13, qwTop, qwBot, (int)t, 0, uid, g2, G2, R, oc_base + (R/2), groupID);
@@ -549,7 +568,7 @@ __global__ void phantom_usp14_w4a16_sym_sm80_fmoe_w13AS_mm_phase(
             D3.z = __fmaf_rn(C3.z, fscales_up.w, D3.z);
             D3.w = __fmaf_rn(C3.w, fscales_up.w, D3.w);
 
-            mma<0>(up_ah0, bh0, metadata_up, C3);
+            mma<0>(up_ah0, bh0, metadata_up0, C3);
 
             if (g2 < G2) {
                 ldsmB(&XS[((g2 << 6) + ((int64_t)0 << 5)) * NTOK], bh0);
@@ -560,7 +579,7 @@ __global__ void phantom_usp14_w4a16_sym_sm80_fmoe_w13AS_mm_phase(
             D1.z = __fmaf_rn(C1.z, fscales_gate.y, D1.z);
             D1.w = __fmaf_rn(C1.w, fscales_gate.y, D1.w);
 
-            mma<1>(gate_ah1, bh1, metadata_gate, C1);
+            mma<1>(gate_ah1, bh1, metadata_gate1, C1);
 
             if (g2 < G2) {
                 ldsmB(&XS[((g2 << 6) + ((int64_t)1 << 5)) * NTOK], bh1);
@@ -588,8 +607,14 @@ __global__ void phantom_usp14_w4a16_sym_sm80_fmoe_w13AS_mm_phase(
                 fscales_gate.z = bf16_bits_to_f32(scales_gate.z);
                 fscales_gate.w = bf16_bits_to_f32(scales_gate.w);
                 
-                metadata_gate = park(gate, (int)t);
-                metadata_up = park(up, (int)t);
+                //metadata_gate = park(gate, (int)t);
+                //metadata_up = park(up, (int)t);
+
+                metadata_gate0 = park_h0(gate, t);
+                metadata_gate1 = park_h1(gate, t);
+
+                metadata_up0   = park_h0(up, t);     // used with up_ah0
+                metadata_up1   = park_h1(up, t);     // used with up_ah1
 
                 scales_up = up.sc_pack;
                 
