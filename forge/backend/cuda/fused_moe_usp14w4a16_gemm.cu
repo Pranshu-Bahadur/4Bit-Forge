@@ -94,7 +94,7 @@ __device__ __forceinline__ uint32_t bf16x2_from_packed_i8pair(uint16_t packed_u)
 
     __nv_bfloat16 b0 = __float2bfloat16((float)v0);
     __nv_bfloat16 b1 = __float2bfloat16((float)v1);
-    uint32_t out = ((uint32_t)(*(uint16_t*)&b0)) | ((uint32_t)(*(uint16_t*)&b1) << 16);
+    return ((uint32_t)(*(uint16_t*)&b0)) | ((uint32_t)(*(uint16_t*)&b1) << 16);
 
 }
 
