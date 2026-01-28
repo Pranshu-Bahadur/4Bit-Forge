@@ -461,25 +461,25 @@ __global__ void phantom_usp14_w4a16_sym_sm80_fmoe_w13AS_mm_phase(
     float4 D3 = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
     
     StageOut gate;
-    uint4 gate_ah0 = make_uint4(0, 0, 0, 0);
-    uint4 gate_ah1 = make_uint4(0, 0, 0, 0);
-    uint4 bh0 = make_uint4(0, 0, 0, 0);
-    uint4 bh1 = make_uint4(0, 0, 0, 0);
+    uint4 gate_ah0 = make_uint4(0u, 0u, 0u, 0u);
+    uint4 gate_ah1 = make_uint4(0u, 0u, 0u, 0u);
+    uint4 bh0 = make_uint4(0u, 0u, 0u, 0u);
+    uint4 bh1 = make_uint4(0u, 0u, 0u, 0u);
     uint32_t metadata_gate = 0u;
 
     StageOut up;
-    uint4 up_ah0 = make_uint4(0, 0, 0, 0);
-    uint4 up_ah1 = make_uint4(0, 0, 0, 0);
+    uint4 up_ah0 = make_uint4(0u, 0u, 0u, 0u);
+    uint4 up_ah1 = make_uint4(0u, 0u, 0u, 0u);
     uint32_t metadata_up = 0u;
 
-    ushort4 scales_gate = make_ushort4(0, 0, 0, 0);
-    ushort4 scales_up = make_ushort4(0, 0, 0, 0);
+    ushort4 scales_gate = make_ushort4(0u, 0u, 0u, 0u);
+    ushort4 scales_up = make_ushort4(0u, 0u, 0u, 0u);
 
     float4 fscales_gate = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
     float4 fscales_up = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
 
-    ulonglong2 qwTop = make_ulonglong2(0, 0);
-    ulonglong2 qwBot = make_ulonglong2(0, 0);
+    ulonglong2 qwTop = make_ulonglong2(0u, 0u);
+    ulonglong2 qwBot = make_ulonglong2(0u, 0u);
 
     for (int64_t phase = 0; phase < 2; ++phase) {
         
@@ -510,8 +510,8 @@ __global__ void phantom_usp14_w4a16_sym_sm80_fmoe_w13AS_mm_phase(
         fscales_up.z = bf16_bits_to_f32(scales_up.z);
         fscales_up.w = bf16_bits_to_f32(scales_up.w);
 
-        ldsmB(&XS[((0 << 6) + ((int64_t)0ll << 5)) * NTOK], bh0);
-        ldsmB(&XS[((0 << 6) + ((int64_t)1ll << 5)) * NTOK], bh1);
+        ldsmB(&XS[(((int64_t)0 << 6) + ((int64_t)0 << 5)) * NTOK], bh0);
+        ldsmB(&XS[(((int64_t)0 << 6) + ((int64_t)1 << 5)) * NTOK], bh1);
 
         bf16x2x2_from_i8x4(gate.top_h0, gate_ah0.x, gate_ah0.y);
         bf16x2x2_from_i8x4(gate.bot_h0, gate_ah0.z, gate_ah0.w);
@@ -646,18 +646,18 @@ __global__ void phantom_usp14_w4a16_sym_sm80_fmoe_w2AS_mm(
     float4 D = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
     
     StageOut out;
-    uint4 out_ah0 = make_uint4(0, 0, 0, 0);
-    uint4 out_ah1 = make_uint4(0, 0, 0, 0);
-    uint4 bh0 = make_uint4(0, 0, 0, 0);
-    uint4 bh1 = make_uint4(0, 0, 0, 0);
+    uint4 out_ah0 = make_uint4(0u, 0u, 0u, 0u);
+    uint4 out_ah1 = make_uint4(0u, 0u, 0u, 0u);
+    uint4 bh0 = make_uint4(0u, 0u, 0u, 0u);
+    uint4 bh1 = make_uint4(0u, 0u, 0u, 0u);
     uint32_t metadata_out = 0u;
 
-    ushort4 scales_out = make_ushort4(0, 0, 0, 0);
+    ushort4 scales_out = make_ushort4(0u, 0u, 0u, 0u);
 
     float4 fscales_out = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
 
-    ulonglong2 qwTop = make_ulonglong2(0, 0);
-    ulonglong2 qwBot = make_ulonglong2(0, 0);
+    ulonglong2 qwTop = make_ulonglong2(0u, 0u);
+    ulonglong2 qwBot = make_ulonglong2(0u, 0u);
         
     int64_t oc_base = i_base + (wid * 16);
 
@@ -677,8 +677,8 @@ __global__ void phantom_usp14_w4a16_sym_sm80_fmoe_w2AS_mm(
     fscales_out.w = bf16_bits_to_f32(scales_out.w);
 
 
-    ldsmB(&XS[((0 << 6) + ((int64_t)0ll << 5)) * NTOK], bh0);
-    ldsmB(&XS[((0 << 6) + ((int64_t)1ll << 5)) * NTOK], bh1);
+    ldsmB(&XS[(((int64_t)0 << 6) + ((int64_t)0 << 5)) * NTOK], bh0);
+    ldsmB(&XS[(((int64_t)0 << 6) + ((int64_t)1 << 5)) * NTOK], bh1);
 
     bf16x2x2_from_i8x4(out.top_h0, out_ah0.x, out_ah0.y);
     bf16x2x2_from_i8x4(out.bot_h0, out_ah0.z, out_ah0.w);
@@ -694,17 +694,17 @@ __global__ void phantom_usp14_w4a16_sym_sm80_fmoe_w2AS_mm(
                 stage_load(W2, qwTop, qwBot, (int)t, 2, uid, g2, G2, R, oc_base, groupID);
             }
 
-            mma<1>(out_ah1, bh1, (t==2 || t==3) ? metadata_out : 0u, C2);
+            mma<1>(out_ah1, bh1, metadata_out, C2);
 
              if (g2 < G2) {
-                ldsmB(&XS[((g2 << 6) + ((int64_t)1ll << 5)) * NTOK], bh1);
+                ldsmB(&XS[((g2 << 6) + ((int64_t)1 << 5)) * NTOK], bh1);
             }
 
 
-            mma<0>(out_ah0, bh0, (t==0 || t==1) ? metadata_out : 0u, C1);
+            mma<0>(out_ah0, bh0, metadata_out, C1);
 
             if (g2 < G2) {
-                ldsmB(&XS[((g2 << 6) + ((int64_t)0ll << 5)) * NTOK], bh0);
+                ldsmB(&XS[((g2 << 6) + ((int64_t)0 << 5)) * NTOK], bh0);
             }
 
             D.x = __fmaf_rn(C1.x, fscales_out.x, D.x);
