@@ -321,7 +321,7 @@ __device__ __forceinline__ void store_tile_swiglu(
             
             float sig = 1.0f / (1.0f + expf(-g));
             float y = (g * sig) * u;                // silu(g)*u
-            X2[m*I + col] = __float2bfloat16_rn(y);
+            X2[m*I + col] = __float2bfloat16(y);
         }
     }
 }
@@ -358,7 +358,7 @@ __device__ __forceinline__ void store(
                 d = D4.w;
             }
             
-            Y[m*H + col] = __float2bfloat16_rn(d);
+            Y[m*H + col] = __float2bfloat16(d);
         }
     }
 }
