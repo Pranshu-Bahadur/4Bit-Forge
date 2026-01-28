@@ -397,12 +397,12 @@ template<int F>
 __device__ __forceinline__ void mma(const uint4 a, const uint4 b, const uint32_t e, float4& c) {
   
   static_assert(F==0 || F==1);
-  float z = 0.0f;
+  const float z = 0.0f;
 
   if constexpr (F==0) {
     asm volatile(
       "mma.sp::ordered_metadata.sync.aligned.m16n8k32.row.col.f32.bf16.bf16.f32 "
-      "{%0,%1,%2,%3}, {%4,%5,%6,%7}, {%8,%9,%10,%11}, %12, 0x0;\n"
+      "{%0,%1,%2,%3}, {%4,%5,%6,%7}, {%8,%9,%10,%11}, {%0,%1,%2,%3}, %12, 0x0;\n"
       : "+f"(c.x), "+f"(c.y), "+f"(c.z), "+f"(c.w)
       : "r"(a.x), "r"(a.y), "r"(a.z), "r"(a.w),
         "r"(b.x), "r"(b.y), "r"(b.z), "r"(b.w),
@@ -411,7 +411,7 @@ __device__ __forceinline__ void mma(const uint4 a, const uint4 b, const uint32_t
   } else {
     asm volatile(
       "mma.sp::ordered_metadata.sync.aligned.m16n8k32.row.col.f32.bf16.bf16.f32 "
-      "{%0,%1,%2,%3}, {%4,%5,%6,%7}, {%8,%9,%10,%11}, %12, 0x1;\n"
+      "{%0,%1,%2,%3}, {%4,%5,%6,%7}, {%8,%9,%10,%11}, {%0,%1,%2,%3}, %12, 0x1;\n"
       : "+f"(c.x), "+f"(c.y), "+f"(c.z), "+f"(c.w)
       : "r"(a.x), "r"(a.y), "r"(a.z), "r"(a.w),
         "r"(b.x), "r"(b.y), "r"(b.z), "r"(b.w),
@@ -526,14 +526,14 @@ __global__ void phantom_usp14_w4a16_sym_sm80_fmoe_w13AS_mm_phase(
             float4 C1 = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
             float4 C3 = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
 
-            mma<0>(gate_ah0, bh0, (t==0 || t==1) ? metadata_gate : 0u, C1);
+            mma<0>(gate_ah0, bh0, metadata_gate, C1);
 
             if (g2 < G2) {
                 stage_load(W13, qwTop, qwBot, (int)t, 2, uid, g2, G2, R, oc_base, groupID);
             }
             
 
-            mma<1>(up_ah1, bh1, (t==2 || t==3) ? metadata_up : 0u, C3);
+            mma<1>(up_ah1, bh1, metadata_up, C3);
 
             if (g2 < G2) {
                 stage_load(W13, qwTop, qwBot, (int)t, 0, uid, g2, G2, R, oc_base + (R/2), groupID);
@@ -544,10 +544,10 @@ __global__ void phantom_usp14_w4a16_sym_sm80_fmoe_w13AS_mm_phase(
             D3.z = __fmaf_rn(C3.z, fscales_up.w, D3.z);
             D3.w = __fmaf_rn(C3.w, fscales_up.w, D3.w);
 
-            mma<0>(up_ah0, bh0, (t==0 || t==1) ? metadata_up : 0u, C3);
+            mma<0>(up_ah0, bh0, metadata_up, C3);
 
             if (g2 < G2) {
-                ldsmB(&XS[((g2 << 6) + ((int64_t)0ll << 5)) * NTOK], bh0);
+                ldsmB(&XS[((g2 << 6) + ((int64_t)0 << 5)) * NTOK], bh0);
             }
 
             D1.x = __fmaf_rn(C1.x, fscales_gate.x, D1.x);
@@ -555,10 +555,10 @@ __global__ void phantom_usp14_w4a16_sym_sm80_fmoe_w13AS_mm_phase(
             D1.z = __fmaf_rn(C1.z, fscales_gate.y, D1.z);
             D1.w = __fmaf_rn(C1.w, fscales_gate.y, D1.w);
 
-            mma<1>(gate_ah1, bh1, (t==2 || t==3) ? metadata_gate : 0u, C1);
+            mma<1>(gate_ah1, bh1, metadata_gate, C1);
 
             if (g2 < G2) {
-                ldsmB(&XS[((g2 << 6) + ((int64_t)1ll << 5)) * NTOK], bh1);
+                ldsmB(&XS[((g2 << 6) + ((int64_t)1 << 5)) * NTOK], bh1);
             }
 
             D3.x = __fmaf_rn(C3.x, fscales_up.x, D3.x);
