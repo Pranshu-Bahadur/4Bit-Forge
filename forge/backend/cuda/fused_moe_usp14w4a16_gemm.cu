@@ -379,12 +379,12 @@ __device__ __forceinline__ void store(
 
 
 __device__ __forceinline__ void ldsmB(
-    const void XS_ptr,
+    const void* XS_ptr,
     uint4& b
 ) {
     uint32_t smem = static_cast<uint32_t>(__cvta_generic_to_shared(XS_ptr));
     asm volatile(
-        "ldmatrix.sync.aligned.m8n8.x4.shared.b16 {%0, %1, %2, %3}, [%4];\n"
+        "ldmatrix.sync.aligned.m8n8.x4.trans.shared.b16 {%0, %1, %2, %3}, [%4];\n"
         : "=r"(b.x), "=r"(b.y), "=r"(b.z), "=r"(b.w)
         : "r"(smem)
     );
@@ -761,6 +761,8 @@ torch::Tensor usp14w4a16sym_sm80_fused_moe_w13_gemm(
 
     U = U.contiguous();
 
+    offsets = offsets.contiguous();
+
     const int64_t num_active_E = U.size(0);
 
     auto X2 = torch::empty({N, (R/2)}, X.options()).contiguous();
@@ -811,6 +813,8 @@ torch::Tensor usp14w4a16sym_sm80_fused_moe_w2_gemm(
     const int64_t N = (int64_t)X2.size(0);
     const int64_t C = (int64_t)X2.size(1);
     U = U.contiguous();
+    
+    offsets = offsets.contiguous();
 
     const int64_t num_active_E = U.size(0);
 
