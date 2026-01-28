@@ -362,7 +362,7 @@ __device__ __forceinline__ void ldsmB(
 ) {
     uint32_t smem = static_cast<uint32_t>(__cvta_generic_to_shared(XS));
     asm volatile(
-        "ldmatrix.sync.aligned.m8n8.x4.trans.shared.b16 {%0, %1, %2, %3}, [%4];\n"
+        "ldmatrix.sync.aligned.m8n8.x4.shared.b16 {%0, %1, %2, %3}, [%4];\n"
         : "=r"(b.x), "=r"(b.y), "=r"(b.z), "=r"(b.w)
         : "r"(smem)
     );
@@ -728,12 +728,12 @@ torch::Tensor usp14w4a16sym_sm80_fused_moe_w13_gemm(
     const int64_t CTA = 128;
 
     W13 = W13.contiguous();
-    const int64_t G2 = W13.size(1);
-    const int64_t R  = W13.size(2);
+    const int64_t G2 = (int64_t)W13.size(1);
+    const int64_t R  = (int64_t)W13.size(2);
 
     X = X.contiguous();
-    const int64_t N = X.size(0);
-    const int64_t C = X.size(1);
+    const int64_t N = (int64_t)X.size(0);
+    const int64_t C = (int64_t)X.size(1);
 
     U = U.contiguous();
 
@@ -741,7 +741,7 @@ torch::Tensor usp14w4a16sym_sm80_fused_moe_w13_gemm(
 
     auto X2 = torch::empty({N, (R/2)}, X.options()).contiguous();
 
-    int64_t smem_bytes = NTOK * C * (int64_t)sizeof(__nv_bfloat16);
+    size_t smem_bytes = NTOK * C * ((int64_t)(2));
 
     cudaFuncSetAttribute(
         phantom_usp14_w4a16_sym_sm80_fmoe_w13AS_mm_phase<NTOK, OTILE, CTA>,
@@ -756,7 +756,7 @@ torch::Tensor usp14w4a16sym_sm80_fused_moe_w13_gemm(
 
     auto W13_ptr = reinterpret_cast<const ulonglong2*>(W13.data_ptr<uint64_t>());
 
-    phantom_usp14_w4a16_sym_sm80_fmoe_w13AS_mm_phase<NTOK, OTILE, CTA><<<grid, block, (size_t)smem_bytes, stream>>>(
+    phantom_usp14_w4a16_sym_sm80_fmoe_w13AS_mm_phase<NTOK, OTILE, CTA><<<grid, block, smem_bytes, stream>>>(
         W13_ptr,
         (const __nv_bfloat16*)X.data_ptr<torch::BFloat16>(),
         (__nv_bfloat16*)X2.data_ptr<torch::BFloat16>(),
@@ -780,25 +780,19 @@ torch::Tensor usp14w4a16sym_sm80_fused_moe_w2_gemm(
     const int64_t CTA = 256;
 
     W2 = W2.contiguous();
-    const int64_t G2 = W2.size(1);
-    const int64_t R  = W2.size(2);
+    const int64_t G2 = (int64_t)W2.size(1);
+    const int64_t R  = (int64_t)W2.size(2);
 
     X2 = X2.contiguous();
-    const int64_t N = X2.size(0);
-    const int64_t C = X2.size(1);
+    const int64_t N = (int64_t)X2.size(0);
+    const int64_t C = (int64_t)X2.size(1);
     U = U.contiguous();
 
     const int64_t num_active_E = U.size(0);
 
     auto Y = torch::empty({N, R}, X2.options()).contiguous();
 
-    int64_t smem_bytes = NTOK * C * (int64_t)sizeof(__nv_bfloat16);
-
-    cudaFuncSetAttribute(
-        phantom_usp14_w4a16_sym_sm80_fmoe_w2AS_mm<NTOK, OTILE, CTA>,
-        cudaFuncAttributeMaxDynamicSharedMemorySize,
-        smem_bytes
-    );
+    size_t smem_bytes = NTOK * C * ((int64_t)(2));
 
     auto stream = at::cuda::getCurrentCUDAStream();
 
