@@ -274,9 +274,9 @@ __device__ __forceinline__ void store_tile_swiglu(
     for (int j=0;j<4;++j){
         int row = groupID + ((j>=2) ? 8 : 0);
         int tok = (t<<1) + (j&1);
-        int64_t m = m_base + tok;
+        int64_t m = m_base + (int64_t)tok;
         if (m < m_end){
-            int64_t col = oc_base + row;
+            int64_t col = oc_base + (int64_t)row;
             float g = 0.0f;
             float u = 0.0f;
 
@@ -318,9 +318,9 @@ __device__ __forceinline__ void store(
     for (int j=0;j<4;++j){
         int row = groupID + ((j>=2) ? 8 : 0);
         int tok = (t<<1) + (j&1);
-        int64_t m = m_base + tok;
+        int64_t m = m_base + (int64_t)tok;
         if (m < m_end){
-            int64_t col = oc_base + row;
+            int64_t col = oc_base + (int64_t)row;
             float d = 0.0f;
 
             if (j == 0) {
@@ -378,7 +378,7 @@ __device__ __forceinline__ void mma(const uint4 a, const uint4 b, uint32_t e, fl
   if constexpr (F==0) {
     asm volatile(
       "mma.sp::ordered_metadata.sync.aligned.m16n8k32.row.col.f32.bf16.bf16.f32 "
-      "{%0,%1,%2,%3}, {%4,%5,%6,%7}, {%8,%9,%10,%11}, {%12,%13,%14,%15}, {%16}, 0x0;\n"
+      "{%0,%1,%2,%3}, {%4,%5,%6,%7}, {%8,%9,%10,%11}, {%12,%13,%14,%15}, %16, 0;\n"
       : "=f"(c.x), "=f"(c.y), "=f"(c.z), "=f"(c.w)
       : "r"(a.x), "r"(a.y), "r"(a.z), "r"(a.w),
         "r"(b.x), "r"(b.y), "r"(b.z), "r"(b.w),
@@ -388,7 +388,7 @@ __device__ __forceinline__ void mma(const uint4 a, const uint4 b, uint32_t e, fl
   } else {
     asm volatile(
       "mma.sp::ordered_metadata.sync.aligned.m16n8k32.row.col.f32.bf16.bf16.f32 "
-      "{%0,%1,%2,%3}, {%4,%5,%6,%7}, {%8,%9,%10,%11}, {%12,%13,%14,%15}, {%16}, 0x1;\n"
+      "{%0,%1,%2,%3}, {%4,%5,%6,%7}, {%8,%9,%10,%11}, {%12,%13,%14,%15}, %16, 0x1;\n"
       : "=f"(c.x), "=f"(c.y), "=f"(c.z), "=f"(c.w)
       : "r"(a.x), "r"(a.y), "r"(a.z), "r"(a.w),
         "r"(b.x), "r"(b.y), "r"(b.z), "r"(b.w),
