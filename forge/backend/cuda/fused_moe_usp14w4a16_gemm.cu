@@ -141,8 +141,8 @@ __device__ __forceinline__ void decode(
 
     meta_nibble = (pair == 0) ? (uint8_t)0x4 : (uint8_t)0xE;
     
-    const int8_t v0 = (slot == 0) ? w : (int8_t)0;
-    const int8_t v1 = (slot == 0) ? (int8_t)0 : w;
+    const int8_t v0 = (slot == 0) ? (int8_t)0 : w; //
+    const int8_t v1 = (slot == 0) ? w : (int8_t)0;
 
     const uint16_t u =
         (uint16_t)(uint8_t)v0 |
@@ -388,7 +388,7 @@ __device__ __forceinline__ void ldsmB(
 ) {
     uint32_t smem = static_cast<uint32_t>(__cvta_generic_to_shared(XS_ptr));
     asm volatile(
-        "ldmatrix.sync.aligned.m8n8.x4.trans.shared.b16 {%0, %1, %2, %3}, [%4];\n"
+        "ldmatrix.sync.aligned.m8n8.x4.shared::cta.b16 {%0, %1, %2, %3}, [%4];\n"
         : "=r"(b.x), "=r"(b.y), "=r"(b.z), "=r"(b.w)
         : "r"(smem)
     );
@@ -416,7 +416,7 @@ __device__ __forceinline__ void mma(const uint4 a, const uint4 b, const uint32_t
     asm volatile(
       "mma.sp::ordered_metadata.sync.aligned.m16n8k32.row.col.f32.bf16.bf16.f32 "
       "{%0,%1,%2,%3}, {%4,%5,%6,%7}, {%8,%9,%10,%11}, {%12,%13,%14,%15}, %16, 0x1;\n"
-      : "+f"(c.x), "+f"(c.y), "+f"(c.z), "+f"(c.w)
+      : "=f"(c.x), "=f"(c.y), "=f"(c.z), "=f"(c.w)
       : "r"(a.x), "r"(a.y), "r"(a.z), "r"(a.w),
         "r"(b.x), "r"(b.y), "r"(b.z), "r"(b.w),
         "f"(z.x), "f"(z.y), "f"(z.w), "f"(z.z),
