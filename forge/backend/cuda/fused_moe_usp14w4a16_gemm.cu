@@ -396,25 +396,26 @@ __device__ __forceinline__ void ldsmB(
 template<int F>
 __device__ __forceinline__ void mma(const uint4 a, const uint4 b, const uint32_t e, float4& c) {
   
-  static_assert(F==0 || F==1);
-  const float z = 0.0f;
+  const float4 z = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
 
   if constexpr (F==0) {
     asm volatile(
       "mma.sp::ordered_metadata.sync.aligned.m16n8k32.row.col.f32.bf16.bf16.f32 "
-      "{%0,%1,%2,%3}, {%4,%5,%6,%7}, {%8,%9,%10,%11}, {%0,%1,%2,%3}, %12, 0x0;\n"
-      : "+f"(c.x), "+f"(c.y), "+f"(c.z), "+f"(c.w)
+      "{%0,%1,%2,%3}, {%4,%5,%6,%7}, {%8,%9,%10,%11}, {%12,%13,%14,%15}, %16, 0x0;\n"
+      : "=f"(c.x), "=f"(c.y), "=f"(c.z), "=f"(c.w)
       : "r"(a.x), "r"(a.y), "r"(a.z), "r"(a.w),
         "r"(b.x), "r"(b.y), "r"(b.z), "r"(b.w),
+        "f"(z.x), "f"(z.y), "f"(z.w), "f"(z.z),
         "r"(e)
     );
   } else {
     asm volatile(
       "mma.sp::ordered_metadata.sync.aligned.m16n8k32.row.col.f32.bf16.bf16.f32 "
-      "{%0,%1,%2,%3}, {%4,%5,%6,%7}, {%8,%9,%10,%11}, {%0,%1,%2,%3}, %12, 0x1;\n"
+      "{%0,%1,%2,%3}, {%4,%5,%6,%7}, {%8,%9,%10,%11}, {%12,%13,%14,%15}, %16, 0x1;\n"
       : "+f"(c.x), "+f"(c.y), "+f"(c.z), "+f"(c.w)
       : "r"(a.x), "r"(a.y), "r"(a.z), "r"(a.w),
         "r"(b.x), "r"(b.y), "r"(b.z), "r"(b.w),
+        "f"(z.x), "f"(z.y), "f"(z.w), "f"(z.z),
         "r"(e)
     );
   }
