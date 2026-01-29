@@ -50,7 +50,7 @@ __device__ __forceinline__ uint64_t shfl_u64(uint64_t v, int src_lane, unsigned 
     return (uint64_t)lo | ((uint64_t)hi << 32);
 }
 
-__device__ __forceinline__ ulonglong2 shfl_u64x2(ulonglong2 v, int src_lane, unsigned mask=0xFFFFFFFFu) {
+__device__ __forceinline__ ulonglong2 shfl_u64x2(ulonglong2& v, int src_lane, unsigned mask=0xFFFFFFFFu) {
     return make_ulonglong2(shfl_u64(v.x, src_lane, mask), shfl_u64(v.y, src_lane, mask));
 }
 
