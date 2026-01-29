@@ -421,7 +421,7 @@ __device__ __forceinline__ void mma(const uint4 a, const uint4 b, const uint32_t
       : "=f"(c.x), "=f"(c.y), "=f"(c.z), "=f"(c.w)
       : "r"(a.x), "r"(a.y), "r"(a.z), "r"(a.w),
         "r"(b.y), "r"(b.x), "r"(b.w), "r"(b.z),
-        "f"(z.x), "f"(z.y), "f"(z.w), "f"(z.z),
+        "f"(z.x), "f"(z.y), "f"(z.z), "f"(z.w),
         "r"(e)
     );
   } else {
@@ -431,7 +431,7 @@ __device__ __forceinline__ void mma(const uint4 a, const uint4 b, const uint32_t
       : "=f"(c.x), "=f"(c.y), "=f"(c.z), "=f"(c.w)
       : "r"(a.x), "r"(a.y), "r"(a.z), "r"(a.w),
         "r"(b.y), "r"(b.x), "r"(b.w), "r"(b.z),
-        "f"(z.x), "f"(z.y), "f"(z.w), "f"(z.z),
+        "f"(z.x), "f"(z.y), "f"(z.z), "f"(z.w),
         "r"(e)
     );
   }
