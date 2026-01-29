@@ -554,8 +554,8 @@ __global__ void phantom_usp14_w4a16_sym_sm80_fmoe_w13AS_mm_phase(
         fscales_up.z = bf16_bits_to_f32(scales_up.z);
         fscales_up.w = bf16_bits_to_f32(scales_up.w);
 
-        ldsmB((void*)XS[(((int64_t)0 << 6) + ((int64_t)0 << 5)) * NTOK], bh0);
-        ldsmB((void*)XS[(((int64_t)0 << 6) + ((int64_t)1 << 5)) * NTOK], bh1);
+        ldsmB((void*)&XS[(((int64_t)0 << 6) + ((int64_t)0 << 5)) * NTOK], bh0);
+        ldsmB((void*)&XS[(((int64_t)0 << 6) + ((int64_t)1 << 5)) * NTOK], bh1);
 
         bf16x2x2_from_i8x4(gate.top_h0, gate_ah0.x, gate_ah0.y);
         bf16x2x2_from_i8x4(gate.bot_h0, gate_ah0.z, gate_ah0.w);
