@@ -831,7 +831,7 @@ torch::Tensor usp14w4a16sym_sm80_fused_moe_w13_gemm(
     auto stream = at::cuda::getCurrentCUDAStream();
 
     dim3 block(CTA);
-    dim3 grid((unsigned)((N + NTOK - 1)/NTOK), (unsigned)num_active_E, (unsigned)(((R/2) + OTILE - 1)/OTILE));
+    dim3 grid(((N + NTOK - 1)/NTOK), num_active_E, (((R/2) + OTILE - 1)/OTILE));
 
     auto W13_ptr = reinterpret_cast<const ulonglong2*>(W13.data_ptr<uint64_t>());
 
@@ -878,11 +878,11 @@ torch::Tensor usp14w4a16sym_sm80_fused_moe_w2_gemm(
     auto stream = at::cuda::getCurrentCUDAStream();
 
     dim3 block(CTA);
-    dim3 grid((unsigned)((N + NTOK - 1)/NTOK), (unsigned)num_active_E, (unsigned)((R + OTILE - 1)/OTILE));
+    dim3 grid(((N + NTOK - 1)/NTOK), num_active_E, ((R + OTILE - 1)/OTILE));
 
     auto W2_ptr = reinterpret_cast<const ulonglong2*>(W2.data_ptr<uint64_t>());
 
-    phantom_usp14_w4a16_sym_sm80_fmoe_w2AS_mm<NTOK, OTILE, CTA><<<grid, block, (size_t)smem_bytes, stream>>>(
+    phantom_usp14_w4a16_sym_sm80_fmoe_w2AS_mm<NTOK, OTILE, CTA><<<grid, block, smem_bytes, stream>>>(
         W2_ptr,
         (const __nv_bfloat16*)X2.data_ptr<torch::BFloat16>(),
         (__nv_bfloat16*)Y.data_ptr<torch::BFloat16>(),
