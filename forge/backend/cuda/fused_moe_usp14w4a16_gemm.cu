@@ -241,7 +241,7 @@ __device__ __forceinline__ void stage_decode(
 }
 
 
-/*
+
 
 __device__ __forceinline__ uint32_t park_tok(uint32_t tok, int t) {
     uint32_t meta_top = 0u, meta_bot = 0u;
@@ -253,8 +253,9 @@ __device__ __forceinline__ uint32_t park_tok(uint32_t tok, int t) {
     }
     return meta_top | (meta_bot << 16);
 }
-*/
 
+
+/*
 __device__ __forceinline__ uint32_t park_tok(uint32_t tok, int t) {
     uint32_t meta_top = 0u, meta_bot = 0u;
     #pragma unroll
@@ -268,6 +269,7 @@ __device__ __forceinline__ uint32_t park_tok(uint32_t tok, int t) {
     }
     return meta_top | (meta_bot << 16);
 }
+*/
 
 
 
