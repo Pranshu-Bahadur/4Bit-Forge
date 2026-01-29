@@ -247,7 +247,7 @@ __device__ __forceinline__ uint32_t park_tok(uint32_t tok, int t) {
     uint32_t meta_top = 0u, meta_bot = 0u;
     #pragma unroll
     for (int i = 0; i < 4; ++i) {
-        uint32_t pkt = (t==i)? tok : __shfl_xor_sync(0xFFFFFFFFu, tok, (t ^ i));
+        uint32_t pkt = (t==i)? tok : __shfl_xor_sync(0xFFFFFFFFu, tok, (t ^ i), 4);
         meta_top |= (pkt & 0xFu)        << (i << 2);
         meta_bot |= ((pkt >> 4) & 0xFu) << (i << 2);
     }
