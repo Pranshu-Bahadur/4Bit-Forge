@@ -101,8 +101,8 @@ __device__ __forceinline__ uint32_t bf16x2_from_packed_i8pair(uint16_t packed_u)
 
 __device__ __forceinline__ void bf16x2x2_from_i8x4(
     uint32_t i8x4,
-    uint32_t& out_lo_bf16x2,
-    uint32_t& out_hi_bf16x2
+    uint32_t out_lo_bf16x2,
+    uint32_t out_hi_bf16x2
 ) {
     uint16_t lo = (uint16_t)(i8x4 & 0xFFFFu);
     uint16_t hi = (uint16_t)(i8x4 >> 16);
