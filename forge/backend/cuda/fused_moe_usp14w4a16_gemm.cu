@@ -42,15 +42,15 @@ __device__ __forceinline__ void zero(
 }
 
 
-__device__ __forceinline__ uint64_t shfl_u64(uint64_t v, int src_lane, unsigned mask=0xFFFFFFFFu) {
+__device__ __forceinline__ uint64_t shfl_u64(const uint64_t v, int src_lane, unsigned mask=0xFFFFFFFFu) {
     uint32_t lo = (uint32_t)(v & 0xFFFFFFFFull);
     uint32_t hi = (uint32_t)(v >> 32);
-    lo = __shfl_sync(mask, lo, (unsigned)src_lane);
-    hi = __shfl_sync(mask, hi, (unsigned)src_lane);
+    lo = __shfl_sync(mask, lo, src_lane);
+    hi = __shfl_sync(mask, hi, src_lane);
     return (uint64_t)lo | ((uint64_t)hi << 32);
 }
 
-__device__ __forceinline__ ulonglong2 shfl_u64x2(ulonglong2& v, int src_lane, unsigned mask=0xFFFFFFFFu) {
+__device__ __forceinline__ ulonglong2 shfl_u64x2(const ulonglong2 v, int src_lane, unsigned mask=0xFFFFFFFFu) {
     return make_ulonglong2(shfl_u64(v.x, src_lane, mask), shfl_u64(v.y, src_lane, mask));
 }
 
@@ -100,9 +100,9 @@ __device__ __forceinline__ uint32_t bf16x2_from_packed_i8pair(uint16_t packed_u)
 }
 
 __device__ __forceinline__ void bf16x2x2_from_i8x4(
-    uint32_t i8x4,
-    uint32_t out_lo_bf16x2,
-    uint32_t out_hi_bf16x2
+    const uint32_t i8x4,
+    uint32_t& out_lo_bf16x2,
+    uint32_t& out_hi_bf16x2
 ) {
     uint16_t lo = (uint16_t)(i8x4 & 0xFFFFu);
     uint16_t hi = (uint16_t)(i8x4 >> 16);
@@ -124,10 +124,10 @@ struct StageOut {
 
 
 __device__ __forceinline__ void decode(
-    uint64_t u64,
-    int chunk_i,
-    int16_t v01_packed,    
-    uint8_t meta_nibble
+    const uint64_t u64,
+    const int chunk_i,
+    int16_t& v01_packed,    
+    uint8_t& meta_nibble
 ) {
     const uint32_t qw32  = (uint32_t)(u64 & 0xFFFFFFFFull);
     const uint32_t hi32  = (uint32_t)(u64 >> 32);
@@ -152,14 +152,14 @@ __device__ __forceinline__ void decode(
 }
 
 
-__device__ __forceinline__ uint32_t pack_i8x4_from_i16x2(int16_t lo_packed, int16_t hi_packed) {
+__device__ __forceinline__ uint32_t pack_i8x4_from_i16x2(const int16_t lo_packed, const int16_t hi_packed) {
     return ((uint32_t)(uint16_t)lo_packed) | ((uint32_t)(uint16_t)hi_packed << 16);
 }
 
 
 __device__ __forceinline__ uint16_t pack_nib2(
-    uint8_t top,
-    uint8_t bot
+    const uint8_t top,
+    const uint8_t bot
 ) {
     return ((uint16_t)(top & 0xF)) | (((uint16_t)(bot & 0xF)) << 4);
 
@@ -191,8 +191,8 @@ __device__ __forceinline__ void stage_load(
 }
 
 __device__ __forceinline__ void stage_decode(
-    const ulonglong2& qwT,
-    const ulonglong2& qwB,
+    const ulonglong2 qwT,
+    const ulonglong2 qwB,
     const int curr_t, // 0,...,3
     const int src_t, // t=0 (f=0), t=2 (f=1)
     const int64_t groupID,
@@ -200,7 +200,7 @@ __device__ __forceinline__ void stage_decode(
 ) {    
 
     //__activemask(); better to use entire warp acc to nvidia programming guide
-    unsigned mask = __activemask();//0xFFFFFFFF; 
+    unsigned mask = 0xFFFFFFFF; 
 
     const ulonglong2 qwTop = shfl_u64x2(qwT, ((int)groupID << 2) + src_t, mask);
     const ulonglong2 qwBot = shfl_u64x2(qwB, ((int)groupID << 2) + (src_t + 1), mask);
@@ -243,15 +243,15 @@ __device__ __forceinline__ void stage_decode(
 
 
 
-__device__ __forceinline__ uint32_t park_tok(uint32_t tok, int t) {
+__device__ __forceinline__ uint32_t park_tok(const uint32_t tok, const int t) {
     uint32_t meta_top = 0u, meta_bot = 0u;
     #pragma unroll
     for (int i = 0; i < 4; ++i) {
-        uint32_t pkt = (t==i)? tok : __shfl_xor_sync(0xFFFFFFFFu, tok, (t ^ i), 4);
+        uint32_t pkt = __shfl_xor_sync(0xFFFFFFFFu, tok, (t ^ i), 4);
         meta_top |= (pkt & 0xFu)        << (i << 2);
         meta_bot |= ((pkt >> 4) & 0xFu) << (i << 2);
     }
-    return meta_top | (meta_bot << 16);
+    return (uint32_t)(meta_top | (meta_bot << 16));
 }
 
 
@@ -287,12 +287,12 @@ __device__ __forceinline__ uint32_t park(const StageOut& out, int t) {
     return 0u;
 }
 
-__device__ __forceinline__ uint32_t park_h0(const StageOut& out, int t) {
+__device__ __forceinline__ uint32_t park_h0(const StageOut& out, const int t) {
     const uint32_t e0_0_3 = park_tok((uint32_t)out.nib_h0_lo, t);
     const uint32_t e0_4_7 = park_tok((uint32_t)out.nib_h0_hi, t);
     return (t & 1) ? e0_4_7 : e0_0_3;  // even->0..15, odd->16..31
 }
-__device__ __forceinline__ uint32_t park_h1(const StageOut& out, int t) {
+__device__ __forceinline__ uint32_t park_h1(const StageOut& out, const int t) {
     const uint32_t e1_0_3 = park_tok((uint32_t)out.nib_h1_lo, t);
     const uint32_t e1_4_7 = park_tok((uint32_t)out.nib_h1_hi, t);
     return (t & 1) ? e1_4_7 : e1_0_3;  // even->0..15, odd->16..31
@@ -326,8 +326,8 @@ __device__ __forceinline__ void store_tile_swiglu(
     int64_t m_base, int64_t m_end,
     int groupID, int t,
     int64_t oc_base,
-    const float4& gate4,
-    const float4& up4
+    const float4 gate4,
+    const float4 up4
 ){
     #pragma unroll
     for (int j=0;j<4;++j){
@@ -371,7 +371,7 @@ __device__ __forceinline__ void store(
     int64_t m_base, int64_t m_end,
     int groupID, int t,
     int64_t oc_base,
-    const float4& D4
+    const float4 D4
 ){
     #pragma unroll
     for (int j=0;j<4;++j){
@@ -430,7 +430,7 @@ __device__ __forceinline__ void ldsmB(
 
 
 template<int F>
-__device__ __forceinline__ void mma(const uint4& a, const uint4& b, const uint32_t e, float4& c) {
+__device__ __forceinline__ void mma(const uint4 a, const uint4 b, const uint32_t e, float4& c) {
   
   const float4 z = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
 
@@ -716,7 +716,7 @@ __global__ void phantom_usp14_w4a16_sym_sm80_fmoe_w2AS_mm(
 
     stage_load(W2, qwTop, qwBot, (int)t, 0, uid, 0, G2, R, oc_base, groupID);
 
-    stage_decode(qwTop, qwBot, (int)t, 0, groupID, out);
+    stage_decode(qwTop, qwBot, (int)t, 0, (int)groupID, out);
 
     scales_out = out.sc_pack;
 
@@ -771,7 +771,7 @@ __global__ void phantom_usp14_w4a16_sym_sm80_fmoe_w2AS_mm(
 
             if (g2 < G2) {
 
-                stage_decode(qwTop, qwBot, (int)t, 2, groupID, out);
+                stage_decode(qwTop, qwBot, (int)t, 2, (int)groupID, out);
                 
                 scales_out = out.sc_pack;
 
