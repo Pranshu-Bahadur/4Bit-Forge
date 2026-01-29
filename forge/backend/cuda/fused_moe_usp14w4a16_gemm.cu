@@ -140,7 +140,7 @@ __device__ __forceinline__ void decode(
     const uint32_t pair = idx2 >> 1;
     const uint32_t slot = idx2 & 1;
 
-    meta_nibble = (pair == 0) ? (uint8_t)0x4 : (uint8_t)0xE;
+    meta_nibble = (pair == 0) ? (uint8_t)0b0010 : (uint8_t)0b1110;
     
     const int8_t v0 = (slot == 0) ? w : (int8_t)0; //
     const int8_t v1 = (slot == 0) ? (int8_t)0 : w;
@@ -168,8 +168,8 @@ __device__ __forceinline__ uint16_t pack_nib2(
 
 __device__ __forceinline__ void stage_load(
     const __restrict__ ulonglong2* W,
-    ulonglong2 qwTop,
-    ulonglong2 qwBot,
+    ulonglong2& qwTop,
+    ulonglong2& qwBot,
     const int curr_t, // 0,...,3
     const int src_t, // t=0 (f=0), t=2 (f=1)
     const int64_t uid,
@@ -191,8 +191,8 @@ __device__ __forceinline__ void stage_load(
 }
 
 __device__ __forceinline__ void stage_decode(
-    const ulonglong2 qwT,
-    const ulonglong2 qwB,
+    const ulonglong2& qwT,
+    const ulonglong2& qwB,
     const int curr_t, // 0,...,3
     const int src_t, // t=0 (f=0), t=2 (f=1)
     const int64_t groupID,
@@ -554,8 +554,8 @@ __global__ void phantom_usp14_w4a16_sym_sm80_fmoe_w13AS_mm_phase(
         fscales_up.z = bf16_bits_to_f32(scales_up.z);
         fscales_up.w = bf16_bits_to_f32(scales_up.w);
 
-        ldsmB(&XS[(((int64_t)0 << 6) + ((int64_t)0 << 5)) * NTOK], bh0);
-        ldsmB(&XS[(((int64_t)0 << 6) + ((int64_t)1 << 5)) * NTOK], bh1);
+        ldsmB((void*)XS[(((int64_t)0 << 6) + ((int64_t)0 << 5)) * NTOK], bh0);
+        ldsmB((void*)XS[(((int64_t)0 << 6) + ((int64_t)1 << 5)) * NTOK], bh1);
 
         bf16x2x2_from_i8x4(gate.top_h0, gate_ah0.x, gate_ah0.y);
         bf16x2x2_from_i8x4(gate.bot_h0, gate_ah0.z, gate_ah0.w);
@@ -592,7 +592,7 @@ __global__ void phantom_usp14_w4a16_sym_sm80_fmoe_w13AS_mm_phase(
             mma<0>(up_ah0, bh0, metadata_up0, C3);
 
             if (g2 < G2) {
-                ldsmB(&XS[((g2 << 6) + ((int64_t)0 << 5)) * NTOK], bh0);
+                ldsmB((void*)&XS[((g2 << 6) + ((int64_t)0 << 5)) * NTOK], bh0);
             }
 
             D1.x = __fmaf_rn(C1.x, fscales_gate.x, D1.x);
@@ -603,7 +603,7 @@ __global__ void phantom_usp14_w4a16_sym_sm80_fmoe_w13AS_mm_phase(
             mma<1>(gate_ah1, bh1, metadata_gate1, C1);
 
             if (g2 < G2) {
-                ldsmB(&XS[((g2 << 6) + ((int64_t)1 << 5)) * NTOK], bh1);
+                ldsmB((void*)&XS[((g2 << 6) + ((int64_t)1 << 5)) * NTOK], bh1);
             }
 
             D3.x = __fmaf_rn(C3.x, fscales_up.x, D3.x);
@@ -729,8 +729,8 @@ __global__ void phantom_usp14_w4a16_sym_sm80_fmoe_w2AS_mm(
     fscales_out.w = bf16_bits_to_f32(scales_out.w);
 
 
-    ldsmB(&XS[(((int64_t)0 << 6) + ((int64_t)0 << 5)) * NTOK], bh0);
-    ldsmB(&XS[(((int64_t)0 << 6) + ((int64_t)1 << 5)) * NTOK], bh1);
+    ldsmB((void*)&XS[(((int64_t)0 << 6) + ((int64_t)0 << 5)) * NTOK], bh0);
+    ldsmB((void*)&XS[(((int64_t)0 << 6) + ((int64_t)1 << 5)) * NTOK], bh1);
 
     bf16x2x2_from_i8x4(out.top_h0, out_ah0.x, out_ah0.y);
     bf16x2x2_from_i8x4(out.bot_h0, out_ah0.z, out_ah0.w);
@@ -749,14 +749,14 @@ __global__ void phantom_usp14_w4a16_sym_sm80_fmoe_w2AS_mm(
             mma<1>(out_ah1, bh1, metadata_out1, C2);
 
              if (g2 < G2) {
-                ldsmB(&XS[((g2 << 6) + ((int64_t)1 << 5)) * NTOK], bh1);
+                ldsmB((void*)&XS[((g2 << 6) + ((int64_t)1 << 5)) * NTOK], bh1);
             }
 
 
             mma<0>(out_ah0, bh0, metadata_out0, C1);
 
             if (g2 < G2) {
-                ldsmB(&XS[((g2 << 6) + ((int64_t)0 << 5)) * NTOK], bh0);
+                ldsmB((void*)&XS[((g2 << 6) + ((int64_t)0 << 5)) * NTOK], bh0);
             }
 
             D.x = __fmaf_rn(C1.x, fscales_out.x, D.x);
