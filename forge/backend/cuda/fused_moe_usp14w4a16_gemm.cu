@@ -421,7 +421,7 @@ __device__ __forceinline__ void ldsmB(
 ) {
     const uint32_t smem = static_cast<uint32_t>(__cvta_generic_to_shared(XS_ptr));
     asm volatile(
-        "ldmatrix.sync.aligned.m8n8.x4.shared.b16 {%0, %1, %2, %3}, [%4];\n"
+        "ldmatrix.sync.aligned.m8n8.x4.trans.shared.b16 {%0, %1, %2, %3}, [%4];\n"
         : "=r"(b.x), "=r"(b.y), "=r"(b.z), "=r"(b.w)
         : "r"(smem)
     );
