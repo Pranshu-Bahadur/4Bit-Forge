@@ -168,8 +168,8 @@ __device__ __forceinline__ uint16_t pack_nib2(
 
 __device__ __forceinline__ void stage_load(
     const __restrict__ ulonglong2* W,
-    ulonglong2& qwTop,
-    ulonglong2& qwBot,
+    ulonglong2 qwTop,
+    ulonglong2 qwBot,
     const int curr_t, // 0,...,3
     const int src_t, // t=0 (f=0), t=2 (f=1)
     const int64_t uid,
