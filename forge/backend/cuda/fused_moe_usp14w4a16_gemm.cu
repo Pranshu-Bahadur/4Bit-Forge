@@ -140,7 +140,7 @@ __device__ __forceinline__ void decode(
     const uint32_t pair = idx2 >> 1;
     const uint32_t slot = idx2 & 1;
 
-    meta_nibble = (pair == 0) ? (uint8_t)0x4 : (uint8_t)0xE;
+    meta_nibble = (pair == 0) ? (uint8_t)0b0100 : (uint8_t)0b1110;
     
     const int8_t v0 = (slot == 0) ? w : (int8_t)0; //
     const int8_t v1 = (slot == 0) ? (int8_t)0 : w;
@@ -401,7 +401,7 @@ __device__ __forceinline__ void ldsmB(
 ) {
     uint32_t smem = static_cast<uint32_t>(__cvta_generic_to_shared(XS_ptr));
     asm volatile(
-        "ldmatrix.sync.aligned.m8n8.x4.shared.b16 {%0, %1, %2, %3}, [%4];\n"
+        "ldmatrix.sync.aligned.m8n8.x4.trans.shared.b16 {%0, %1, %2, %3}, [%4];\n"
         : "=r"(b.x), "=r"(b.y), "=r"(b.z), "=r"(b.w)
         : "r"(smem)
     );
