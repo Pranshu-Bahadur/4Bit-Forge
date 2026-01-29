@@ -241,6 +241,8 @@ __device__ __forceinline__ void stage_decode(
 }
 
 
+/*
+
 __device__ __forceinline__ uint32_t park_tok(uint32_t tok, int t) {
     uint32_t meta_top = 0u, meta_bot = 0u;
     #pragma unroll
@@ -251,6 +253,22 @@ __device__ __forceinline__ uint32_t park_tok(uint32_t tok, int t) {
     }
     return meta_top | (meta_bot << 16);
 }
+*/
+
+__device__ __forceinline__ uint32_t park_tok(uint32_t tok, int t) {
+    uint32_t meta_top = 0u, meta_bot = 0u;
+    #pragma unroll
+    for (int i = 0; i < 4; ++i) {
+        uint32_t pkt = __shfl_xor_sync(0xFFFFFFFFu, tok, (t ^ i), 4);
+
+        int dst = (3 - i);  // <-- reverse nibble order
+
+        meta_top |= (pkt & 0xFu)        << (dst << 2);
+        meta_bot |= ((pkt >> 4) & 0xFu) << (dst << 2);
+    }
+    return meta_top | (meta_bot << 16);
+}
+
 
 
 
