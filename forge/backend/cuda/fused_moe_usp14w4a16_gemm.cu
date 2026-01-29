@@ -401,7 +401,7 @@ __device__ __forceinline__ void ldsmB(
 ) {
     uint32_t smem = static_cast<uint32_t>(__cvta_generic_to_shared(XS_ptr));
     asm volatile(
-        "ldmatrix.sync.aligned.m8n8.x4.trans.shared.b16 {%0, %1, %2, %3}, [%4];\n"
+        "ldmatrix.sync.aligned.m8n8.x4.shared.b16 {%0, %1, %2, %3}, [%4];\n"
         : "=r"(b.x), "=r"(b.y), "=r"(b.z), "=r"(b.w)
         : "r"(smem)
     );
@@ -420,7 +420,7 @@ __device__ __forceinline__ void mma(const uint4 a, const uint4 b, const uint32_t
       "{%0,%1,%2,%3}, {%4,%5,%6,%7}, {%8,%9,%10,%11}, {%12,%13,%14,%15}, %16, 0x0;\n"
       : "=f"(c.x), "=f"(c.y), "=f"(c.z), "=f"(c.w)
       : "r"(a.x), "r"(a.y), "r"(a.z), "r"(a.w),
-        "r"(b.y), "r"(b.x), "r"(b.w), "r"(b.z),
+        "r"(b.x), "r"(b.y), "r"(b.z), "r"(b.w),
         "f"(z.x), "f"(z.y), "f"(z.z), "f"(z.w),
         "r"(e)
     );
@@ -430,7 +430,7 @@ __device__ __forceinline__ void mma(const uint4 a, const uint4 b, const uint32_t
       "{%0,%1,%2,%3}, {%4,%5,%6,%7}, {%8,%9,%10,%11}, {%12,%13,%14,%15}, %16, 0x1;\n"
       : "=f"(c.x), "=f"(c.y), "=f"(c.z), "=f"(c.w)
       : "r"(a.x), "r"(a.y), "r"(a.z), "r"(a.w),
-        "r"(b.y), "r"(b.x), "r"(b.w), "r"(b.z),
+        "r"(b.x), "r"(b.y), "r"(b.z), "r"(b.w),
         "f"(z.x), "f"(z.y), "f"(z.z), "f"(z.w),
         "r"(e)
     );
