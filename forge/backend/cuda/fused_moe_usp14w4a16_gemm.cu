@@ -420,7 +420,7 @@ __device__ __forceinline__ void mma(const uint4 a, const uint4 b, const uint32_t
       "{%0,%1,%2,%3}, {%4,%5,%6,%7}, {%8,%9,%10,%11}, {%12,%13,%14,%15}, %16, 0x0;\n"
       : "=f"(c.x), "=f"(c.y), "=f"(c.z), "=f"(c.w)
       : "r"(a.x), "r"(a.y), "r"(a.z), "r"(a.w),
-        "r"(b.x), "r"(b.y), "r"(b.z), "r"(b.w),
+        "r"(b.y), "r"(b.x), "r"(b.w), "r"(b.z),
         "f"(z.x), "f"(z.y), "f"(z.w), "f"(z.z),
         "r"(e)
     );
@@ -430,14 +430,15 @@ __device__ __forceinline__ void mma(const uint4 a, const uint4 b, const uint32_t
       "{%0,%1,%2,%3}, {%4,%5,%6,%7}, {%8,%9,%10,%11}, {%12,%13,%14,%15}, %16, 0x1;\n"
       : "=f"(c.x), "=f"(c.y), "=f"(c.z), "=f"(c.w)
       : "r"(a.x), "r"(a.y), "r"(a.z), "r"(a.w),
-        "r"(b.x), "r"(b.y), "r"(b.z), "r"(b.w),
+        "r"(b.y), "r"(b.x), "r"(b.w), "r"(b.z),
         "f"(z.x), "f"(z.y), "f"(z.w), "f"(z.z),
         "r"(e)
     );
   }
 }
 
-//        "f"(z), "f"(z), "f"(z), "f"(z), {%12,%13,%14,%15},
+//        "f"(z), "f"(z), "f"(z), "f"(z), {%12,%13,%14,%15},         "r"(b.x), "r"(b.y), "r"(b.z), "r"(b.w),
+
 
 
 // assuming C <= 7168 | C is K in nvidia notation
