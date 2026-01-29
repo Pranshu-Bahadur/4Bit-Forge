@@ -557,14 +557,14 @@ __global__ void phantom_usp14_w4a16_sym_sm80_fmoe_w13AS_mm_phase(
         ldsmB((void*)&XS[(((int64_t)0 << 6) + ((int64_t)0 << 5)) * NTOK], bh0);
         ldsmB((void*)&XS[(((int64_t)0 << 6) + ((int64_t)1 << 5)) * NTOK], bh1);
 
-        bf16x2x2_from_i8x4(gate.top_h0, gate_ah0.x, gate_ah0.z);
-        bf16x2x2_from_i8x4(gate.bot_h0, gate_ah0.y, gate_ah0.w);
-        bf16x2x2_from_i8x4(gate.top_h1, gate_ah1.x, gate_ah1.z);
-        bf16x2x2_from_i8x4(gate.bot_h1, gate_ah1.y, gate_ah1.w);
-        bf16x2x2_from_i8x4(up.top_h0, up_ah0.x, up_ah0.z);
-        bf16x2x2_from_i8x4(up.bot_h0, up_ah0.y, up_ah0.w);
-        bf16x2x2_from_i8x4(up.top_h1, up_ah1.x, up_ah1.z);
-        bf16x2x2_from_i8x4(up.bot_h1, up_ah1.y, up_ah1.w);
+        bf16x2x2_from_i8x4(gate.top_h0, gate_ah0.x, gate_ah0.y);
+        bf16x2x2_from_i8x4(gate.bot_h0, gate_ah0.z, gate_ah0.w);
+        bf16x2x2_from_i8x4(gate.top_h1, gate_ah1.x, gate_ah1.y);
+        bf16x2x2_from_i8x4(gate.bot_h1, gate_ah1.z, gate_ah1.w);
+        bf16x2x2_from_i8x4(up.top_h0, up_ah0.x, up_ah0.y);
+        bf16x2x2_from_i8x4(up.bot_h0, up_ah0.z, up_ah0.w);
+        bf16x2x2_from_i8x4(up.top_h1, up_ah1.x, up_ah1.y);
+        bf16x2x2_from_i8x4(up.bot_h1, up_ah1.z, up_ah1.w);
         
         for (int64_t g2 = 1; g2 < G2+1; ++g2) {
 
@@ -644,14 +644,14 @@ __global__ void phantom_usp14_w4a16_sym_sm80_fmoe_w13AS_mm_phase(
                 fscales_up.z = bf16_bits_to_f32(scales_up.z);
                 fscales_up.w = bf16_bits_to_f32(scales_up.w);
                         
-                bf16x2x2_from_i8x4(gate.top_h0, gate_ah0.x, gate_ah0.z);
-                bf16x2x2_from_i8x4(gate.bot_h0, gate_ah0.y, gate_ah0.w);
-                bf16x2x2_from_i8x4(gate.top_h1, gate_ah1.x, gate_ah1.z);
-                bf16x2x2_from_i8x4(gate.bot_h1, gate_ah1.y, gate_ah1.w);
-                bf16x2x2_from_i8x4(up.top_h0, up_ah0.x, up_ah0.z);
-                bf16x2x2_from_i8x4(up.bot_h0, up_ah0.y, up_ah0.w);
-                bf16x2x2_from_i8x4(up.top_h1, up_ah1.x, up_ah1.z);
-                bf16x2x2_from_i8x4(up.bot_h1, up_ah1.y, up_ah1.w);
+                bf16x2x2_from_i8x4(gate.top_h0, gate_ah0.x, gate_ah0.y);
+                bf16x2x2_from_i8x4(gate.bot_h0, gate_ah0.z, gate_ah0.w);
+                bf16x2x2_from_i8x4(gate.top_h1, gate_ah1.x, gate_ah1.y);
+                bf16x2x2_from_i8x4(gate.bot_h1, gate_ah1.z, gate_ah1.w);
+                bf16x2x2_from_i8x4(up.top_h0, up_ah0.x, up_ah0.y);
+                bf16x2x2_from_i8x4(up.bot_h0, up_ah0.z, up_ah0.w);
+                bf16x2x2_from_i8x4(up.top_h1, up_ah1.x, up_ah1.y);
+                bf16x2x2_from_i8x4(up.bot_h1, up_ah1.z, up_ah1.w);
             }
         }
 
@@ -732,10 +732,10 @@ __global__ void phantom_usp14_w4a16_sym_sm80_fmoe_w2AS_mm(
     ldsmB((void*)&XS[(((int64_t)0 << 6) + ((int64_t)0 << 5)) * NTOK], bh0);
     ldsmB((void*)&XS[(((int64_t)0 << 6) + ((int64_t)1 << 5)) * NTOK], bh1);
 
-    bf16x2x2_from_i8x4(out.top_h0, out_ah0.x, out_ah0.z);
-    bf16x2x2_from_i8x4(out.bot_h0, out_ah0.y, out_ah0.w);
-    bf16x2x2_from_i8x4(out.top_h1, out_ah1.x, out_ah1.z);
-    bf16x2x2_from_i8x4(out.bot_h1, out_ah1.y, out_ah1.w);
+    bf16x2x2_from_i8x4(out.top_h0, out_ah0.x, out_ah0.y);
+    bf16x2x2_from_i8x4(out.bot_h0, out_ah0.z, out_ah0.w);
+    bf16x2x2_from_i8x4(out.top_h1, out_ah1.x, out_ah1.y);
+    bf16x2x2_from_i8x4(out.bot_h1, out_ah1.z, out_ah1.w);
         
     for (int64_t g2 = 1; g2 < G2+1; ++g2) {
 
@@ -783,10 +783,10 @@ __global__ void phantom_usp14_w4a16_sym_sm80_fmoe_w2AS_mm(
                 metadata_out0 = park_h0(out, (int)t);
                 metadata_out1 = park_h1(out, (int)t);
 
-                bf16x2x2_from_i8x4(out.top_h0, out_ah0.x, out_ah0.z);
-                bf16x2x2_from_i8x4(out.bot_h0, out_ah0.y, out_ah0.w);
-                bf16x2x2_from_i8x4(out.top_h1, out_ah1.x, out_ah1.z);
-                bf16x2x2_from_i8x4(out.bot_h1, out_ah1.y, out_ah1.w);
+                bf16x2x2_from_i8x4(out.top_h0, out_ah0.x, out_ah0.y);
+                bf16x2x2_from_i8x4(out.bot_h0, out_ah0.z, out_ah0.w);
+                bf16x2x2_from_i8x4(out.top_h1, out_ah1.x, out_ah1.y);
+                bf16x2x2_from_i8x4(out.bot_h1, out_ah1.z, out_ah1.w);
             }
     }
     store(Y, R, m_base, m_end, (int)groupID, (int)t, oc_base, D);
