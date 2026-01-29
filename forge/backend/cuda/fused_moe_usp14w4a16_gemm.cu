@@ -146,8 +146,8 @@ __device__ __forceinline__ void decode(
     const int8_t v1 = (slot == 0) ? (int8_t)0 : w;
 
     const uint16_t u =
-        (uint16_t)(uint8_t)v0 |
-        ((uint16_t)(uint8_t)v1 << 8);
+        (uint16_t)(uint8_t)v1 |
+        ((uint16_t)(uint8_t)v0 << 8);
     v01_packed = (int16_t)u;
 }
 
