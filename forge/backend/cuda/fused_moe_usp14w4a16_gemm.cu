@@ -126,8 +126,8 @@ struct StageOut {
 __device__ __forceinline__ void decode(
     uint64_t u64,
     int chunk_i,
-    int16_t& v01_packed,    
-    uint8_t& meta_nibble
+    int16_t v01_packed,    
+    uint8_t meta_nibble
 ) {
     const uint32_t qw32  = (uint32_t)(u64 & 0xFFFFFFFFull);
     const uint32_t hi32  = (uint32_t)(u64 >> 32);
