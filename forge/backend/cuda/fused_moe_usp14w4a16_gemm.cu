@@ -430,7 +430,7 @@ __device__ __forceinline__ void ldsmB(
 
 
 template<int F>
-__device__ __forceinline__ void mma(const uint4 a, const uint4 b, const uint32_t e, float4& c) {
+__device__ __forceinline__ void mma(const uint4& a, const uint4& b, const uint32_t& e, float4& c) {
   
   const float4 z = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
 
