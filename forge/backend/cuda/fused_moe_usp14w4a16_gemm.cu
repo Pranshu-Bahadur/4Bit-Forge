@@ -141,7 +141,7 @@ __device__ __forceinline__ void decode(
     const uint32_t pair = idx2 >> 1;
     const uint32_t slot = idx2 & 1;
 
-    meta_nibble = (pair == 0) ? (uint8_t)0b0100 : (uint8_t)0b1110;
+    meta_nibble = (pair == 0) ? (uint8_t)0x4 : (uint8_t)0xE;
     
     const int8_t v0 = (slot == 0) ? w : (int8_t)0; //
     const int8_t v1 = (slot == 0) ? (int8_t)0 : w;
@@ -228,14 +228,14 @@ __device__ __forceinline__ void stage_decode(
     decode(qwBot.y, i_hi, bot.w, meta_nib_bot.w);
 
     out.top_h0 = pack_i8x4_from_i16x2(top.x, top.y);
-    out.top_h1 = pack_i8x4_from_i16x2(top.z, top.w);
     out.bot_h0 = pack_i8x4_from_i16x2(bot.x, bot.y);
+    out.top_h1 = pack_i8x4_from_i16x2(top.z, top.w);
     out.bot_h1 = pack_i8x4_from_i16x2(bot.z, bot.w);
 
-    out.nib_h0_lo = pack_nib2(meta_nib_top.x, meta_nib_top.y); // 0...3
-    out.nib_h0_hi = pack_nib2(meta_nib_bot.x, meta_nib_bot.y); // 4...7
-    out.nib_h1_lo = pack_nib2(meta_nib_top.z, meta_nib_top.w);
-    out.nib_h1_hi = pack_nib2(meta_nib_bot.z, meta_nib_bot.w);
+    out.nib_h0_lo = pack_nib2(meta_nib_top.x, meta_nib_bot.x); // 0...3
+    out.nib_h0_hi = pack_nib2(meta_nib_top.y, meta_nib_bot.y); // 4...7
+    out.nib_h1_lo = pack_nib2(meta_nib_top.z, meta_nib_bot.z);
+    out.nib_h1_hi = pack_nib2(meta_nib_bot.w, meta_nib_bot.w);
 }
 
 
@@ -245,7 +245,7 @@ __device__ __forceinline__ uint32_t park_tok(const uint32_t tok, const int t) {
     uint32_t meta_top = 0u, meta_bot = 0u;
     #pragma unroll
     for (int i = 0; i < 4; ++i) {
-        uint32_t pkt = __shfl_xor_sync(0xFFFFFFFFu, tok, (t ^ i));
+        uint32_t pkt = __shfl_xor_sync(0xFFFFFFFFu, tok, (t ^ i), 4);
         meta_top |= (pkt & 0xFu)        << (i << 2);
         meta_bot |= ((pkt >> 4) & 0xFu) << (i << 2);
     }
@@ -445,11 +445,6 @@ __device__ __forceinline__ void mma(const __nv_bfloat162* frag_a, const __nv_bfl
         "r"(e)
     );
   }
-
-  //frag_c.x = c[0];
-  //frag_c.y = c[1];
-  //frag_c.z = c[2];
-  //frag_c.w = c[3];
 }
 
 
