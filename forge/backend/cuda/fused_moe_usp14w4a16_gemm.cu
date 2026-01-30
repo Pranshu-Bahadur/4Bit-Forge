@@ -126,7 +126,7 @@ struct StageOut {
 __device__ __forceinline__ void decode(
     const uint64_t u64,
     const int chunk_i,
-    int16_t& v01_packed,    
+    uint16_t& v01_packed,    
     uint8_t& meta_nibble
 ) {
     const uint32_t qw32  = (uint32_t)(u64 & 0xFFFFFFFFull);
@@ -145,15 +145,12 @@ __device__ __forceinline__ void decode(
     const int8_t v0 = (slot == 0) ? w : (int8_t)0; //
     const int8_t v1 = (slot == 0) ? (int8_t)0 : w;
 
-    const uint16_t u =
-        (uint16_t)(uint8_t)v0 |
-        ((uint16_t)(uint8_t)v1 << 8);
-    v01_packed = (int16_t)u;
+    v01_packed = (*(unt16_t*)&v0) | (((*(unt16_t*)&v1) << 8));
 }
 
 
-__device__ __forceinline__ uint32_t pack_i8x4_from_i16x2(const int16_t lo_packed, const int16_t hi_packed) {
-    return ((uint32_t)(uint16_t)lo_packed) | ((uint32_t)(uint16_t)hi_packed << 16);
+__device__ __forceinline__ uint32_t pack_i8x4_from_i16x2(const uint16_t lo_packed, const uint16_t hi_packed) {
+    return ((uint32_t)(uint16_t)hi_packed) | ((uint32_t)(uint16_t)lo_packed << 16);
 }
 
 
@@ -395,7 +392,7 @@ __device__ __forceinline__ void store(
 //    b0                       b1                  b2                b3  
 //    b+0+16t+(0, 1)      b+8+16t+(0, 1)     b+16+16t+(0, 1)   b+24+16t+(0, 1)  for +n=groupID forall (b=base)
 
-/*
+
 
 __device__ __forceinline__ void ldsmB(
     const void* XS_ptr,
@@ -448,8 +445,9 @@ __device__ __forceinline__ void mma(const uint4 frag_a, const uint4 frag_b, cons
   }
 }
 
-*/
 
+
+/*
 
 __device__ __forceinline__ void ldsmB(
     const void* XS_ptr,
@@ -473,7 +471,7 @@ __device__ __forceinline__ void mma(const uint4 a, const uint4 b, const uint32_t
   if constexpr (F==0) {
     asm volatile(
       "mma.sp::ordered_metadata.sync.aligned.m16n8k32.row.col.f32.bf16.bf16.f32 "
-      "{%0,%1,%2,%3}, {%4,%5,%6,%7}, {%8,%9,%10,%11}, {%12,%13,%14,%15}, %16, 0x0;\n"
+      "{%0,%1,%2,%3}, {%4,%5,%6,%7}, {%8,%9,%10,%11}, {%12,%13,%14,%15}, %16, 0;\n"
       : "=f"(c.x), "=f"(c.y), "=f"(c.z), "=f"(c.w)
       : "r"(a.x), "r"(a.y), "r"(a.z), "r"(a.w),
         "r"(b.x), "r"(b.y), "r"(b.z), "r"(b.w),
@@ -492,6 +490,8 @@ __device__ __forceinline__ void mma(const uint4 a, const uint4 b, const uint32_t
     );
   }
 }
+
+*/
 
 
 //        "f"(z), "f"(z), "f"(z), "f"(z), {%12,%13,%14,%15},         "r"(b.x), "r"(b.y), "r"(b.z), "r"(b.w),
