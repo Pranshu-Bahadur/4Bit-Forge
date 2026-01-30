@@ -150,7 +150,7 @@ __device__ __forceinline__ void decode(
 
 
 __device__ __forceinline__ uint32_t pack_i8x4_from_i16x2(const uint16_t lo_packed, const uint16_t hi_packed) {
-    return ((uint32_t)(uint16_t)hi_packed) | ((uint32_t)(uint16_t)lo_packed << 16);
+    return ((uint32_t)(uint16_t)lo_packed) | ((uint32_t)(uint16_t)hi_packed << 16);
 }
 
 
@@ -158,7 +158,7 @@ __device__ __forceinline__ uint16_t pack_nib2(
     const uint8_t top,
     const uint8_t bot
 ) {
-    return ((uint16_t)(top & 0xF)) | (((uint16_t)(bot & 0xF)) << 4);
+    return ((uint16_t)(bot & 0xF)) | (((uint16_t)(top & 0xF)) << 4);
 
 }
 
@@ -207,8 +207,8 @@ __device__ __forceinline__ void stage_decode(
     out.sc_pack.z = (uint16_t)(qwTop.y >> 48);
     out.sc_pack.w = (uint16_t)(qwBot.y >> 48);
 
-    short4 top = make_short4(0, 0, 0, 0);
-    short4 bot = make_short4(0, 0, 0, 0);
+    ushort4 top = make_ushort4(0, 0, 0, 0);
+    ushort4 bot = make_ushort4(0, 0, 0, 0);
 
     uchar4 meta_nib_top = make_uchar4(0, 0, 0, 0);
     uchar4 meta_nib_bot = make_uchar4(0, 0, 0, 0);
