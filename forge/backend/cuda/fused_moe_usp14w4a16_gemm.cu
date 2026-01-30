@@ -413,8 +413,6 @@ __device__ __forceinline__ void ldsmB(
 
 }
 
-//trans
-
 
 
 template<int F>
