@@ -227,8 +227,8 @@ __device__ __forceinline__ void stage_decode(
     decode(qwBot.y, i_hi, bot.w, meta_nib_bot.w);
 
     out.top_h0 = pack_i8x4_from_i16x2(top.x, top.y);
-    out.bot_h0 = pack_i8x4_from_i16x2(bot.x, bot.y);
     out.top_h1 = pack_i8x4_from_i16x2(top.z, top.w);
+    out.bot_h0 = pack_i8x4_from_i16x2(bot.x, bot.y);
     out.bot_h1 = pack_i8x4_from_i16x2(bot.z, bot.w);
 
     out.nib_h0_lo = pack_nib2(meta_nib_top.x, meta_nib_top.y); // 0...3
@@ -590,11 +590,11 @@ __global__ void phantom_usp14_w4a16_sym_sm80_fmoe_w13AS_mm_phase(
 
         //metadata_gate = park(gate, (int)t);
         //metadata_up = park(up, (int)t);
-        metadata_gate0 = park_h0(gate, t);
-        metadata_gate1 = park_h1(gate, t);
+        metadata_gate0 = park_h0(gate, (int)t);
+        metadata_gate1 = park_h1(gate, (int)t);
 
-        metadata_up0   = park_h0(up, t);     // used with up_ah0
-        metadata_up1   = park_h1(up, t);     // used with up_ah1
+        metadata_up0   = park_h0(up,(int)t);     // used with up_ah0
+        metadata_up1   = park_h1(up, (int)t);     // used with up_ah1
 
         fscales_gate.x = bf16_bits_to_f32(scales_gate.x);
         fscales_gate.y = bf16_bits_to_f32(scales_gate.y);
