@@ -395,7 +395,7 @@ __device__ __forceinline__ void store(
 //    b0                       b1                  b2                b3  
 //    b+0+16t+(0, 1)      b+8+16t+(0, 1)     b+16+16t+(0, 1)   b+24+16t+(0, 1)  for +n=groupID forall (b=base)
 
-
+/*
 
 __device__ __forceinline__ void ldsmB(
     const void* XS_ptr,
@@ -409,8 +409,6 @@ __device__ __forceinline__ void ldsmB(
         : "r"(smem)
     );
 }
-
-//trans
 
 
 
@@ -450,13 +448,13 @@ __device__ __forceinline__ void mma(const uint4 frag_a, const uint4 frag_b, cons
   }
 }
 
-/*
+*/
+
 
 __device__ __forceinline__ void ldsmB(
     const void* XS_ptr,
     uint4& b
 ) {
-    //uint32_t* b = reinterpret_cast<uint32_t*>(&frag_b);
     const uint32_t smem = static_cast<uint32_t>(__cvta_generic_to_shared(XS_ptr));
     asm volatile(
         "ldmatrix.sync.aligned.m8n8.x4.trans.shared.b16 {%0, %1, %2, %3}, [%4];\n"
@@ -494,7 +492,7 @@ __device__ __forceinline__ void mma(const uint4 a, const uint4 b, const uint32_t
     );
   }
 }
-*/
+
 
 //        "f"(z), "f"(z), "f"(z), "f"(z), {%12,%13,%14,%15},         "r"(b.x), "r"(b.y), "r"(b.z), "r"(b.w),
 
@@ -523,7 +521,13 @@ __global__ void phantom_usp14_w4a16_sym_sm80_fmoe_w13AS_mm_phase(
 
     extern __shared__ __nv_bfloat16 XS[];
     
-    stage_XS<NTOK, CTA>(X, &XS, tid, m_base, m_end, C);
+    for (int64_t c = tid; c < C; c += (int64_t)blockDim.x) {
+        #pragma unroll NTOK
+        for (int64_t n = 0; n < NTOK; ++n) {
+            //contiguous along N is cleaner
+            XS[c * NTOK + n] = ((m_base + n) < m_end) ? X[(m_base + n) * C + c] : __float2bfloat16(0.0f);
+        }
+    }
     __syncthreads();
     
     const int64_t wid = tid >> 5;
@@ -738,7 +742,13 @@ __global__ void phantom_usp14_w4a16_sym_sm80_fmoe_w2AS_mm(
 
     extern __shared__ __nv_bfloat16 XS[];
     
-    stage_XS<NTOK, CTA>(X2, &XS, tid, m_base, m_end, C);
+    for (int64_t c = tid; c < C; c += (int64_t)blockDim.x) {
+        #pragma unroll NTOK
+        for (int64_t n = 0; n < NTOK; ++n) {
+            //contiguous along N is cleaner
+            XS[c * NTOK + n] = ((m_base + n) < m_end) ? X[(m_base + n) * C + c] : __float2bfloat16(0.0f);
+        }
+    }
     __syncthreads();
     
     const int64_t wid = tid >> 5;
