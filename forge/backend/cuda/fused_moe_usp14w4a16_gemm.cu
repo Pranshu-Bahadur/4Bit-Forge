@@ -145,7 +145,7 @@ __device__ __forceinline__ void decode(
     const int8_t v0 = (slot == 0) ? w : (int8_t)0; //
     const int8_t v1 = (slot == 0) ? (int8_t)0 : w;
 
-    v01_packed = (*(unt16_t*)&v0) | (((*(unt16_t*)&v1) << 8));
+    v01_packed = (*(uint16_t*)&v0) | (((*(uint16_t*)&v1) << 8));
 }
 
 
@@ -231,10 +231,10 @@ __device__ __forceinline__ void stage_decode(
     out.top_h1 = pack_i8x4_from_i16x2(top.z, top.w);
     out.bot_h1 = pack_i8x4_from_i16x2(bot.z, bot.w);
 
-    out.nib_h0_lo = pack_nib2(meta_nib_top.x, meta_nib_bot.x); // 0...3
-    out.nib_h0_hi = pack_nib2(meta_nib_top.y, meta_nib_bot.y); // 4...7
-    out.nib_h1_lo = pack_nib2(meta_nib_top.z, meta_nib_bot.z);
-    out.nib_h1_hi = pack_nib2(meta_nib_top.w, meta_nib_bot.w);
+    out.nib_h0_lo = pack_nib2(meta_nib_top.x, meta_nib_top.y); // 0...3
+    out.nib_h0_hi = pack_nib2(meta_nib_bot.x, meta_nib_bot.y); // 4...7
+    out.nib_h1_lo = pack_nib2(meta_nib_top.z, meta_nib_top.z);
+    out.nib_h1_hi = pack_nib2(meta_nib_bot.z, meta_nib_bot.w);
 }
 
 
