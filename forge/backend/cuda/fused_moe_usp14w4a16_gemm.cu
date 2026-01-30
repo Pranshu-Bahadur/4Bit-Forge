@@ -440,7 +440,7 @@ __device__ __forceinline__ void mma(const uint4 frag_a, const uint4 frag_b, cons
         "f"(z[0]), "f"(z[1]), "f"(z[2]), "f"(z[3]),
         "r"(e)
     );
-  } else {
+  } else if constexpr (F==1) {
     asm volatile(
       "mma.sp::ordered_metadata.sync.aligned.m16n8k32.row.col.f32.bf16.bf16.f32 "
       "{%0,%1,%2,%3}, {%4,%5,%6,%7}, {%8,%9,%10,%11}, {%12,%13,%14,%15}, %16, 0x1;\n"
@@ -452,10 +452,10 @@ __device__ __forceinline__ void mma(const uint4 frag_a, const uint4 frag_b, cons
     );
   }
 
-  frag_c.x = c[0];
-  frag_c.y = c[1];
-  frag_c.z = c[2];
-  frag_c.w = c[3];
+  //frag_c.x = c[0];
+  //frag_c.y = c[1];
+  //frag_c.z = c[2];
+  //frag_c.w = c[3];
 }
 
 
