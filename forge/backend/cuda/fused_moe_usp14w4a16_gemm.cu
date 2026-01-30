@@ -180,25 +180,19 @@ __device__ __forceinline__ void stage_load(
     const int64_t groupID
 ) {
 
-    qwTop = W[(uid * G2 + g2) * R  + oc_base + groupID];
-    qwBot = W[(uid * G2 + g2) * R + oc_base + groupID + 8];
-
-
-    /*
     if (curr_t==src_t) {
-        
+        qwTop = W[(uid * G2 + g2) * R  + oc_base + groupID];
     }
 
     if (curr_t==(src_t + 1)) {
-        
+        qwBot = W[(uid * G2 + g2) * R + oc_base + groupID + 8];
     }
-    */
 
 }
 
 __device__ __forceinline__ void stage_decode(
-    const ulonglong2 qwTop,
-    const ulonglong2 qwBot,
+    const ulonglong2 qwT,
+    const ulonglong2 qwB,
     const int curr_t, // 0,...,3
     const int src_t, // t=0 (f=0), t=2 (f=1)
     const int64_t groupID,
@@ -206,10 +200,10 @@ __device__ __forceinline__ void stage_decode(
 ) {    
 
     //__activemask(); better to use entire warp acc to nvidia programming guide
-    //unsigned mask = 0xFFFFFFFF; 
+    unsigned mask = 0xFFFFFFFF; 
 
-    //const ulonglong2 qwTop = shfl_u64x2(qwT, ((int)groupID << 2) + src_t, mask);
-    //const ulonglong2 qwBot = shfl_u64x2(qwB, ((int)groupID << 2) + (src_t + 1), mask);
+    const ulonglong2 qwTop = shfl_u64x2(qwT, ((int)groupID << 2) + src_t, mask);
+    const ulonglong2 qwBot = shfl_u64x2(qwB, ((int)groupID << 2) + (src_t + 1), mask);
 
     out.sc_pack.x = (uint16_t)(qwTop.x >> 48);
     out.sc_pack.y = (uint16_t)(qwBot.x >> 48);
@@ -536,8 +530,11 @@ __global__ void phantom_usp14_w4a16_sym_sm80_fmoe_w13AS_mm_phase(
     float4 fscales_gate = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
     float4 fscales_up = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
 
-    ulonglong2 qwTop = make_ulonglong2(0u, 0u);
-    ulonglong2 qwBot = make_ulonglong2(0u, 0u);
+    ulonglong2 qwTopg = make_ulonglong2(0u, 0u);
+    ulonglong2 qwBotg = make_ulonglong2(0u, 0u);
+
+    ulonglong2 qwTopu = make_ulonglong2(0u, 0u);
+    ulonglong2 qwBotu = make_ulonglong2(0u, 0u);
 
     for (int64_t phase = 0; phase < 2; ++phase) {
         
@@ -546,11 +543,11 @@ __global__ void phantom_usp14_w4a16_sym_sm80_fmoe_w13AS_mm_phase(
         D1 = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
         D3 = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
 
-        stage_load(W13, qwTop, qwBot, (int)t, 0, uid, 0, G2, R, oc_base, groupID);
-        stage_load(W13, qwTop, qwBot, (int)t, 2, uid, 0, G2, R, oc_base + (R/2), groupID);
+        stage_load(W13, qwTopg, qwBotg, (int)t, 0, uid, 0, G2, R, oc_base, groupID);
+        stage_load(W13, qwTopu, qwBotu, (int)t, 2, uid, 0, G2, R, oc_base + (R/2), groupID);
 
-        stage_decode(qwTop, qwBot, (int)t, 0, groupID, gate);
-        stage_decode(qwTop, qwBot, (int)t, 2, groupID, up);
+        stage_decode(qwTopg, qwBotg, (int)t, 0, groupID, gate);
+        stage_decode(qwTopu, qwBotu, (int)t, 2, groupID, up);
 
         scales_gate = gate.sc_pack;
         scales_up = up.sc_pack;
@@ -593,14 +590,14 @@ __global__ void phantom_usp14_w4a16_sym_sm80_fmoe_w13AS_mm_phase(
             mma<0>(gate_ah0, bh0, metadata_gate0, C1);
 
             if (g2 < G2) {
-                stage_load(W13, qwTop, qwBot, (int)t, 2, uid, g2, G2, R, oc_base, groupID);
+                stage_load(W13, qwTopg, qwBotg, (int)t, 2, uid, g2, G2, R, oc_base, groupID);
             }
             
 
             mma<1>(up_ah1, bh1, metadata_up1, C3);
 
             if (g2 < G2) {
-                stage_load(W13, qwTop, qwBot, (int)t, 0, uid, g2, G2, R, oc_base + (R/2), groupID);
+                stage_load(W13, qwTopu, qwBotu, (int)t, 0, uid, g2, G2, R, oc_base + (R/2), groupID);
             }
 
             D3.x = __fmaf_rn(C3.x, fscales_up.z, D3.x);
@@ -638,8 +635,8 @@ __global__ void phantom_usp14_w4a16_sym_sm80_fmoe_w13AS_mm_phase(
 
             if (g2 < G2) {
 
-                stage_decode(qwTop, qwBot, (int)t, 0, groupID, up);
-                stage_decode(qwTop, qwBot, (int)t, 2, groupID, gate);
+                stage_decode(qwTopg, qwBotg, (int)t, 0, groupID, up);
+                stage_decode(qwTopu, qwBotu, (int)t, 2, groupID, gate);
                 scales_gate = gate.sc_pack;
 
                 fscales_gate.x = bf16_bits_to_f32(scales_gate.x);
