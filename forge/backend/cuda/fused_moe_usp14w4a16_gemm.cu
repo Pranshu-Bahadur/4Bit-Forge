@@ -16,7 +16,7 @@ __device__ __forceinline__ float bf16_bits_to_f32(uint16_t bits) {
 template <int NTOK, int CTA>
 __device__ __forceinline__ void stage_XS(
     const __nv_bfloat16* __restrict__ X,
-    __nv_bfloat16* XS,
+    extern __shared__ __nv_bfloat16* XS,
     const int64_t tid,
     const int64_t m_base,
     const int64_t m_end,
@@ -404,7 +404,7 @@ __device__ __forceinline__ void ldsmB(
     uint32_t* b = reinterpret_cast<uint32_t*>(&frag_b);
     const uint32_t smem = static_cast<uint32_t>(__cvta_generic_to_shared(XS_ptr));
     asm volatile(
-        "ldmatrix.sync.aligned.m8n8.x4.shared.b16 {%0, %1, %2, %3}, [%4];\n"
+        "ldmatrix.sync.aligned.m8n8.x4.trans.shared.b16 {%0, %1, %2, %3}, [%4];\n"
         : "=r"(b[0]), "=r"(b[1]), "=r"(b[2]), "=r"(b[3])
         : "r"(smem)
     );
@@ -523,7 +523,7 @@ __global__ void phantom_usp14_w4a16_sym_sm80_fmoe_w13AS_mm_phase(
 
     extern __shared__ __nv_bfloat16 XS[];
     
-    stage_XS<NTOK, CTA>(X, XS, tid, m_base, m_end, C);
+    stage_XS<NTOK, CTA>(X, &XS, tid, m_base, m_end, C);
     __syncthreads();
     
     const int64_t wid = tid >> 5;
@@ -887,7 +887,7 @@ torch::Tensor usp14w4a16sym_sm80_fused_moe_w13_gemm(
     auto stream = at::cuda::getCurrentCUDAStream();
 
     dim3 block(CTA);
-    dim3 grid(((N + NTOK - 1)/NTOK), num_active_E, (((R/2) + OTILE - 1)/OTILE));
+    dim3 grid((int)((N + NTOK - 1)/NTOK), (int)num_active_E, (int)(((R/2) + OTILE - 1)/OTILE));
 
     auto W13_ptr = reinterpret_cast<const ulonglong2*>(W13.data_ptr<uint64_t>());
 
@@ -933,8 +933,8 @@ torch::Tensor usp14w4a16sym_sm80_fused_moe_w2_gemm(
 
     auto stream = at::cuda::getCurrentCUDAStream();
 
-    dim3 block(CTA);
-    dim3 grid(((N + NTOK - 1)/NTOK), num_active_E, ((R + OTILE - 1)/OTILE));
+    dim3 block((int)CTA);
+    dim3 grid((int)((N + NTOK - 1)/NTOK), (int)num_active_E, (int)((R + OTILE - 1)/OTILE));
 
     auto W2_ptr = reinterpret_cast<const ulonglong2*>(W2.data_ptr<uint64_t>());
 
