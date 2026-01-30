@@ -247,7 +247,7 @@ __device__ __forceinline__ uint32_t park_tok(const uint32_t tok, const int t) {
     uint32_t meta_top = 0u, meta_bot = 0u;
     #pragma unroll
     for (int i = 0; i < 4; ++i) {
-        uint32_t pkt = __shfl_xor_sync(0xFFFFFFFFu, tok, (t ^ i), 4);
+        uint32_t pkt = __shfl_xor_sync(0xFFFFFFFFu, tok, (t ^ i));
         meta_top |= (pkt & 0xFu)        << (i << 2);
         meta_bot |= ((pkt >> 4) & 0xFu) << (i << 2);
     }
@@ -290,12 +290,20 @@ __device__ __forceinline__ uint32_t park(const StageOut& out, int t) {
 __device__ __forceinline__ uint32_t park_h0(const StageOut& out, const int t) {
     const uint32_t e0_0_3 = park_tok((uint32_t)out.nib_h0_lo, t);
     const uint32_t e0_4_7 = park_tok((uint32_t)out.nib_h0_hi, t);
-    return (t & 1) ? e0_4_7 : e0_0_3;  // even->0..15, odd->16..31
+    if (t==0):
+        return e0_0_3;
+    if (t==1):
+        return e0_4_7;
+    return (uint32_t)0u;  // even->0..15, odd->16..31
 }
 __device__ __forceinline__ uint32_t park_h1(const StageOut& out, const int t) {
     const uint32_t e1_0_3 = park_tok((uint32_t)out.nib_h1_lo, t);
     const uint32_t e1_4_7 = park_tok((uint32_t)out.nib_h1_hi, t);
-    return (t & 1) ? e1_4_7 : e1_0_3;  // even->0..15, odd->16..31
+    if (t==2):
+        return e1_0_3;
+    if (t==3):
+        return e1_4_7;
+    return (uint32_t)0u;  // even->0..15, odd->16..31
 }
 
 
