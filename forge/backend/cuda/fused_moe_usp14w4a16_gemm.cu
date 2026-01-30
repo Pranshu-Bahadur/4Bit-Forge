@@ -16,7 +16,7 @@ __device__ __forceinline__ float bf16_bits_to_f32(uint16_t bits) {
 template <int NTOK, int CTA>
 __device__ __forceinline__ void stage_XS(
     const __nv_bfloat16* __restrict__ X,
-    extern __shared__ __nv_bfloat16* XS,
+    __nv_bfloat16* XS,
     const int64_t tid,
     const int64_t m_base,
     const int64_t m_end,
@@ -746,7 +746,7 @@ __global__ void phantom_usp14_w4a16_sym_sm80_fmoe_w2AS_mm(
         #pragma unroll NTOK
         for (int64_t n = 0; n < NTOK; ++n) {
             //contiguous along N is cleaner
-            XS[c * NTOK + n] = ((m_base + n) < m_end) ? X[(m_base + n) * C + c] : __float2bfloat16(0.0f);
+            XS[c * NTOK + n] = ((m_base + n) < m_end) ? X2[(m_base + n) * C + c] : __float2bfloat16(0.0f);
         }
     }
     __syncthreads();
