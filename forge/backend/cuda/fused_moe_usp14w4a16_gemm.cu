@@ -396,6 +396,60 @@ __device__ __forceinline__ void store(
 //    b+0+16t+(0, 1)      b+8+16t+(0, 1)     b+16+16t+(0, 1)   b+24+16t+(0, 1)  for +n=groupID forall (b=base)
 
 
+
+__device__ __forceinline__ void ldsmB(
+    const void* XS_ptr,
+    uint4& frag_b
+) {
+    uint32_t* b = reinterpret_cast<uint32_t*>(&frag_b);
+    const uint32_t smem = static_cast<uint32_t>(__cvta_generic_to_shared(XS_ptr));
+    asm volatile(
+        "ldmatrix.sync.aligned.m8n8.x4.trans.shared.b16 {%0, %1, %2, %3}, [%4];\n"
+        : "=r"(b[0]), "=r"(b[1]), "=r"(b[2]), "=r"(b[3])
+        : "r"(smem)
+    );
+}
+
+
+
+template<int F>
+__device__ __forceinline__ void mma(const uint4 frag_a, const uint4 frag_b, const uint32_t e, float4& frag_c) {
+
+  const uint32_t* a = reinterpret_cast<const uint32_t*>(&frag_a);
+  const uint32_t* b = reinterpret_cast<const uint32_t*>(&frag_b);
+
+  float* c = reinterpret_cast<float*>(&frag_c);
+  
+  const float4 frag_z = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
+
+  const float* z = reinterpret_cast<const float*>(&frag_z);
+
+
+  if constexpr (F==0) {
+    asm volatile(
+      "mma.sp::ordered_metadata.sync.aligned.m16n8k32.row.col.f32.bf16.bf16.f32 "
+      "{%0,%1,%2,%3}, {%4,%5,%6,%7}, {%8,%9,%10,%11}, {%12,%13,%14,%15}, %16, 0x0;\n"
+      : "=f"(c[0]), "=f"(c[1]), "=f"(c[2]), "=f"(c[3])
+      : "r"(a[0]), "r"(a[1]), "r"(a[2]), "r"(a[3]),
+        "r"(b[0]), "r"(b[1]), "r"(b[2]), "r"(b[3]),
+        "f"(z[0]), "f"(z[1]), "f"(z[2]), "f"(z[3]),
+        "r"(e)
+    );
+  } else {
+    asm volatile(
+      "mma.sp::ordered_metadata.sync.aligned.m16n8k32.row.col.f32.bf16.bf16.f32 "
+      "{%0,%1,%2,%3}, {%4,%5,%6,%7}, {%8,%9,%10,%11}, {%12,%13,%14,%15}, %16, 0x1;\n"
+      : "=f"(c[0]), "=f"(c[1]), "=f"(c[2]), "=f"(c[3])
+      : "r"(a[0]), "r"(a[1]), "r"(a[2]), "r"(a[3]),
+        "r"(b[0]), "r"(b[1]), "r"(b[2]), "r"(b[3]),
+        "f"(z[0]), "f"(z[1]), "f"(z[2]), "f"(z[3]),
+        "r"(e)
+    );
+  }
+}
+
+/*
+
 __device__ __forceinline__ void ldsmB(
     const void* XS_ptr,
     uint4& b
@@ -438,6 +492,7 @@ __device__ __forceinline__ void mma(const uint4 a, const uint4 b, const uint32_t
     );
   }
 }
+*/
 
 //        "f"(z), "f"(z), "f"(z), "f"(z), {%12,%13,%14,%15},         "r"(b.x), "r"(b.y), "r"(b.z), "r"(b.w),
 
