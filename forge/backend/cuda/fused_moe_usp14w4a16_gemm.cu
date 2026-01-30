@@ -399,11 +399,20 @@ __device__ __forceinline__ void ldsmB(
 ) {
     uint32_t* b = reinterpret_cast<uint32_t*>(&frag_b);
     const uint32_t smem = static_cast<uint32_t>(__cvta_generic_to_shared(XS_ptr));
+
     asm volatile(
         "ldmatrix.sync.aligned.m8n8.x4.trans.shared.b16 {%0, %1, %2, %3}, [%4];\n"
         : "=r"(b[0]), "=r"(b[1]), "=r"(b[2]), "=r"(b[3])
         : "r"(smem)
     );
+
+    frag_b.x = b[0];
+    frag_b.y = b[1];
+    frag_b.z = b[2];
+    frag_b.w = b[3];
+
+
+
 }
 
 
@@ -420,8 +429,8 @@ __device__ __forceinline__ void mma(const uint4 frag_a, const uint4 frag_b, cons
 
   const float* z = reinterpret_cast<const float*>(&frag_z);
 
-
-  if constexpr (F==0) {
+  //constexpr
+  if (F==0) {
     asm volatile(
       "mma.sp::ordered_metadata.sync.aligned.m16n8k32.row.col.f32.bf16.bf16.f32 "
       "{%0,%1,%2,%3}, {%4,%5,%6,%7}, {%8,%9,%10,%11}, {%12,%13,%14,%15}, %16, 0x0;\n"
@@ -442,6 +451,11 @@ __device__ __forceinline__ void mma(const uint4 frag_a, const uint4 frag_b, cons
         "r"(e)
     );
   }
+
+  frag_c.x = c[0];
+  frag_c.y = c[1];
+  frag_c.z = c[2];
+  frag_c.w = c[3];
 }
 
 
