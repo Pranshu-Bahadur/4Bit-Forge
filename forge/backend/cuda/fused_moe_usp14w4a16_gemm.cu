@@ -430,7 +430,7 @@ __device__ __forceinline__ void mma(const uint4 frag_a, const uint4 frag_b, cons
   const float* z = reinterpret_cast<const float*>(&frag_z);
 
   //constexpr
-  if (F==0) {
+  if constexpr (F==0) {
     asm volatile(
       "mma.sp::ordered_metadata.sync.aligned.m16n8k32.row.col.f32.bf16.bf16.f32 "
       "{%0,%1,%2,%3}, {%4,%5,%6,%7}, {%8,%9,%10,%11}, {%12,%13,%14,%15}, %16, 0x0;\n"
