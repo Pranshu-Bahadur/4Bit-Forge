@@ -288,8 +288,8 @@ __device__ __forceinline__ uint32_t park(const StageOut& out, int t) {
 }
 
 __device__ __forceinline__ uint32_t park_h0(const StageOut& out, const int t) {
-    const uint32_t e0_0_3 = park_tok((uint32_t)out.nib_h0_lo, t);
-    const uint32_t e0_4_7 = park_tok((uint32_t)out.nib_h0_hi, t);
+    uint32_t e0_0_3 = park_tok((uint32_t)out.nib_h0_lo, t);
+    uint32_t e0_4_7 = park_tok((uint32_t)out.nib_h0_hi, t);
     if (t==0):
         return e0_0_3;
     if (t==1):
@@ -297,8 +297,8 @@ __device__ __forceinline__ uint32_t park_h0(const StageOut& out, const int t) {
     return (uint32_t)0u;  // even->0..15, odd->16..31
 }
 __device__ __forceinline__ uint32_t park_h1(const StageOut& out, const int t) {
-    const uint32_t e1_0_3 = park_tok((uint32_t)out.nib_h1_lo, t);
-    const uint32_t e1_4_7 = park_tok((uint32_t)out.nib_h1_hi, t);
+    uint32_t e1_0_3 = park_tok((uint32_t)out.nib_h1_lo, t);
+    uint32_t e1_4_7 = park_tok((uint32_t)out.nib_h1_hi, t);
     if (t==2):
         return e1_0_3;
     if (t==3):
