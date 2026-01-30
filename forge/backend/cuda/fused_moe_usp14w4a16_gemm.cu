@@ -82,27 +82,28 @@ __device__ __forceinline__ uint16_t bf16bits_from_i8_small(int8_t v) {
     return (uint16_t)k_bf16_m8_p7[(int)v + 8];
 }
 
-__device__ __forceinline__ uint32_t bf16x2_from_packed_i8pair(uint16_t packed_u) {
+__device__ __forceinline__ __nv_bfloat162 bf16x2_from_packed_i8pair(uint16_t packed_u) {
     int8_t v0 = (int8_t)(packed_u & 0xFFu);
     int8_t v1 = (int8_t)((packed_u >> 8) & 0xFFu);
 
-    
+    /*
     uint16_t b0 = bf16bits_from_i8_small(v0);
     uint16_t b1 = bf16bits_from_i8_small(v1);
     return (uint32_t)b0 | ((uint32_t)b1 << 16);
-
-    /*
-    __nv_bfloat16 b0 = __float2bfloat16((float)v0);
-    __nv_bfloat16 b1 = __float2bfloat16((float)v1);
-    return ((uint32_t)(*(uint16_t*)&b0)) | ((uint32_t)(*(uint16_t*)&b1) << 16);
     */
 
+    __nv_bfloat162 frag_a;
+    
+    frag_a.x = __float2bfloat16((float)v0);
+    frag_a.y = __float2bfloat16((float)v1);
+
+    return frag_a;
 }
 
 __device__ __forceinline__ void bf16x2x2_from_i8x4(
     const uint32_t i8x4,
-    uint32_t& out_lo_bf16x2,
-    uint32_t& out_hi_bf16x2
+    __nv_bfloat162& out_lo_bf16x2,
+    __nv_bfloat162& out_hi_bf16x2
 ) {
     uint16_t lo = (uint16_t)(i8x4 & 0xFFFFu);
     uint16_t hi = (uint16_t)(i8x4 >> 16);
@@ -395,7 +396,7 @@ __device__ __forceinline__ void store(
 
 __device__ __forceinline__ void ldsmB(
     const void* XS_ptr,
-    uint4& frag_b
+    __nv_bfloat162* frag_b
 ) {
     uint32_t* b = reinterpret_cast<uint32_t*>(&frag_b);
     const uint32_t smem = static_cast<uint32_t>(__cvta_generic_to_shared(XS_ptr));
@@ -406,22 +407,15 @@ __device__ __forceinline__ void ldsmB(
         : "r"(smem)
     );
 
-    frag_b.x = b[0];
-    frag_b.y = b[1];
-    frag_b.z = b[2];
-    frag_b.w = b[3];
-
-
-
 }
 
 
 
 template<int F>
-__device__ __forceinline__ void mma(const uint4 frag_a, const uint4 frag_b, const uint32_t e, float4& frag_c) {
+__device__ __forceinline__ void mma(const __nv_bfloat162* frag_a, const __nv_bfloat162* frag_b, const uint32_t e, float4& frag_c) {
 
-  const uint32_t* a = reinterpret_cast<const uint32_t*>(&frag_a);
-  const uint32_t* b = reinterpret_cast<const uint32_t*>(&frag_b);
+  const uint32_t* a = reinterpret_cast<const uint32_t*>(frag_a);
+  const uint32_t* b = reinterpret_cast<const uint32_t*>(frag_b);
 
   float* c = reinterpret_cast<float*>(&frag_c);
   
@@ -555,16 +549,17 @@ __global__ void phantom_usp14_w4a16_sym_sm80_fmoe_w13AS_mm_phase(
     float4 D3 = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
     
     StageOut gate;
-    uint4 gate_ah0 = make_uint4(0u, 0u, 0u, 0u);
-    uint4 gate_ah1 = make_uint4(0u, 0u, 0u, 0u);
-    uint4 bh0 = make_uint4(0u, 0u, 0u, 0u);
-    uint4 bh1 = make_uint4(0u, 0u, 0u, 0u);
+    __nv_bfloat162 gate_ah0[4];
+    __nv_bfloat162 gate_ah1[4];
+
+    __nv_bfloat162 bh0[4];
+    __nv_bfloat162 bh1[4];
     uint32_t metadata_gate0 = 0u;
     uint32_t metadata_gate1 = 0u;
 
     StageOut up;
-    uint4 up_ah0 = make_uint4(0u, 0u, 0u, 0u);
-    uint4 up_ah1 = make_uint4(0u, 0u, 0u, 0u);
+    __nv_bfloat162 up_ah0[4];
+    __nv_bfloat162 up_ah1[4];
     uint32_t metadata_up0 = 0u;
     uint32_t metadata_up1 = 0u;
 
@@ -623,14 +618,14 @@ __global__ void phantom_usp14_w4a16_sym_sm80_fmoe_w13AS_mm_phase(
         ldsmB((void*)&XS[(((int64_t)0 << 6) + ((int64_t)0 << 5)) * NTOK], bh0);
         ldsmB((void*)&XS[(((int64_t)0 << 6) + ((int64_t)1 << 5)) * NTOK], bh1);
 
-        bf16x2x2_from_i8x4(gate.top_h0, gate_ah0.x, gate_ah0.y);
-        bf16x2x2_from_i8x4(gate.bot_h0, gate_ah0.z, gate_ah0.w);
-        bf16x2x2_from_i8x4(gate.top_h1, gate_ah1.x, gate_ah1.y);
-        bf16x2x2_from_i8x4(gate.bot_h1, gate_ah1.z, gate_ah1.w);
-        bf16x2x2_from_i8x4(up.top_h0, up_ah0.x, up_ah0.y);
-        bf16x2x2_from_i8x4(up.bot_h0, up_ah0.z, up_ah0.w);
-        bf16x2x2_from_i8x4(up.top_h1, up_ah1.x, up_ah1.y);
-        bf16x2x2_from_i8x4(up.bot_h1, up_ah1.z, up_ah1.w);
+        bf16x2x2_from_i8x4(gate.top_h0, gate_ah0[0], gate_ah0[1]);
+        bf16x2x2_from_i8x4(gate.bot_h0, gate_ah0[2], gate_ah0[3]);
+        bf16x2x2_from_i8x4(gate.top_h1, gate_ah1[0], gate_ah1[1]);
+        bf16x2x2_from_i8x4(gate.bot_h1, gate_ah1[2], gate_ah1[3]);
+        bf16x2x2_from_i8x4(up.top_h0, up_ah0[0], up_ah0[1]);
+        bf16x2x2_from_i8x4(up.bot_h0, up_ah0[2], up_ah0[3]);
+        bf16x2x2_from_i8x4(up.top_h1, up_ah1[0], up_ah1[1]);
+        bf16x2x2_from_i8x4(up.bot_h1, up_ah1[2], up_ah1[3]);
         
         for (int64_t g2 = 1; g2 < G2+1; ++g2) {
 
@@ -715,15 +710,15 @@ __global__ void phantom_usp14_w4a16_sym_sm80_fmoe_w13AS_mm_phase(
                 fscales_up.y = bf16_bits_to_f32(scales_up.y);
                 fscales_up.z = bf16_bits_to_f32(scales_up.z);
                 fscales_up.w = bf16_bits_to_f32(scales_up.w);
-                        
-                bf16x2x2_from_i8x4(gate.top_h0, gate_ah0.x, gate_ah0.y);
-                bf16x2x2_from_i8x4(gate.bot_h0, gate_ah0.z, gate_ah0.w);
-                bf16x2x2_from_i8x4(gate.top_h1, gate_ah1.x, gate_ah1.y);
-                bf16x2x2_from_i8x4(gate.bot_h1, gate_ah1.z, gate_ah1.w);
-                bf16x2x2_from_i8x4(up.top_h0, up_ah0.x, up_ah0.y);
-                bf16x2x2_from_i8x4(up.bot_h0, up_ah0.z, up_ah0.w);
-                bf16x2x2_from_i8x4(up.top_h1, up_ah1.x, up_ah1.y);
-                bf16x2x2_from_i8x4(up.bot_h1, up_ah1.z, up_ah1.w);
+                
+                bf16x2x2_from_i8x4(gate.top_h0, gate_ah0[0], gate_ah0[1]);
+                bf16x2x2_from_i8x4(gate.bot_h0, gate_ah0[2], gate_ah0[3]);
+                bf16x2x2_from_i8x4(gate.top_h1, gate_ah1[0], gate_ah1[1]);
+                bf16x2x2_from_i8x4(gate.bot_h1, gate_ah1[2], gate_ah1[3]);
+                bf16x2x2_from_i8x4(up.top_h0, up_ah0[0], up_ah0[1]);
+                bf16x2x2_from_i8x4(up.bot_h0, up_ah0[2], up_ah0[3]);
+                bf16x2x2_from_i8x4(up.top_h1, up_ah1[0], up_ah1[1]);
+                bf16x2x2_from_i8x4(up.bot_h1, up_ah1[2], up_ah1[3]);
             }
         }
 
@@ -774,10 +769,12 @@ __global__ void phantom_usp14_w4a16_sym_sm80_fmoe_w2AS_mm(
     float4 D = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
     
     StageOut out;
-    uint4 out_ah0 = make_uint4(0u, 0u, 0u, 0u);
-    uint4 out_ah1 = make_uint4(0u, 0u, 0u, 0u);
-    uint4 bh0 = make_uint4(0u, 0u, 0u, 0u);
-    uint4 bh1 = make_uint4(0u, 0u, 0u, 0u);
+    __nv_bfloat162 out_ah0[4];
+    __nv_bfloat162 out_ah1[4];
+
+    __nv_bfloat162 bh0[4];
+    __nv_bfloat162 bh1[4];
+
     uint32_t metadata_out0 = 0u;
     uint32_t metadata_out1 = 0u;
 
@@ -810,10 +807,10 @@ __global__ void phantom_usp14_w4a16_sym_sm80_fmoe_w2AS_mm(
     ldsmB((void*)&XS[(((int64_t)0 << 6) + ((int64_t)0 << 5)) * NTOK], bh0);
     ldsmB((void*)&XS[(((int64_t)0 << 6) + ((int64_t)1 << 5)) * NTOK], bh1);
 
-    bf16x2x2_from_i8x4(out.top_h0, out_ah0.x, out_ah0.y);
-    bf16x2x2_from_i8x4(out.bot_h0, out_ah0.z, out_ah0.w);
-    bf16x2x2_from_i8x4(out.top_h1, out_ah1.x, out_ah1.y);
-    bf16x2x2_from_i8x4(out.bot_h1, out_ah1.z, out_ah1.w);
+    bf16x2x2_from_i8x4(out.top_h0, out_ah0[0], out_ah0[1]);
+    bf16x2x2_from_i8x4(out.bot_h0, out_ah0[2], out_ah0[3]);
+    bf16x2x2_from_i8x4(out.top_h1, out_ah1[0], out_ah1[1]);
+    bf16x2x2_from_i8x4(out.bot_h1, out_ah1[2], out_ah1[3]);
         
     for (int64_t g2 = 1; g2 < G2+1; ++g2) {
 
@@ -863,10 +860,10 @@ __global__ void phantom_usp14_w4a16_sym_sm80_fmoe_w2AS_mm(
                 metadata_out0 = park_h0(out, (int)t);
                 metadata_out1 = park_h1(out, (int)t);
 
-                bf16x2x2_from_i8x4(out.top_h0, out_ah0.x, out_ah0.y);
-                bf16x2x2_from_i8x4(out.bot_h0, out_ah0.z, out_ah0.w);
-                bf16x2x2_from_i8x4(out.top_h1, out_ah1.x, out_ah1.y);
-                bf16x2x2_from_i8x4(out.bot_h1, out_ah1.z, out_ah1.w);
+                bf16x2x2_from_i8x4(out.top_h0, out_ah0[0], out_ah0[1]);
+                bf16x2x2_from_i8x4(out.bot_h0, out_ah0[2], out_ah0[3]);
+                bf16x2x2_from_i8x4(out.top_h1, out_ah1[0], out_ah1[1]);
+                bf16x2x2_from_i8x4(out.bot_h1, out_ah1[2], out_ah1[3]);
             }
     }
     store(Y, R, m_base, m_end, (int)groupID, (int)t, oc_base, D);
