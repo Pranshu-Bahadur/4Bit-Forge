@@ -180,19 +180,25 @@ __device__ __forceinline__ void stage_load(
     const int64_t groupID
 ) {
 
+    qwTop = W[(uid * G2 + g2) * R  + oc_base + groupID];
+    qwBot = W[(uid * G2 + g2) * R + oc_base + groupID + 8];
+
+
+    /*
     if (curr_t==src_t) {
-        qwTop = W[(uid * G2 + g2) * R  + oc_base + groupID];
+        
     }
 
     if (curr_t==(src_t + 1)) {
-        qwBot = W[(uid * G2 + g2) * R + oc_base + groupID + 8];
+        
     }
+    */
 
 }
 
 __device__ __forceinline__ void stage_decode(
-    const ulonglong2 qwT,
-    const ulonglong2 qwB,
+    const ulonglong2 qwTop,
+    const ulonglong2 qwBot,
     const int curr_t, // 0,...,3
     const int src_t, // t=0 (f=0), t=2 (f=1)
     const int64_t groupID,
@@ -200,10 +206,10 @@ __device__ __forceinline__ void stage_decode(
 ) {    
 
     //__activemask(); better to use entire warp acc to nvidia programming guide
-    unsigned mask = 0xFFFFFFFF; 
+    //unsigned mask = 0xFFFFFFFF; 
 
-    const ulonglong2 qwTop = shfl_u64x2(qwT, ((int)groupID << 2) + src_t, mask);
-    const ulonglong2 qwBot = shfl_u64x2(qwB, ((int)groupID << 2) + (src_t + 1), mask);
+    //const ulonglong2 qwTop = shfl_u64x2(qwT, ((int)groupID << 2) + src_t, mask);
+    //const ulonglong2 qwBot = shfl_u64x2(qwB, ((int)groupID << 2) + (src_t + 1), mask);
 
     out.sc_pack.x = (uint16_t)(qwTop.x >> 48);
     out.sc_pack.y = (uint16_t)(qwBot.x >> 48);
