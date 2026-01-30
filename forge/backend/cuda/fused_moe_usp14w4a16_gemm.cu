@@ -233,7 +233,7 @@ __device__ __forceinline__ void stage_decode(
 
     out.nib_h0_lo = pack_nib2(meta_nib_top.x, meta_nib_top.y); // 0...3
     out.nib_h0_hi = pack_nib2(meta_nib_bot.x, meta_nib_bot.y); // 4...7
-    out.nib_h1_lo = pack_nib2(meta_nib_top.z, meta_nib_top.z);
+    out.nib_h1_lo = pack_nib2(meta_nib_top.z, meta_nib_top.w);
     out.nib_h1_hi = pack_nib2(meta_nib_bot.z, meta_nib_bot.w);
 }
 
