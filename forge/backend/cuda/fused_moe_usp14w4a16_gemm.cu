@@ -398,11 +398,11 @@ __device__ __forceinline__ void ldsmB(
     const void* XS_ptr,
     __nv_bfloat162* frag_b
 ) {
-    uint32_t* b = reinterpret_cast<uint32_t*>(frag_b);
+    uint32_t* b = reinterpret_cast<uint32_t*>(&frag_b);
     const uint32_t smem = static_cast<uint32_t>(__cvta_generic_to_shared(XS_ptr));
 
     asm volatile(
-        "ldmatrix.sync.aligned.m8n8.x4.shared.b16 {%0, %1, %2, %3}, [%4];\n"
+        "ldmatrix.sync.aligned.m8n8.x4.trans.shared.b16 {%0, %1, %2, %3}, [%4];\n"
         : "=r"(b[0]), "=r"(b[1]), "=r"(b[2]), "=r"(b[3])
         : "r"(smem)
     );
@@ -416,8 +416,8 @@ __device__ __forceinline__ void ldsmB(
 template<int F>
 __device__ __forceinline__ void mma(const __nv_bfloat162* frag_a, const __nv_bfloat162* frag_b, const uint32_t e, float4& frag_c) {
 
-  const uint32_t* a = reinterpret_cast<const uint32_t*>(frag_a);
-  const uint32_t* b = reinterpret_cast<const uint32_t*>(frag_b);
+  const uint32_t* a = reinterpret_cast<const uint32_t*>(&frag_a);
+  const uint32_t* b = reinterpret_cast<const uint32_t*>(&frag_b);
 
   float* c = reinterpret_cast<float*>(&frag_c);
   
