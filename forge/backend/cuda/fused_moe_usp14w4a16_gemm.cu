@@ -393,12 +393,11 @@ __device__ __forceinline__ void store(
 //    b+0+16t+(0, 1)      b+8+16t+(0, 1)     b+16+16t+(0, 1)   b+24+16t+(0, 1)  for +n=groupID forall (b=base)
 
 
-/*
 __device__ __forceinline__ void ldsmB(
     const void* XS_ptr,
     uint4& frag_b
 ) {
-    uint32_t* b = reinterpret_cast<uint32_t*>(frag_b);
+    uint32_t* b = reinterpret_cast<uint32_t*>(&frag_b);
     const uint32_t smem = static_cast<uint32_t>(__cvta_generic_to_shared(XS_ptr));
     asm volatile(
         "ldmatrix.sync.aligned.m8n8.x4.trans.shared.b16 {%0, %1, %2, %3}, [%4];\n"
@@ -415,7 +414,7 @@ __device__ __forceinline__ void mma(const uint4 frag_a, const uint4 frag_b, cons
   const uint32_t* a = reinterpret_cast<const uint32_t*>(&frag_a);
   const uint32_t* b = reinterpret_cast<const uint32_t*>(&frag_b);
 
-  float* c = reinterpret_cast<float*>(frag_c);
+  float* c = reinterpret_cast<float*>(&frag_c);
   
   const float4 frag_z = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
 
@@ -444,10 +443,9 @@ __device__ __forceinline__ void mma(const uint4 frag_a, const uint4 frag_b, cons
     );
   }
 }
-*/
 
 
-
+/*
 
 __device__ __forceinline__ void ldsmB(
     const void* XS_ptr,
@@ -490,6 +488,8 @@ __device__ __forceinline__ void mma(const uint4 a, const uint4 b, const uint32_t
     );
   }
 }
+
+*/
 
 
 
