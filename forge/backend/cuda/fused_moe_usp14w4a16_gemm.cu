@@ -420,7 +420,7 @@ __device__ __forceinline__ void mma(const uint4 frag_a, const uint4 frag_b, cons
   const uint32_t* a = reinterpret_cast<const uint32_t*>(&frag_a);
   const uint32_t* b = reinterpret_cast<const uint32_t*>(&frag_b);
 
-  float* c = reinterpret_cast<float*>(&frag_c);
+  float* c = reinterpret_cast<float*>(frag_c);
   
   const float4 frag_z = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
 
