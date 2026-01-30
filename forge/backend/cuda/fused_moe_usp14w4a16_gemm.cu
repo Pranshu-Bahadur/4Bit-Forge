@@ -393,7 +393,7 @@ __device__ __forceinline__ void store(
 //    b+0+16t+(0, 1)      b+8+16t+(0, 1)     b+16+16t+(0, 1)   b+24+16t+(0, 1)  for +n=groupID forall (b=base)
 
 
-
+/*
 __device__ __forceinline__ void ldsmB(
     const void* XS_ptr,
     uint4& frag_b
@@ -444,10 +444,10 @@ __device__ __forceinline__ void mma(const uint4 frag_a, const uint4 frag_b, cons
     );
   }
 }
+*/
 
 
 
-/*
 
 __device__ __forceinline__ void ldsmB(
     const void* XS_ptr,
@@ -491,7 +491,7 @@ __device__ __forceinline__ void mma(const uint4 a, const uint4 b, const uint32_t
   }
 }
 
-*/
+
 
 
 //        "f"(z), "f"(z), "f"(z), "f"(z), {%12,%13,%14,%15},         "r"(b.x), "r"(b.y), "r"(b.z), "r"(b.w),
