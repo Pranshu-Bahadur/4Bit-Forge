@@ -738,7 +738,7 @@ __global__ void phantom_usp14_w4a16_sym_sm80_fmoe_w2AS_mm(
 
     extern __shared__ __nv_bfloat16 XS[];
     
-    stage_XS<NTOK, CTA>(X2, XS, tid, m_base, m_end, C);
+    stage_XS<NTOK, CTA>(X2, &XS, tid, m_base, m_end, C);
     __syncthreads();
     
     const int64_t wid = tid >> 5;
