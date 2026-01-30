@@ -140,7 +140,7 @@ __device__ __forceinline__ void decode(
     const uint32_t pair = idx2 >> 1;
     const uint32_t slot = idx2 & 1;
 
-    meta_nibble = (pair == 0) ? (uint8_t)0b0100 : (uint8_t)0b1110;
+    meta_nibble = (pair == 0) ? (uint8_t)0x4 : (uint8_t)0xE;
     
     const int8_t v0 = (slot == 0) ? w : (int8_t)0; //
     const int8_t v1 = (slot == 0) ? (int8_t)0 : w;
@@ -247,31 +247,12 @@ __device__ __forceinline__ uint32_t park_tok(const uint32_t tok, const int t) {
     uint32_t meta_top = 0u, meta_bot = 0u;
     #pragma unroll
     for (int i = 0; i < 4; ++i) {
-        uint32_t pkt = __shfl_xor_sync(0xFFFFFFFFu, tok, (t ^ i));
+        uint32_t pkt = __shfl_xor_sync(0xFFFFFFFFu, tok, (t ^ i), 4);
         meta_top |= (pkt & 0xFu)        << (i << 2);
         meta_bot |= ((pkt >> 4) & 0xFu) << (i << 2);
     }
     return (uint32_t)(meta_top | (meta_bot << 16));
 }
-
-
-/*
-__device__ __forceinline__ uint32_t park_tok(uint32_t tok, int t) {
-    uint32_t meta_top = 0u, meta_bot = 0u;
-    #pragma unroll
-    for (int i = 0; i < 4; ++i) {
-        uint32_t pkt = __shfl_xor_sync(0xFFFFFFFFu, tok, (t ^ i), 4);
-
-        int dst = (3 - i);  // <-- reverse nibble order
-
-        meta_top |= (pkt & 0xFu)        << (dst << 2);
-        meta_bot |= ((pkt >> 4) & 0xFu) << (dst << 2);
-    }
-    return meta_top | (meta_bot << 16);
-}
-*/
-
-
 
 
 __device__ __forceinline__ uint32_t park(const StageOut& out, int t) {
@@ -290,16 +271,12 @@ __device__ __forceinline__ uint32_t park(const StageOut& out, int t) {
 __device__ __forceinline__ uint32_t park_h0(const StageOut& out, const int t) {
     uint32_t e0_0_3 = park_tok((uint32_t)out.nib_h0_lo, t);
     uint32_t e0_4_7 = park_tok((uint32_t)out.nib_h0_hi, t);
-    if (t==0) return e0_0_3;
-    if (t==1) return e0_4_7;
-    return (uint32_t)0u;  // even->0..15, odd->16..31
+    return (t & 1)? e0_4_7 : e0_0_3;  // even->0..15, odd->16..31
 }
 __device__ __forceinline__ uint32_t park_h1(const StageOut& out, const int t) {
     uint32_t e1_0_3 = park_tok((uint32_t)out.nib_h1_lo, t);
     uint32_t e1_4_7 = park_tok((uint32_t)out.nib_h1_hi, t);
-    if (t==2) return e1_0_3;
-    if (t==3) return e1_4_7;
-    return (uint32_t)0u;  // even->0..15, odd->16..31
+    return (t & 1)? e1_4_7 : e1_0_3;  // even->0..15, odd->16..31
 }
 
 
@@ -421,13 +398,13 @@ __device__ __forceinline__ void store(
 
 __device__ __forceinline__ void ldsmB(
     const void* XS_ptr,
-    uint4& frag_b
+    uint4& b
 ) {
-    uint32_t* b = reinterpret_cast<uint32_t*>(&frag_b);
+    //uint32_t* b = reinterpret_cast<uint32_t*>(&frag_b);
     const uint32_t smem = static_cast<uint32_t>(__cvta_generic_to_shared(XS_ptr));
     asm volatile(
         "ldmatrix.sync.aligned.m8n8.x4.trans.shared.b16 {%0, %1, %2, %3}, [%4];\n"
-        : "=r"(b[0]), "=r"(b[1]), "=r"(b[2]), "=r"(b[3])
+        : "=r"(b.x), "=r"(b.y), "=r"(b.z), "=r"(b.w)
         : "r"(smem)
     );
 }
@@ -435,36 +412,28 @@ __device__ __forceinline__ void ldsmB(
 
 
 template<int F>
-__device__ __forceinline__ void mma(const uint4 frag_a, const uint4 frag_b, const uint32_t e, float4& frag_c) {
-
-  const uint32_t* a = reinterpret_cast<const uint32_t*>(&frag_a);
-  const uint32_t* b = reinterpret_cast<const uint32_t*>(&frag_b);
-
-  float* c = reinterpret_cast<float*>(&frag_c);
-  
-  const float4 frag_z = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
-
-  const float* z = reinterpret_cast<const float*>(&frag_z);
+__device__ __forceinline__ void mma(const uint4 a, const uint4 b, const uint32_t e, float4& c) {
+  const float4 z = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
 
 
   if constexpr (F==0) {
     asm volatile(
       "mma.sp::ordered_metadata.sync.aligned.m16n8k32.row.col.f32.bf16.bf16.f32 "
       "{%0,%1,%2,%3}, {%4,%5,%6,%7}, {%8,%9,%10,%11}, {%12,%13,%14,%15}, %16, 0x0;\n"
-      : "=f"(c[0]), "=f"(c[1]), "=f"(c[2]), "=f"(c[3])
-      : "r"(a[0]), "r"(a[1]), "r"(a[2]), "r"(a[3]),
-        "r"(b[0]), "r"(b[1]), "r"(b[2]), "r"(b[3]),
-        "f"(z[0]), "f"(z[1]), "f"(z[2]), "f"(z[3]),
+      : "=f"(c.x), "=f"(c.y), "=f"(c.z), "=f"(c.w)
+      : "r"(a.x), "r"(a.y), "r"(a.z), "r"(a.w),
+        "r"(b.x), "r"(b.y), "r"(b.z), "r"(b.w),
+        "f"(z.x), "f"(z.y), "f"(z.z), "f"(z.w),
         "r"(e)
     );
   } else {
     asm volatile(
       "mma.sp::ordered_metadata.sync.aligned.m16n8k32.row.col.f32.bf16.bf16.f32 "
       "{%0,%1,%2,%3}, {%4,%5,%6,%7}, {%8,%9,%10,%11}, {%12,%13,%14,%15}, %16, 0x1;\n"
-      : "=f"(c[0]), "=f"(c[1]), "=f"(c[2]), "=f"(c[3])
-      : "r"(a[0]), "r"(a[1]), "r"(a[2]), "r"(a[3]),
-        "r"(b[0]), "r"(b[1]), "r"(b[2]), "r"(b[3]),
-        "f"(z[0]), "f"(z[1]), "f"(z[2]), "f"(z[3]),
+      : "=f"(c.x), "=f"(c.y), "=f"(c.z), "=f"(c.w)
+      : "r"(a.x), "r"(a.y), "r"(a.z), "r"(a.w),
+        "r"(b.x), "r"(b.y), "r"(b.z), "r"(b.w),
+        "f"(z.x), "f"(z.y), "f"(z.z), "f"(z.w),
         "r"(e)
     );
   }
@@ -543,6 +512,12 @@ __global__ void phantom_usp14_w4a16_sym_sm80_fmoe_w13AS_mm_phase(
         D1 = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
         D3 = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
 
+        qwTopg = make_ulonglong2(0u, 0u);
+        qwBotg = make_ulonglong2(0u, 0u);
+
+        qwTopu = make_ulonglong2(0u, 0u);
+        qwBotu = make_ulonglong2(0u, 0u);
+
         stage_load(W13, qwTopg, qwBotg, (int)t, 0, uid, 0, G2, R, oc_base, groupID);
         stage_load(W13, qwTopu, qwBotu, (int)t, 2, uid, 0, G2, R, oc_base + (R/2), groupID);
 
@@ -590,6 +565,9 @@ __global__ void phantom_usp14_w4a16_sym_sm80_fmoe_w13AS_mm_phase(
             mma<0>(gate_ah0, bh0, metadata_gate0, C1);
 
             if (g2 < G2) {
+
+                qwTopg = make_ulonglong2(0u, 0u);
+                qwBotg = make_ulonglong2(0u, 0u);
                 stage_load(W13, qwTopg, qwBotg, (int)t, 2, uid, g2, G2, R, oc_base, groupID);
             }
             
@@ -597,6 +575,9 @@ __global__ void phantom_usp14_w4a16_sym_sm80_fmoe_w13AS_mm_phase(
             mma<1>(up_ah1, bh1, metadata_up1, C3);
 
             if (g2 < G2) {
+
+                qwTopu = make_ulonglong2(0u, 0u);
+                qwBotu = make_ulonglong2(0u, 0u);
                 stage_load(W13, qwTopu, qwBotu, (int)t, 0, uid, g2, G2, R, oc_base + (R/2), groupID);
             }
 
@@ -635,8 +616,8 @@ __global__ void phantom_usp14_w4a16_sym_sm80_fmoe_w13AS_mm_phase(
 
             if (g2 < G2) {
 
-                stage_decode(qwTopg, qwBotg, (int)t, 0, groupID, up);
-                stage_decode(qwTopu, qwBotu, (int)t, 2, groupID, gate);
+                stage_decode(qwTopu, qwBotu, (int)t, 0, groupID, up);
+                stage_decode(qwTopg, qwBotg, (int)t, 2, groupID, gate);
                 scales_gate = gate.sc_pack;
 
                 fscales_gate.x = bf16_bits_to_f32(scales_gate.x);
@@ -759,6 +740,8 @@ __global__ void phantom_usp14_w4a16_sym_sm80_fmoe_w2AS_mm(
             float4 C2 = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
 
             if (g2 < G2) {
+                qwTop = make_ulonglong2(0u, 0u);
+                qwBot = make_ulonglong2(0u, 0u);
                 stage_load(W2, qwTop, qwBot, (int)t, 2, uid, g2, G2, R, oc_base, groupID);
             }
 
