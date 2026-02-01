@@ -145,7 +145,7 @@ __device__ __forceinline__ void decode(
     const uint32_t pair = idx2 >> 1;
     const uint32_t slot = idx2 & 1;
 
-    meta_nibble = (pair == 0) ? (uint8_t)0b0100 : (uint8_t)0b1110;
+    meta_nibble = (pair == 0) ? (uint8_t)0b0010 : (uint8_t)0b0100;
     
     const int8_t v0 = (slot == 0) ? w : (int8_t)0; //
     const int8_t v1 = (slot == 0) ? (int8_t)0 : w;
@@ -247,13 +247,15 @@ __device__ __forceinline__ void stage_decode(
 
 __device__ __forceinline__ uint32_t park_tok(const uint32_t tok, const int t) {
     uint32_t meta_top = 0u, meta_bot = 0u;
+    
     #pragma unroll
     for (int i = 0; i < 4; ++i) {
         uint32_t pkt = __shfl_xor_sync(0xFFFFFFFFu, tok, (t ^ i), 4);
         meta_top |= (pkt & 0xFu)        << (i << 2);
         meta_bot |= ((pkt >> 4) & 0xFu) << (i << 2);
     }
-    return (uint32_t)(meta_bot | (meta_top << 16));
+    
+    return (uint32_t)(meta_top | (meta_bot << 16));
 }
 
 
