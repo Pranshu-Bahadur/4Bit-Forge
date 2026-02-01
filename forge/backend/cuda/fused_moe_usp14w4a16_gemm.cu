@@ -406,12 +406,19 @@ __device__ __forceinline__ void ldsmB(
     __nv_bfloat162* frag_b
 ) {
     uint32_t* b = reinterpret_cast<uint32_t*>(frag_b);
-    const uint32_t* smem = static_cast<uint32_t*>(__cvta_generic_to_shared(XS_ptr));
+
+
+    uint32_t smem_ptr;
+
+    asm volatile(
+        "{ .reg .u64 smem_ptr; cvta.to.shared.u64 smem_ptr, %1; cvt.u32.u64 %0, smem_ptr; }\n"
+            : "=r"(smem_ptr) : "l"(XS_ptr)
+    );
 
     asm volatile(
         "ldmatrix.sync.aligned.m8n8.x4.shared.b16 {%0, %1, %2, %3}, [%4];\n"
         : "=r"(b[0]), "=r"(b[1]), "=r"(b[2]), "=r"(b[3])
-        : "r"(smem)
+        : "r"(smem_ptr)
     );
 
 
