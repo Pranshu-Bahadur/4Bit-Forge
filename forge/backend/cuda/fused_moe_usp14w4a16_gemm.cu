@@ -608,8 +608,8 @@ __global__ void phantom_usp14_w4a16_sym_sm80_fmoe_w13AS_mm_phase(
         qwTopu = make_ulonglong2(0u, 0u);
         qwBotu = make_ulonglong2(0u, 0u);
 
-        stage_load(W13, qwTopg, qwBotg, (int)t, 0, uid, 0, G2, R, oc_base, groupID);
-        stage_load(W13, qwTopu, qwBotu, (int)t, 2, uid, 0, G2, R, oc_base*(R/2), groupID);
+        stage_load(W13, qwTopg, qwBotg, (int)t, 0, uid, 0, G2, R, oc_base + (R/2), groupID);
+        stage_load(W13, qwTopu, qwBotu, (int)t, 2, uid, 0, G2, R, oc_base, groupID);
 
         stage_decode(qwTopg, qwBotg, (int)t, 0, groupID, gate);
         stage_decode(qwTopu, qwBotu, (int)t, 2, groupID, up);
@@ -658,7 +658,7 @@ __global__ void phantom_usp14_w4a16_sym_sm80_fmoe_w13AS_mm_phase(
 
                 qwTopg = make_ulonglong2(0u, 0u);
                 qwBotg = make_ulonglong2(0u, 0u);
-                stage_load(W13, qwTopg, qwBotg, (int)t, 2, uid, g2, G2, R, oc_base, groupID);
+                stage_load(W13, qwTopg, qwBotg, (int)t, 2, uid, g2, G2, R, oc_base + (R/2), groupID);
             }
             
 
@@ -668,7 +668,7 @@ __global__ void phantom_usp14_w4a16_sym_sm80_fmoe_w13AS_mm_phase(
 
                 qwTopu = make_ulonglong2(0u, 0u);
                 qwBotu = make_ulonglong2(0u, 0u);
-                stage_load(W13, qwTopu, qwBotu, (int)t, 0, uid, g2, G2, R, oc_base*(R/2), groupID);
+                stage_load(W13, qwTopu, qwBotu, (int)t, 0, uid, g2, G2, R, oc_base, groupID);
             }
 
             D3.x = __fmaf_rn(C3.x, fscales_up.z, D3.x);
