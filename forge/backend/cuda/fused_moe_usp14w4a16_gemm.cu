@@ -424,7 +424,7 @@ __device__ __forceinline__ void ldsmB(
 
 }
 
-//trans
+//https://github.com/NVIDIA/cutlass/blob/a4eb0e05f6dd0403f94087b495393bdca75bf0ad/include/cute/arch/util.hpp#L92 smem ptr recast
 
 
 
