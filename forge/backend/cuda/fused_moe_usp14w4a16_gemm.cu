@@ -237,10 +237,10 @@ __device__ __forceinline__ void stage_decode(
     out.top_h1 = pack_i8x4_from_i16x2(top.z, top.w);
     out.bot_h1 = pack_i8x4_from_i16x2(bot.z, bot.w);
 
-    out.nib_h0_lo = pack_nib2(meta_nib_top.x, meta_nib_bot.x);
-    out.nib_h0_hi = pack_nib2(meta_nib_top.y, meta_nib_bot.y);
-    out.nib_h1_lo = pack_nib2(meta_nib_top.z, meta_nib_bot.z);
-    out.nib_h1_hi = pack_nib2(meta_nib_top.w, meta_nib_bot.w);
+    out.nib_h0_lo = pack_nib2(meta_nib_top.x, meta_nib_top.y);
+    out.nib_h0_hi = pack_nib2(meta_nib_bot.x, meta_nib_bot.y);
+    out.nib_h1_lo = pack_nib2(meta_nib_top.z, meta_nib_top.z);
+    out.nib_h1_hi = pack_nib2(meta_nib_bot.w, meta_nib_bot.w);
 }
 
 
@@ -274,14 +274,16 @@ __device__ __forceinline__ uint32_t park(const StageOut& out, int t) {
 }
 
 __device__ __forceinline__ uint32_t park_h0(const StageOut& out, const int t) {
-    uint32_t e0_0_3 = park_tok((uint32_t)out.nib_h0_lo, t);
-    uint32_t e0_4_7 = park_tok((uint32_t)out.nib_h0_hi, t);
-    return (t & 1)? e0_4_7 : e0_0_3;  // even->0..15, odd->16..31
+    //uint32_t e0_0_3 = park_tok((uint32_t)out.nib_h0_lo, t);
+    //uint32_t e0_4_7 = park_tok((uint32_t)out.nib_h0_hi, t);
+    //return (t & 1)? e0_4_7 : e0_0_3;  // even->0..15, odd->16..31
+
+    return (uint32_t)((uint32_t)(out.nib_h0_lo) | (uint32_t)(out.nib_h0_hi) << 16);
 }
 __device__ __forceinline__ uint32_t park_h1(const StageOut& out, const int t) {
-    uint32_t e1_0_3 = park_tok((uint32_t)out.nib_h1_lo, t);
-    uint32_t e1_4_7 = park_tok((uint32_t)out.nib_h1_hi, t);
-    return (t & 1)? e1_4_7 : e1_0_3;  // even->0..15, odd->16..31
+    //uint32_t e1_0_3 = park_tok((uint32_t)out.nib_h1_lo, t);
+    //uint32_t e1_4_7 = park_tok((uint32_t)out.nib_h1_hi, t);
+    return return (uint32_t)((uint32_t)(out.nib_h1_lo) | (uint32_t)(out.nib_h1_hi) << 16);
 }
 
 
@@ -421,8 +423,7 @@ __device__ __forceinline__ void ldsmB(
 
 
 template<int F>
-__device__ __forceinline__ void mma(const __nv_bfloat162* frag_a, const __nv_bfloat162* frag_b, const uint32_t& metadata, float4& frag_c) {
-  //& @ frag_a, frag_b -> inf/nan?
+__device__ __forceinline__ void mma(const __nv_bfloat162* frag_a, const __nv_bfloat162* frag_b, const uint32_t metadata, float4& frag_c) {
 
   const uint32_t* a = reinterpret_cast<const uint32_t*>(frag_a);
   const uint32_t* b = reinterpret_cast<const uint32_t*>(frag_b);
