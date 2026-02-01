@@ -439,7 +439,7 @@ __device__ __forceinline__ void mma(const __nv_bfloat162* frag_a, const __nv_bfl
   if constexpr (F==0) {
     asm volatile(
       "mma.sp::ordered_metadata.sync.aligned.m16n8k32.row.col.f32.bf16.bf16.f32 "
-      "{%0,%1,%2,%3}, {%4,%5,%6,%7}, {%8,%9,%10,%11}, {%12,%13,%14,%15}, %16, 0x1;\n"
+      "{%0,%1,%2,%3}, {%4,%5,%6,%7}, {%8,%9,%10,%11}, {%12,%13,%14,%15}, %16, 0x0;\n"
       : "=f"(c[0]), "=f"(c[1]), "=f"(c[2]), "=f"(c[3])
       : "r"(a[0]), "r"(a[1]), "r"(a[2]), "r"(a[3]),
         "r"(b[0]), "r"(b[1]), "r"(b[2]), "r"(b[3]),
