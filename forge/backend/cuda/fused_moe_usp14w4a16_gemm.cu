@@ -545,7 +545,7 @@ __global__ void phantom_usp14_w4a16_sym_sm80_fmoe_w13AS_mm_phase(
     
     const int64_t tid = (int64_t)threadIdx.x;
 
-    __shared__ __nv_bfloat16* XS;
+    extern __shared__ __nv_bfloat16 XS[];
     
     for (int64_t c = (int64_t)threadIdx.x; c < C; c += (int64_t)blockDim.x) {
         #pragma unroll NTOK
@@ -775,7 +775,7 @@ __global__ void phantom_usp14_w4a16_sym_sm80_fmoe_w2AS_mm(
     
     const int64_t tid = (int64_t)threadIdx.x;
 
-    __shared__ __nv_bfloat16*XS;
+    extern __shared__ __nv_bfloat16 XS[];
     
     for (int64_t c = tid; c < C; c += (int64_t)blockDim.x) {
         #pragma unroll NTOK
