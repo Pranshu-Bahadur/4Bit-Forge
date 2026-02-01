@@ -145,7 +145,7 @@ __device__ __forceinline__ void decode(
     const uint32_t pair = idx2 >> 1;
     const uint32_t slot = idx2 & 1;
 
-    meta_nibble = (pair == 0) ? (uint8_t)0b0010 : (uint8_t)0b0100;
+    meta_nibble = (slot == 0) ? (uint8_t)0b00 : (uint8_t)0b01;
     
     const int8_t v0 = (slot == 0) ? w : (int8_t)0; //
     const int8_t v1 = (slot == 0) ? (int8_t)0 : w;
