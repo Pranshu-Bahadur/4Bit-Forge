@@ -156,7 +156,7 @@ __device__ __forceinline__ void decode(
 
 
 __device__ __forceinline__ uint32_t pack_i8x4_from_i16x2(const uint16_t lo_packed, const uint16_t hi_packed) {
-    return ((uint32_t)(uint16_t)lo_packed) | ((uint32_t)(uint16_t)hi_packed << 16);
+    return ((uint32_t)(uint16_t)hi_packed) | ((uint32_t)(uint16_t)lo_packed << 16);
 }
 
 
@@ -256,7 +256,7 @@ __device__ __forceinline__ uint32_t park_tok(const uint32_t tok, const int t) {
         meta_bot |= ((pkt >> 4) & 0xFu) << (i << 2);
     }
     
-    return (uint32_t)(meta_top | (meta_bot << 16));
+    return (uint32_t)(meta_bot | (meta_top << 16));
 }
 
 
