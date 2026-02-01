@@ -406,7 +406,7 @@ __device__ __forceinline__ void ldsmB(
     const uint32_t smem = static_cast<uint32_t>(__cvta_generic_to_shared(XS_ptr));
 
     asm volatile(
-        "ldmatrix.sync.aligned.m8n8.x4.shared.b16 {%0, %1, %2, %3}, [%4];\n"
+        "ldmatrix.sync.aligned.m8n8.x4.trans.shared.b16 {%0, %1, %2, %3}, [%4];\n"
         : "=r"(b[0]), "=r"(b[1]), "=r"(b[2]), "=r"(b[3])
         : "r"(smem)
     );
@@ -440,8 +440,8 @@ __device__ __forceinline__ void mma(const __nv_bfloat162* frag_a, const __nv_bfl
       : "=f"(c[0]), "=f"(c[1]), "=f"(c[2]), "=f"(c[3])
       : "r"(a[0]), "r"(a[1]), "r"(a[2]), "r"(a[3]),
         "r"(b[0]), "r"(b[1]), "r"(b[2]), "r"(b[3]),
-        "f"(z[0]), "f"(z[1]), "f"(z[2]), "f"(z[3]),
-        "r"(e)
+        "f"(z[0]), "f"(z[1]), "f"(z[2]), "f"(z[3])
+      : "r"(e)
     );
   } else if constexpr (F==1) {
     asm volatile(
@@ -450,8 +450,8 @@ __device__ __forceinline__ void mma(const __nv_bfloat162* frag_a, const __nv_bfl
       : "=f"(c[0]), "=f"(c[1]), "=f"(c[2]), "=f"(c[3])
       : "r"(a[0]), "r"(a[1]), "r"(a[2]), "r"(a[3]),
         "r"(b[0]), "r"(b[1]), "r"(b[2]), "r"(b[3]),
-        "f"(z[0]), "f"(z[1]), "f"(z[2]), "f"(z[3]),
-        "r"(e)
+        "f"(z[0]), "f"(z[1]), "f"(z[2]), "f"(z[3])
+      : "r"(e)
     );
   }
 
