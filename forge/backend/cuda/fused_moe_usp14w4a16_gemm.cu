@@ -274,16 +274,14 @@ __device__ __forceinline__ uint32_t park(const StageOut& out, int t) {
 }
 
 __device__ __forceinline__ uint32_t park_h0(const StageOut& out, const int t) {
-    //uint32_t e0_0_3 = park_tok((uint32_t)out.nib_h0_lo, t);
-    //uint32_t e0_4_7 = park_tok((uint32_t)out.nib_h0_hi, t);
-    //return (t & 1)? e0_4_7 : e0_0_3;  // even->0..15, odd->16..31
-
-    return (uint32_t)((uint32_t)(out.nib_h0_lo) | (uint32_t)(out.nib_h0_hi) << 16);
+    uint32_t e0_0_3 = park_tok((uint32_t)out.nib_h0_lo, t);
+    uint32_t e0_4_7 = park_tok((uint32_t)out.nib_h0_hi, t);
+    return (t & 1)? e0_4_7 : e0_0_3;  // even->0..15, odd->16..31
 }
 __device__ __forceinline__ uint32_t park_h1(const StageOut& out, const int t) {
-    //uint32_t e1_0_3 = park_tok((uint32_t)out.nib_h1_lo, t);
-    //uint32_t e1_4_7 = park_tok((uint32_t)out.nib_h1_hi, t);
-    return (uint32_t)((uint32_t)(out.nib_h1_lo) | (uint32_t)(out.nib_h1_hi) << 16);
+    uint32_t e1_0_3 = park_tok((uint32_t)out.nib_h1_lo, t);
+    uint32_t e1_4_7 = park_tok((uint32_t)out.nib_h1_hi, t);
+    return (t & 1)? e1_4_7 : e1_0_3;  // even->0..15, odd->16..31
 }
 
 
@@ -407,7 +405,7 @@ __device__ __forceinline__ void ldsmB(
     const void* XS_ptr,
     __nv_bfloat162* frag_b
 ) {
-    uint32_t* b = reinterpret_cast<uint32_t*>(frag_b);
+    uint32_t* b = reinterpret_cast<uint32_t*>(&frag_b);
     const uint32_t smem = static_cast<uint32_t>(__cvta_generic_to_shared(XS_ptr));
 
     asm volatile(
