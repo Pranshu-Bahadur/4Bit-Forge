@@ -700,14 +700,14 @@ __global__ void phantom_usp14_w4a16_sym_sm80_fmoe_w13AS_mm_phase(
             
 
             D3.x = __fmaf_rn(C3.x, fscales_up.x, D3.x);
-            D3.y = __fmaf_rn(C3.y, fscales_up.x, D3.y);
-            D3.z = __fmaf_rn(C3.z, fscales_up.y, D3.z);
+            D3.y = __fmaf_rn(C3.y, fscales_up.y, D3.y);
+            D3.z = __fmaf_rn(C3.z, fscales_up.x, D3.z);
             D3.w = __fmaf_rn(C3.w, fscales_up.y, D3.w);
            
 
             D1.x = __fmaf_rn(C1.x, fscales_gate.z, D1.x);
-            D1.y = __fmaf_rn(C1.y, fscales_gate.z, D1.y);
-            D1.z = __fmaf_rn(C1.z, fscales_gate.w, D1.z);
+            D1.y = __fmaf_rn(C1.y, fscales_gate.w, D1.y);
+            D1.z = __fmaf_rn(C1.z, fscales_gate.z, D1.z);
             D1.w = __fmaf_rn(C1.w, fscales_gate.w, D1.w);
 
             if (g2 < G2) {
