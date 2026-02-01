@@ -537,7 +537,7 @@ __global__ void phantom_usp14_w4a16_sym_sm80_fmoe_w13AS_mm_phase(
     const int64_t R,
     const int64_t G2
 ) {
-    const int64_t uid = (int64_t)U[blockIdx.y];
+    const int64_t uid = (int64_t)blockIdx.y;
     const int64_t m_base = offsets[uid] + (((int64_t)(blockIdx.x)) * NTOK);
     const int64_t m_end = offsets[uid + 1];
 
@@ -609,7 +609,7 @@ __global__ void phantom_usp14_w4a16_sym_sm80_fmoe_w13AS_mm_phase(
         qwBotu = make_ulonglong2(0u, 0u);
 
         stage_load(W13, qwTopg, qwBotg, (int)t, 0, uid, 0, G2, R, oc_base, groupID);
-        stage_load(W13, qwTopu, qwBotu, (int)t, 2, uid, 0, G2, R, oc_base + (R/2), groupID);
+        stage_load(W13, qwTopu, qwBotu, (int)t, 2, uid, 0, G2, R, oc_base*(R/2), groupID);
 
         stage_decode(qwTopg, qwBotg, (int)t, 0, groupID, gate);
         stage_decode(qwTopu, qwBotu, (int)t, 2, groupID, up);
@@ -635,8 +635,8 @@ __global__ void phantom_usp14_w4a16_sym_sm80_fmoe_w13AS_mm_phase(
         fscales_up.z = bf16_bits_to_f32(scales_up.z);
         fscales_up.w = bf16_bits_to_f32(scales_up.w);
 
-        ldsmB((void*)&XS[(((int64_t)0 << 6) + ((int64_t)0 << 5))], bh0);
-        ldsmB((void*)&XS[(((int64_t)0 << 6) + ((int64_t)1 << 5))], bh1);
+        ldsmB((void*)&XS[(((int64_t)0 << 6) + ((int64_t)0 << 5)) * NTOK], bh0);
+        ldsmB((void*)&XS[(((int64_t)0 << 6) + ((int64_t)1 << 5)) * NTOK], bh1);
 
         bf16x2x2_from_i8x4(gate.top_h0, gate_ah0[0], gate_ah0[1]);
         bf16x2x2_from_i8x4(gate.bot_h0, gate_ah0[2], gate_ah0[3]);
@@ -668,7 +668,7 @@ __global__ void phantom_usp14_w4a16_sym_sm80_fmoe_w13AS_mm_phase(
 
                 qwTopu = make_ulonglong2(0u, 0u);
                 qwBotu = make_ulonglong2(0u, 0u);
-                stage_load(W13, qwTopu, qwBotu, (int)t, 0, uid, g2, G2, R, oc_base + (R/2), groupID);
+                stage_load(W13, qwTopu, qwBotu, (int)t, 0, uid, g2, G2, R, oc_base*(R/2), groupID);
             }
 
             D3.x = __fmaf_rn(C3.x, fscales_up.z, D3.x);
@@ -681,7 +681,7 @@ __global__ void phantom_usp14_w4a16_sym_sm80_fmoe_w13AS_mm_phase(
             mma<0>(up_ah0, bh0, metadata_up0, C3);
 
             if (g2 < G2) {
-                ldsmB((void*)&XS[((g2 << 6) + ((int64_t)0 << 5))], bh0); //*NTOK
+                ldsmB((void*)&XS[((g2 << 6) + ((int64_t)0 << 5)) * NTOK], bh0);
             }
 
 
@@ -695,7 +695,7 @@ __global__ void phantom_usp14_w4a16_sym_sm80_fmoe_w13AS_mm_phase(
             mma<1>(gate_ah1, bh1, metadata_gate1, C1);
 
             if (g2 < G2) {
-                ldsmB((void*)&XS[((g2 << 6) + ((int64_t)1 << 5))], bh1);
+                ldsmB((void*)&XS[((g2 << 6) + ((int64_t)1 << 5)) * NTOK], bh1);
             }
             
 
@@ -767,7 +767,7 @@ __global__ void phantom_usp14_w4a16_sym_sm80_fmoe_w2AS_mm(
     const int64_t R,
     const int64_t G2
 ) {
-    const int64_t uid = (int64_t)U[blockIdx.y];
+    const int64_t uid = (int64_t)blockIdx.y;
     const int64_t m_base = offsets[uid] + (((int64_t)(blockIdx.x)) * NTOK);
     const int64_t m_end = offsets[uid + 1];
 
@@ -830,8 +830,8 @@ __global__ void phantom_usp14_w4a16_sym_sm80_fmoe_w2AS_mm(
     fscales_out.w = bf16_bits_to_f32(scales_out.w);
 
 
-    ldsmB((void*)&XS[(((int64_t)0 << 6) + ((int64_t)0 << 5))], bh0);
-    ldsmB((void*)&XS[(((int64_t)0 << 6) + ((int64_t)1 << 5))], bh1);
+    ldsmB((void*)&XS[(((int64_t)0 << 6) + ((int64_t)0 << 5)) * NTOK], bh0);
+    ldsmB((void*)&XS[(((int64_t)0 << 6) + ((int64_t)1 << 5)) * NTOK], bh1);
 
     bf16x2x2_from_i8x4(out.top_h0, out_ah0[0], out_ah0[1]);
     bf16x2x2_from_i8x4(out.bot_h0, out_ah0[2], out_ah0[3]);
@@ -851,15 +851,15 @@ __global__ void phantom_usp14_w4a16_sym_sm80_fmoe_w2AS_mm(
 
             mma<1>(out_ah1, bh1, metadata_out1, C2);
 
-            if (g2 < G2) {
-                ldsmB((void*)&XS[((g2 << 6) + ((int64_t)1 << 5))], bh1);
+             if (g2 < G2) {
+                ldsmB((void*)&XS[((g2 << 6) + ((int64_t)1 << 5)) * NTOK], bh1);
             }
 
 
             mma<0>(out_ah0, bh0, metadata_out0, C1);
 
             if (g2 < G2) {
-                ldsmB((void*)&XS[((g2 << 6) + ((int64_t)0 << 5))], bh0);
+                ldsmB((void*)&XS[((g2 << 6) + ((int64_t)0 << 5)) * NTOK], bh0);
             }
 
             D.x = __fmaf_rn(C1.x, fscales_out.x, D.x);
