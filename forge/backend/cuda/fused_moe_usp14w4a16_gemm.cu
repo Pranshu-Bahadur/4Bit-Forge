@@ -145,7 +145,7 @@ __device__ __forceinline__ void decode(
     const uint32_t pair = idx2 >> 1;
     const uint32_t slot = idx2 & 1;
 
-    meta_nibble = (pair == 0) ? (uint8_t)0x4 : (uint8_t)0xE;
+    meta_nibble = (pair == 0) ? (uint8_t)0b0100 : (uint8_t)0b1110;
     
     const int8_t v0 = (slot == 0) ? w : (int8_t)0; //
     const int8_t v1 = (slot == 0) ? (int8_t)0 : w;
@@ -416,23 +416,25 @@ __device__ __forceinline__ void ldsmB(
 
 
 template<int F>
-__device__ __forceinline__ void mma(const __nv_bfloat162* frag_a, const __nv_bfloat162* frag_b, const uint32_t e, float4& frag_c) {
+__device__ __forceinline__ void mma(const __nv_bfloat162* frag_a, const __nv_bfloat162* frag_b, const uint32_t metadata, float4& frag_c) {
   //& @ frag_a, frag_b -> inf/nan?
 
-  const uint32_t* a = reinterpret_cast<const uint32_t*>(frag_a);
-  const uint32_t* b = reinterpret_cast<const uint32_t*>(frag_b);
+  const uint32_t* a = reinterpret_cast<const uint32_t*>(&frag_a);
+  const uint32_t* b = reinterpret_cast<const uint32_t*>(&frag_b);
 
-  float* c = reinterpret_cast<float*>(frag_c);
+  float* c = reinterpret_cast<float*>(&frag_c);
   
   const float4 frag_z = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
 
   const float* z = reinterpret_cast<const float*>(&frag_z);
 
+  const uint32_t e = static_cast<uint32_t>(metadata);
+
   //constexpr
   if constexpr (F==0) {
     asm volatile(
       "mma.sp::ordered_metadata.sync.aligned.m16n8k32.row.col.f32.bf16.bf16.f32 "
-      "{%0,%1,%2,%3}, {%4,%5,%6,%7}, {%8,%9,%10,%11}, {%12,%13,%14,%15}, %16, 0x0;\n"
+      "{%0,%1,%2,%3}, {%4,%5,%6,%7}, {%8,%9,%10,%11}, {%12,%13,%14,%15}, %16, 0;\n"
       : "=f"(c[0]), "=f"(c[1]), "=f"(c[2]), "=f"(c[3])
       : "r"(a[0]), "r"(a[1]), "r"(a[2]), "r"(a[3]),
         "r"(b[0]), "r"(b[1]), "r"(b[2]), "r"(b[3]),
