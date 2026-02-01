@@ -408,7 +408,7 @@ __device__ __forceinline__ void ldsmB(
     //uint32_t* b = reinterpret_cast<uint32_t*>(frag_b);
 
 
-    uint32_t smem_ptr;
+    uint64_t smem_ptr;
 
     asm volatile(
         "{ .reg .u64 smem_ptr; cvta.to.shared.u64 smem_ptr, %1; cvt.u32.u64 %0, smem_ptr; }\n"
@@ -543,7 +543,7 @@ __global__ void phantom_usp14_w4a16_sym_sm80_fmoe_w13AS_mm_phase(
     
     const int64_t tid = (int64_t)threadIdx.x;
 
-    extern __shared__ __nv_bfloat16 XS[];
+    __shared__ __nv_bfloat16* XS;
     
     for (int64_t c = (int64_t)threadIdx.x; c < C; c += (int64_t)blockDim.x) {
         #pragma unroll NTOK
@@ -773,7 +773,7 @@ __global__ void phantom_usp14_w4a16_sym_sm80_fmoe_w2AS_mm(
     
     const int64_t tid = (int64_t)threadIdx.x;
 
-    extern __shared__ __nv_bfloat16 XS[];
+    __shared__ __nv_bfloat16*XS;
     
     for (int64_t c = tid; c < C; c += (int64_t)blockDim.x) {
         #pragma unroll NTOK
