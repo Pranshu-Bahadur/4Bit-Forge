@@ -635,8 +635,8 @@ __global__ void phantom_usp14_w4a16_sym_sm80_fmoe_w13AS_mm_phase(
         fscales_up.z = bf16_bits_to_f32(scales_up.z);
         fscales_up.w = bf16_bits_to_f32(scales_up.w);
 
-        ldsmB((void*)&XS[(((int64_t)0 << 6) + ((int64_t)0 << 5)) * NTOK], bh0);
-        ldsmB((void*)&XS[(((int64_t)0 << 6) + ((int64_t)1 << 5)) * NTOK], bh1);
+        ldsmB((void*)&XS[(((int64_t)0 << 6) + ((int64_t)0 << 5))], bh0);
+        ldsmB((void*)&XS[(((int64_t)0 << 6) + ((int64_t)1 << 5))], bh1);
 
         bf16x2x2_from_i8x4(gate.top_h0, gate_ah0[0], gate_ah0[1]);
         bf16x2x2_from_i8x4(gate.bot_h0, gate_ah0[2], gate_ah0[3]);
@@ -681,7 +681,7 @@ __global__ void phantom_usp14_w4a16_sym_sm80_fmoe_w13AS_mm_phase(
             mma<0>(up_ah0, bh0, metadata_up0, C3);
 
             if (g2 < G2) {
-                ldsmB((void*)&XS[((g2 << 6) + ((int64_t)0 << 5)) * NTOK], bh0);
+                ldsmB((void*)&XS[((g2 << 6) + ((int64_t)0 << 5))], bh0); //*NTOK
             }
 
 
@@ -695,7 +695,7 @@ __global__ void phantom_usp14_w4a16_sym_sm80_fmoe_w13AS_mm_phase(
             mma<1>(gate_ah1, bh1, metadata_gate1, C1);
 
             if (g2 < G2) {
-                ldsmB((void*)&XS[((g2 << 6) + ((int64_t)1 << 5)) * NTOK], bh1);
+                ldsmB((void*)&XS[((g2 << 6) + ((int64_t)1 << 5))], bh1);
             }
             
 
@@ -830,8 +830,8 @@ __global__ void phantom_usp14_w4a16_sym_sm80_fmoe_w2AS_mm(
     fscales_out.w = bf16_bits_to_f32(scales_out.w);
 
 
-    ldsmB((void*)&XS[(((int64_t)0 << 6) + ((int64_t)0 << 5)) * NTOK], bh0);
-    ldsmB((void*)&XS[(((int64_t)0 << 6) + ((int64_t)1 << 5)) * NTOK], bh1);
+    ldsmB((void*)&XS[(((int64_t)0 << 6) + ((int64_t)0 << 5))], bh0);
+    ldsmB((void*)&XS[(((int64_t)0 << 6) + ((int64_t)1 << 5))], bh1);
 
     bf16x2x2_from_i8x4(out.top_h0, out_ah0[0], out_ah0[1]);
     bf16x2x2_from_i8x4(out.bot_h0, out_ah0[2], out_ah0[3]);
@@ -851,15 +851,15 @@ __global__ void phantom_usp14_w4a16_sym_sm80_fmoe_w2AS_mm(
 
             mma<1>(out_ah1, bh1, metadata_out1, C2);
 
-             if (g2 < G2) {
-                ldsmB((void*)&XS[((g2 << 6) + ((int64_t)1 << 5)) * NTOK], bh1);
+            if (g2 < G2) {
+                ldsmB((void*)&XS[((g2 << 6) + ((int64_t)1 << 5))], bh1);
             }
 
 
             mma<0>(out_ah0, bh0, metadata_out0, C1);
 
             if (g2 < G2) {
-                ldsmB((void*)&XS[((g2 << 6) + ((int64_t)0 << 5)) * NTOK], bh0);
+                ldsmB((void*)&XS[((g2 << 6) + ((int64_t)0 << 5))], bh0);
             }
 
             D.x = __fmaf_rn(C1.x, fscales_out.x, D.x);
