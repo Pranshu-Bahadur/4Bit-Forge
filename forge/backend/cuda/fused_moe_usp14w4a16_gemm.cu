@@ -458,12 +458,6 @@ __device__ __forceinline__ void mma(const __nv_bfloat162* frag_a, const __nv_bfl
     );
   }
 
-
-  frag_c.x = c[0];
-  frag_c.y = c[1];
-
-  frag_c.z = c[2];
-  frag_c.w = c[3];
 }
 
 
