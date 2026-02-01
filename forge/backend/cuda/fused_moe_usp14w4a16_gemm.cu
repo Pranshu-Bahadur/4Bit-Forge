@@ -429,7 +429,7 @@ __device__ __forceinline__ void ldsmB(
 
 
 template<int F>
-__device__ __forceinline__ void mma(const __nv_bfloat162* frag_a, const __nv_bfloat162* frag_b, const uint32_t metadata, float4& frag_c) {
+__device__ __forceinline__ void mma(const __nv_bfloat162* frag_a, const uint32_t* frag_b, const uint32_t metadata, float4& frag_c) {
 
   const uint32_t* a = reinterpret_cast<const uint32_t*>(frag_a);
   const uint32_t* b = reinterpret_cast<const uint32_t*>(frag_b);
@@ -568,8 +568,8 @@ __global__ void phantom_usp14_w4a16_sym_sm80_fmoe_w13AS_mm_phase(
     __nv_bfloat162 gate_ah0[4];
     __nv_bfloat162 gate_ah1[4];
 
-    __nv_bfloat162 bh0[4];
-    __nv_bfloat162 bh1[4];
+    uint32_t bh0[4];
+    uint32_t bh1[4];
     uint32_t metadata_gate0 = 0u;
     uint32_t metadata_gate1 = 0u;
 
@@ -794,8 +794,8 @@ __global__ void phantom_usp14_w4a16_sym_sm80_fmoe_w2AS_mm(
     __nv_bfloat162 out_ah0[4];
     __nv_bfloat162 out_ah1[4];
 
-    __nv_bfloat162 bh0[4];
-    __nv_bfloat162 bh1[4];
+    uint32_t bh0[4];
+    uint32_t bh1[4];
 
     uint32_t metadata_out0 = 0u;
     uint32_t metadata_out1 = 0u;
