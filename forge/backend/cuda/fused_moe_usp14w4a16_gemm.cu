@@ -442,7 +442,7 @@ __device__ __forceinline__ void mma(const __nv_bfloat162* frag_a, const __nv_bfl
       : "r"(a[0]), "r"(a[1]), "r"(a[2]), "r"(a[3]),
         "r"(b[0]), "r"(b[1]), "r"(b[2]), "r"(b[3]),
         "f"(z[0]), "f"(z[1]), "f"(z[2]), "f"(z[3]),
-        "r"(e)
+        "r"(e[0])
     );
   } else if constexpr (F==1) {
     asm volatile(
@@ -452,7 +452,7 @@ __device__ __forceinline__ void mma(const __nv_bfloat162* frag_a, const __nv_bfl
       : "r"(a[0]), "r"(a[1]), "r"(a[2]), "r"(a[3]),
         "r"(b[0]), "r"(b[1]), "r"(b[2]), "r"(b[3]),
         "f"(z[0]), "f"(z[1]), "f"(z[2]), "f"(z[3]),
-        "r"(e)
+        "r"(e[0])
     );
   }
 
