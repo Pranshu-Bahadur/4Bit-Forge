@@ -239,8 +239,8 @@ __device__ __forceinline__ void stage_decode(
 
     out.nib_h0_lo = pack_nib2(meta_nib_top.x, meta_nib_top.y);
     out.nib_h0_hi = pack_nib2(meta_nib_bot.x, meta_nib_bot.y);
-    out.nib_h1_lo = pack_nib2(meta_nib_top.z, meta_nib_top.z);
-    out.nib_h1_hi = pack_nib2(meta_nib_bot.w, meta_nib_bot.w);
+    out.nib_h1_lo = pack_nib2(meta_nib_top.z, meta_nib_top.w);
+    out.nib_h1_hi = pack_nib2(meta_nib_bot.z, meta_nib_bot.w);
 }
 
 
@@ -283,7 +283,7 @@ __device__ __forceinline__ uint32_t park_h0(const StageOut& out, const int t) {
 __device__ __forceinline__ uint32_t park_h1(const StageOut& out, const int t) {
     //uint32_t e1_0_3 = park_tok((uint32_t)out.nib_h1_lo, t);
     //uint32_t e1_4_7 = park_tok((uint32_t)out.nib_h1_hi, t);
-    return return (uint32_t)((uint32_t)(out.nib_h1_lo) | (uint32_t)(out.nib_h1_hi) << 16);
+    return (uint32_t)((uint32_t)(out.nib_h1_lo) | (uint32_t)(out.nib_h1_hi) << 16);
 }
 
 
