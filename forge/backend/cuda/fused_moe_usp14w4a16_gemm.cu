@@ -419,10 +419,10 @@ template<int F>
 __device__ __forceinline__ void mma(const __nv_bfloat162* frag_a, const __nv_bfloat162* frag_b, const uint32_t e, float4& frag_c) {
   //& @ frag_a, frag_b -> inf/nan?
 
-  const uint32_t* a = reinterpret_cast<const uint32_t*>(&frag_a);
-  const uint32_t* b = reinterpret_cast<const uint32_t*>(&frag_b);
+  const uint32_t* a = reinterpret_cast<const uint32_t*>(frag_a);
+  const uint32_t* b = reinterpret_cast<const uint32_t*>(frag_b);
 
-  float* c = reinterpret_cast<float*>(&frag_c);
+  float* c = reinterpret_cast<float*>(frag_c);
   
   const float4 frag_z = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
 
