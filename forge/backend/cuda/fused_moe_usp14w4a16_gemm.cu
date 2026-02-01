@@ -540,7 +540,7 @@ __global__ void phantom_usp14_w4a16_sym_sm80_fmoe_w13AS_mm_phase(
         #pragma unroll NTOK
         for (int64_t n = 0; n < NTOK; ++n) {
             //contiguous along N is cleaner
-            XS[c * NTOK + n] = ((m_base + n) <= m_end) ? X[(m_base + n) * C + c] : __float2bfloat16(0.0f);
+            XS[c * NTOK + n] = ((m_base + n) < m_end) ? X[(m_base + n) * C + c] : __float2bfloat16(0.0f);
         }
     }
     __syncthreads();
@@ -762,7 +762,7 @@ __global__ void phantom_usp14_w4a16_sym_sm80_fmoe_w2AS_mm(
         #pragma unroll NTOK
         for (int64_t n = 0; n < NTOK; ++n) {
             //contiguous along N is cleaner
-            XS[c * NTOK + n] = ((m_base + n) <= m_end) ? X2[(m_base + n) * C + c] : __float2bfloat16(0.0f);
+            XS[c * NTOK + n] = ((m_base + n) < m_end) ? X2[(m_base + n) * C + c] : __float2bfloat16(0.0f);
         }
     }
     __syncthreads();
