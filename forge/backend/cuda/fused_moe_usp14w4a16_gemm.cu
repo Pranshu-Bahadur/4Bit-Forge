@@ -417,10 +417,10 @@ __device__ __forceinline__ void ldsmB(
 
 template<int F>
 __device__ __forceinline__ void mma(const __nv_bfloat162* frag_a, const __nv_bfloat162* frag_b, const uint32_t e, float4& frag_c) {
-  //& @ frag_a, frag_b -> inf/nan
+  //& @ frag_a, frag_b -> inf/nan?
 
-  const uint32_t* a = reinterpret_cast<const uint32_t*>(&frag_a);
-  const uint32_t* b = reinterpret_cast<const uint32_t*>(&frag_b);
+  const uint32_t* a = reinterpret_cast<const uint32_t*>(frag_a);
+  const uint32_t* b = reinterpret_cast<const uint32_t*>(frag_b);
 
   float* c = reinterpret_cast<float*>(&frag_c);
   
@@ -540,7 +540,7 @@ __global__ void phantom_usp14_w4a16_sym_sm80_fmoe_w13AS_mm_phase(
         #pragma unroll NTOK
         for (int64_t n = 0; n < NTOK; ++n) {
             //contiguous along N is cleaner
-            XS[c * NTOK + n] = ((m_base + n) < m_end) ? X[(m_base + n) * C + c] : __float2bfloat16(0.0f);
+            XS[c * NTOK + n] = ((m_base + n) <= m_end) ? X[(m_base + n) * C + c] : __float2bfloat16(0.0f);
         }
     }
     __syncthreads();
@@ -627,7 +627,7 @@ __global__ void phantom_usp14_w4a16_sym_sm80_fmoe_w13AS_mm_phase(
 
         bf16x2x2_from_i8x4(gate.top_h0, gate_ah0[0], gate_ah0[1]);
         bf16x2x2_from_i8x4(gate.bot_h0, gate_ah0[2], gate_ah0[3]);
-        bf16x2x2_from_i8x4(gate.top_h1, gate_ah1[0], gate_ah1[3]);
+        bf16x2x2_from_i8x4(gate.top_h1, gate_ah1[0], gate_ah1[1]);
         bf16x2x2_from_i8x4(gate.bot_h1, gate_ah1[2], gate_ah1[3]);
         bf16x2x2_from_i8x4(up.top_h0, up_ah0[0], up_ah0[1]);
         bf16x2x2_from_i8x4(up.bot_h0, up_ah0[2], up_ah0[3]);
@@ -705,11 +705,11 @@ __global__ void phantom_usp14_w4a16_sym_sm80_fmoe_w13AS_mm_phase(
                 //metadata_gate = park(gate, (int)t);
                 //metadata_up = park(up, (int)t);
 
-                metadata_gate0 = park_h0(gate, t);
-                metadata_gate1 = park_h1(gate, t);
+                metadata_gate0 = park_h0(gate, (int)t);
+                metadata_gate1 = park_h1(gate, (int)t);
 
-                metadata_up0   = park_h0(up, t);     // used with up_ah0
-                metadata_up1   = park_h1(up, t);     // used with up_ah1
+                metadata_up0   = park_h0(up, (int)t);     // used with up_ah0
+                metadata_up1   = park_h1(up, (int)t);     // used with up_ah1
 
                 scales_up = up.sc_pack;
                 
@@ -720,7 +720,7 @@ __global__ void phantom_usp14_w4a16_sym_sm80_fmoe_w13AS_mm_phase(
                 
                 bf16x2x2_from_i8x4(gate.top_h0, gate_ah0[0], gate_ah0[1]);
                 bf16x2x2_from_i8x4(gate.bot_h0, gate_ah0[2], gate_ah0[3]);
-                bf16x2x2_from_i8x4(gate.top_h1, gate_ah1[0], gate_ah1[3]);
+                bf16x2x2_from_i8x4(gate.top_h1, gate_ah1[0], gate_ah1[1]);
                 bf16x2x2_from_i8x4(gate.bot_h1, gate_ah1[2], gate_ah1[3]);
                 bf16x2x2_from_i8x4(up.top_h0, up_ah0[0], up_ah0[1]);
                 bf16x2x2_from_i8x4(up.bot_h0, up_ah0[2], up_ah0[3]);
@@ -762,7 +762,7 @@ __global__ void phantom_usp14_w4a16_sym_sm80_fmoe_w2AS_mm(
         #pragma unroll NTOK
         for (int64_t n = 0; n < NTOK; ++n) {
             //contiguous along N is cleaner
-            XS[c * NTOK + n] = ((m_base + n) < m_end) ? X2[(m_base + n) * C + c] : __float2bfloat16(0.0f);
+            XS[c * NTOK + n] = ((m_base + n) <= m_end) ? X2[(m_base + n) * C + c] : __float2bfloat16(0.0f);
         }
     }
     __syncthreads();
