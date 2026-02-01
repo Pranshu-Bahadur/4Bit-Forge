@@ -226,7 +226,7 @@ __device__ __forceinline__ void stage_decode(
     decode(qwTop.y, i_lo, top.z, meta_nib_top.z);
     decode(qwTop.y, i_hi, top.w, meta_nib_top.w);
 
-    decode(qwBot.x, i_lo, bot.x, meta_nib_bot.x);
+    decode(qwBot.x, i_lo, bot.x, meta_nib_bot.x); 
     decode(qwBot.x, i_hi, bot.y, meta_nib_bot.y);
     decode(qwBot.y, i_lo, bot.z, meta_nib_bot.z);
     decode(qwBot.y, i_hi, bot.w, meta_nib_bot.w);
@@ -236,8 +236,8 @@ __device__ __forceinline__ void stage_decode(
     out.top_h1 = pack_i8x4_from_i16x2(top.z, top.w);
     out.bot_h1 = pack_i8x4_from_i16x2(bot.z, bot.w);
 
-    out.nib_h0_lo = pack_nib2(meta_nib_top.x, meta_nib_bot.x); // 0...3
-    out.nib_h0_hi = pack_nib2(meta_nib_top.y, meta_nib_bot.y); // 4...7
+    out.nib_h0_lo = pack_nib2(meta_nib_top.x, meta_nib_bot.x);
+    out.nib_h0_hi = pack_nib2(meta_nib_top.y, meta_nib_bot.y);
     out.nib_h1_lo = pack_nib2(meta_nib_top.z, meta_nib_bot.z);
     out.nib_h1_hi = pack_nib2(meta_nib_top.w, meta_nib_bot.w);
 }
@@ -253,7 +253,7 @@ __device__ __forceinline__ uint32_t park_tok(const uint32_t tok, const int t) {
         meta_top |= (pkt & 0xFu)        << (i << 2);
         meta_bot |= ((pkt >> 4) & 0xFu) << (i << 2);
     }
-    return (uint32_t)(meta_top | (meta_bot << 16));
+    return (uint32_t)(meta_bot | (meta_top << 16));
 }
 
 
