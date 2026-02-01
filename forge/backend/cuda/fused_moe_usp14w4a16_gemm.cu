@@ -163,7 +163,7 @@ __device__ __forceinline__ uint16_t pack_nib2(
     const uint8_t top,
     const uint8_t bot
 ) {
-    return ((uint16_t)(top & 0xF)) | (((uint16_t)(bot & 0xF)) << 4);
+    return ((uint16_t)(bot & 0xF)) | (((uint16_t)(top & 0xF)) << 4);
 
 }
 
