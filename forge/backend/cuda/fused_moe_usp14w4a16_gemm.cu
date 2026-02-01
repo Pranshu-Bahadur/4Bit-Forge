@@ -408,24 +408,26 @@ __device__ __forceinline__ void ldsmB(
     //uint32_t* b = reinterpret_cast<uint32_t*>(frag_b);
 
 
-    uint64_t smem_ptr;
-
-    asm volatile(
-        "{ .reg .u64 smem_ptr; cvta.to.shared.u64 smem_ptr, %1; cvt.u32.u64 %0, smem_ptr; }\n"
-            : "=r"(smem_ptr) : "l"(XS_ptr)
-    );
+    //OG: https://forums.developer.nvidia.com/t/use-of-ldmatrix/316010/7
 
     asm volatile(
         "ldmatrix.sync.aligned.m8n8.x4.shared.b16 {%0, %1, %2, %3}, [%4];\n"
         : "=r"(b[0]), "=r"(b[1]), "=r"(b[2]), "=r"(b[3])
-        : "r"(smem_ptr)
+        : "l"(__cvta_generic_to_shared(XS_ptr))
     );
 
 
 }
 
 //https://github.com/NVIDIA/cutlass/blob/a4eb0e05f6dd0403f94087b495393bdca75bf0ad/include/cute/arch/util.hpp#L92 smem ptr recast
+/*
+uint32_t smem_ptr;
 
+    asm volatile(
+        "{ .reg .u64 smem_ptr; cvta.to.shared.u64 smem_ptr, %1; cvt.u32.u64 %0, smem_ptr; }\n"
+            : "=r"(smem_ptr) : "l"(XS_ptr)
+    );
+*/
 
 
 template<int F>
