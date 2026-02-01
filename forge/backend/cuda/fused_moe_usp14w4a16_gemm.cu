@@ -155,7 +155,7 @@ __device__ __forceinline__ void decode(
 
 
 __device__ __forceinline__ uint32_t pack_i8x4_from_i16x2(const uint16_t lo_packed, const uint16_t hi_packed) {
-    return ((uint32_t)(uint16_t)hi_packed) | ((uint32_t)(uint16_t)lo_packed << 16);
+    return ((uint32_t)(uint16_t)lo_packed) | ((uint32_t)(uint16_t)hi_packed << 16);
 }
 
 
@@ -236,10 +236,10 @@ __device__ __forceinline__ void stage_decode(
     out.top_h1 = pack_i8x4_from_i16x2(top.z, top.w);
     out.bot_h1 = pack_i8x4_from_i16x2(bot.z, bot.w);
 
-    out.nib_h0_lo = pack_nib2(meta_nib_top.x, meta_nib_top.y); // 0...3
-    out.nib_h0_hi = pack_nib2(meta_nib_bot.x, meta_nib_bot.y); // 4...7
-    out.nib_h1_lo = pack_nib2(meta_nib_top.z, meta_nib_top.w);
-    out.nib_h1_hi = pack_nib2(meta_nib_bot.z, meta_nib_bot.w);
+    out.nib_h0_lo = pack_nib2(meta_nib_top.x, meta_nib_bot.x); // 0...3
+    out.nib_h0_hi = pack_nib2(meta_nib_top.y, meta_nib_bot.y); // 4...7
+    out.nib_h1_lo = pack_nib2(meta_nib_top.z, meta_nib_bot.z);
+    out.nib_h1_hi = pack_nib2(meta_nib_top.w, meta_nib_bot.w);
 }
 
 
