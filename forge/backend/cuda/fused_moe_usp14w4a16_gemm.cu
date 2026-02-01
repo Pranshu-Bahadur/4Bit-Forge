@@ -405,7 +405,7 @@ __device__ __forceinline__ void ldsmB(
     const void* XS_ptr,
     __nv_bfloat162* frag_b
 ) {
-    uint32_t* b = reinterpret_cast<uint32_t*>(&frag_b);
+    uint32_t* b = reinterpret_cast<uint32_t*>(frag_b);
     const uint32_t smem = static_cast<uint32_t>(__cvta_generic_to_shared(XS_ptr));
 
     asm volatile(
