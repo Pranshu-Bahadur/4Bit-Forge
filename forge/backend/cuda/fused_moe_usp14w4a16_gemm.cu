@@ -411,6 +411,11 @@ __device__ __forceinline__ void ldsmB(
         : "r"(smem)
     );
 
+    frag_b.x = b[0];
+    frag_b.y = b[1];
+    frag_b.z = b[2];
+    frag_b.w = b[3];
+
 }
 
 
