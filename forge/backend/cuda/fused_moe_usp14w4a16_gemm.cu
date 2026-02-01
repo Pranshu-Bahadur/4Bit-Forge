@@ -416,7 +416,7 @@ __device__ __forceinline__ void ldsmB(
 
 
 template<int F>
-__device__ __forceinline__ void mma(const __nv_bfloat162* frag_a, const __nv_bfloat162* frag_b, const uint32_t metadata, float4& frag_c) {
+__device__ __forceinline__ void mma(const __nv_bfloat162* frag_a, const __nv_bfloat162* frag_b, uint32_t& metadata, float4& frag_c) {
   //& @ frag_a, frag_b -> inf/nan?
 
   const uint32_t* a = reinterpret_cast<const uint32_t*>(frag_a);
@@ -428,7 +428,7 @@ __device__ __forceinline__ void mma(const __nv_bfloat162* frag_a, const __nv_bfl
 
   const float* z = reinterpret_cast<const float*>(&frag_z);
 
-  const uint32_t e = static_cast<uint32_t>(metadata);
+  uint32_t e = reinterpret_cast<uint32_t>(&metadata);
 
   //constexpr
   if constexpr (F==0) {
@@ -665,22 +665,28 @@ __global__ void phantom_usp14_w4a16_sym_sm80_fmoe_w13AS_mm_phase(
             D3.z = __fmaf_rn(C3.z, fscales_up.w, D3.z);
             D3.w = __fmaf_rn(C3.w, fscales_up.w, D3.w);
 
+            C3 = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
+
             mma<0>(up_ah0, bh0, metadata_up0, C3);
 
             if (g2 < G2) {
                 ldsmB((void*)&XS[((g2 << 6) + ((int64_t)0 << 5)) * NTOK], bh0);
             }
 
+
             D1.x = __fmaf_rn(C1.x, fscales_gate.x, D1.x);
             D1.y = __fmaf_rn(C1.y, fscales_gate.x, D1.y);
             D1.z = __fmaf_rn(C1.z, fscales_gate.y, D1.z);
             D1.w = __fmaf_rn(C1.w, fscales_gate.y, D1.w);
+
+            C1 = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
 
             mma<1>(gate_ah1, bh1, metadata_gate1, C1);
 
             if (g2 < G2) {
                 ldsmB((void*)&XS[((g2 << 6) + ((int64_t)1 << 5)) * NTOK], bh1);
             }
+            
 
             D3.x = __fmaf_rn(C3.x, fscales_up.x, D3.x);
             D3.y = __fmaf_rn(C3.y, fscales_up.x, D3.y);
