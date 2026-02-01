@@ -418,11 +418,11 @@ __device__ __forceinline__ void ldsmB(
 
 
 template<int F>
-__device__ __forceinline__ void mma(const __nv_bfloat162* frag_a, const __nv_bfloat162* frag_b, const uint32_t e, float4& frag_c) {
+__device__ __forceinline__ void mma(const __nv_bfloat162& frag_a, const __nv_bfloat162& frag_b, const uint32_t e, float4& frag_c) {
   //& @ frag_a, frag_b -> inf/nan?
 
-  const uint32_t* a = reinterpret_cast<const uint32_t*>(frag_a);
-  const uint32_t* b = reinterpret_cast<const uint32_t*>(frag_b);
+  const uint32_t* a = reinterpret_cast<const uint32_t*>(&frag_a);
+  const uint32_t* b = reinterpret_cast<const uint32_t*>(&frag_b);
 
   float* c = reinterpret_cast<float*>(&frag_c);
   
@@ -444,7 +444,7 @@ __device__ __forceinline__ void mma(const __nv_bfloat162* frag_a, const __nv_bfl
   } else if constexpr (F==1) {
     asm volatile(
       "mma.sp::ordered_metadata.sync.aligned.m16n8k32.row.col.f32.bf16.bf16.f32 "
-      "{%0,%1,%2,%3}, {%4,%5,%6,%7}, {%8,%9,%10,%11}, {%12,%13,%14,%15}, %16, 0x1;\n"
+      "{%0,%1,%2,%3}, {%4,%5,%6,%7}, {%8,%9,%10,%11}, {%12,%13,%14,%15}, %16, 1;\n"
       : "=f"(c[0]), "=f"(c[1]), "=f"(c[2]), "=f"(c[3])
       : "r"(a[0]), "r"(a[1]), "r"(a[2]), "r"(a[3]),
         "r"(b[0]), "r"(b[1]), "r"(b[2]), "r"(b[3]),
@@ -627,14 +627,14 @@ __global__ void phantom_usp14_w4a16_sym_sm80_fmoe_w13AS_mm_phase(
         ldsmB((void*)&XS[(((int64_t)0 << 6) + ((int64_t)0 << 5)) * NTOK], bh0);
         ldsmB((void*)&XS[(((int64_t)0 << 6) + ((int64_t)1 << 5)) * NTOK], bh1);
 
-        bf16x2x2_from_i8x4(gate.top_h0, gate_ah0[0], gate_ah0[2]);
-        bf16x2x2_from_i8x4(gate.bot_h0, gate_ah0[1], gate_ah0[3]);
-        bf16x2x2_from_i8x4(gate.top_h1, gate_ah1[0], gate_ah1[2]);
-        bf16x2x2_from_i8x4(gate.bot_h1, gate_ah1[1], gate_ah1[3]);
-        bf16x2x2_from_i8x4(up.top_h0, up_ah0[0], up_ah0[2]);
-        bf16x2x2_from_i8x4(up.bot_h0, up_ah0[1], up_ah0[3]);
-        bf16x2x2_from_i8x4(up.top_h1, up_ah1[0], up_ah1[2]);
-        bf16x2x2_from_i8x4(up.bot_h1, up_ah1[1], up_ah1[3]);
+        bf16x2x2_from_i8x4(gate.top_h0, gate_ah0[0], gate_ah0[1]);
+        bf16x2x2_from_i8x4(gate.bot_h0, gate_ah0[2], gate_ah0[3]);
+        bf16x2x2_from_i8x4(gate.top_h1, gate_ah1[0], gate_ah1[1]);
+        bf16x2x2_from_i8x4(gate.bot_h1, gate_ah1[2], gate_ah1[3]);
+        bf16x2x2_from_i8x4(up.top_h0, up_ah0[0], up_ah0[1]);
+        bf16x2x2_from_i8x4(up.bot_h0, up_ah0[2], up_ah0[3]);
+        bf16x2x2_from_i8x4(up.top_h1, up_ah1[0], up_ah1[1]);
+        bf16x2x2_from_i8x4(up.bot_h1, up_ah1[2], up_ah1[3]);
         
         for (int64_t g2 = 1; g2 < G2+1; ++g2) {
 
@@ -726,14 +726,14 @@ __global__ void phantom_usp14_w4a16_sym_sm80_fmoe_w13AS_mm_phase(
                 fscales_up.z = bf16_bits_to_f32(scales_up.z);
                 fscales_up.w = bf16_bits_to_f32(scales_up.w);
                 
-                bf16x2x2_from_i8x4(gate.top_h0, gate_ah0[0], gate_ah0[2]);
-                bf16x2x2_from_i8x4(gate.bot_h0, gate_ah0[1], gate_ah0[3]);
-                bf16x2x2_from_i8x4(gate.top_h1, gate_ah1[0], gate_ah1[2]);
-                bf16x2x2_from_i8x4(gate.bot_h1, gate_ah1[1], gate_ah1[3]);
-                bf16x2x2_from_i8x4(up.top_h0, up_ah0[0], up_ah0[2]);
-                bf16x2x2_from_i8x4(up.bot_h0, up_ah0[1], up_ah0[3]);
-                bf16x2x2_from_i8x4(up.top_h1, up_ah1[0], up_ah1[2]);
-                bf16x2x2_from_i8x4(up.bot_h1, up_ah1[1], up_ah1[3]);
+                bf16x2x2_from_i8x4(gate.top_h0, gate_ah0[0], gate_ah0[1]);
+                bf16x2x2_from_i8x4(gate.bot_h0, gate_ah0[2], gate_ah0[3]);
+                bf16x2x2_from_i8x4(gate.top_h1, gate_ah1[0], gate_ah1[1]);
+                bf16x2x2_from_i8x4(gate.bot_h1, gate_ah1[2], gate_ah1[3]);
+                bf16x2x2_from_i8x4(up.top_h0, up_ah0[0], up_ah0[1]);
+                bf16x2x2_from_i8x4(up.bot_h0, up_ah0[2], up_ah0[3]);
+                bf16x2x2_from_i8x4(up.top_h1, up_ah1[0], up_ah1[1]);
+                bf16x2x2_from_i8x4(up.bot_h1, up_ah1[2], up_ah1[3]);
             }
         }
 
@@ -822,10 +822,10 @@ __global__ void phantom_usp14_w4a16_sym_sm80_fmoe_w2AS_mm(
     ldsmB((void*)&XS[(((int64_t)0 << 6) + ((int64_t)0 << 5)) * NTOK], bh0);
     ldsmB((void*)&XS[(((int64_t)0 << 6) + ((int64_t)1 << 5)) * NTOK], bh1);
 
-    bf16x2x2_from_i8x4(out.top_h0, out_ah0[0], out_ah0[2]);
-    bf16x2x2_from_i8x4(out.bot_h0, out_ah0[1], out_ah0[3]);
-    bf16x2x2_from_i8x4(out.top_h1, out_ah1[0], out_ah1[2]);
-    bf16x2x2_from_i8x4(out.bot_h1, out_ah1[1], out_ah1[3]);
+    bf16x2x2_from_i8x4(out.top_h0, out_ah0[0], out_ah0[1]);
+    bf16x2x2_from_i8x4(out.bot_h0, out_ah0[2], out_ah0[3]);
+    bf16x2x2_from_i8x4(out.top_h1, out_ah1[0], out_ah1[1]);
+    bf16x2x2_from_i8x4(out.bot_h1, out_ah1[2], out_ah1[3]);
         
     for (int64_t g2 = 1; g2 < G2+1; ++g2) {
 
@@ -875,10 +875,10 @@ __global__ void phantom_usp14_w4a16_sym_sm80_fmoe_w2AS_mm(
                 metadata_out0 = park_h0(out, (int)t);
                 metadata_out1 = park_h1(out, (int)t);
 
-                bf16x2x2_from_i8x4(out.top_h0, out_ah0[0], out_ah0[2]);
-                bf16x2x2_from_i8x4(out.bot_h0, out_ah0[1], out_ah0[3]);
-                bf16x2x2_from_i8x4(out.top_h1, out_ah1[0], out_ah1[2]);
-                bf16x2x2_from_i8x4(out.bot_h1, out_ah1[1], out_ah1[3]);
+                bf16x2x2_from_i8x4(out.top_h0, out_ah0[0], out_ah0[1]);
+                bf16x2x2_from_i8x4(out.bot_h0, out_ah0[2], out_ah0[3]);
+                bf16x2x2_from_i8x4(out.top_h1, out_ah1[0], out_ah1[1]);
+                bf16x2x2_from_i8x4(out.bot_h1, out_ah1[2], out_ah1[3]);
             }
     }
     store(Y, R, m_base, m_end, (int)groupID, (int)t, oc_base, D);
