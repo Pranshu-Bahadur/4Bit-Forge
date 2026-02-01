@@ -239,7 +239,7 @@ __device__ __forceinline__ void stage_decode(
     out.nib_h0_lo = pack_nib2(meta_nib_top.x, meta_nib_bot.x); // 0...3
     out.nib_h0_hi = pack_nib2(meta_nib_top.y, meta_nib_bot.y); // 4...7
     out.nib_h1_lo = pack_nib2(meta_nib_top.z, meta_nib_bot.z);
-    out.nib_h1_hi = pack_nib2(meta_nib_bot.w, meta_nib_bot.w);
+    out.nib_h1_hi = pack_nib2(meta_nib_top.w, meta_nib_bot.w);
 }
 
 
@@ -410,11 +410,6 @@ __device__ __forceinline__ void ldsmB(
         : "=r"(b[0]), "=r"(b[1]), "=r"(b[2]), "=r"(b[3])
         : "r"(smem)
     );
-
-    frag_b.x = b[0];
-    frag_b.y = b[1];
-    frag_b.z = b[2];
-    frag_b.w = b[3];
 
 }
 
