@@ -145,12 +145,13 @@ __device__ __forceinline__ void decode(
     const uint32_t pair = idx2 >> 1;
     const uint32_t slot = idx2 & 1;
 
-    meta_nibble = (slot == 0) ? (uint8_t)0b00 : (uint8_t)0b01;
+    meta_nibble = (pair == 0) ? (uint8_t)0xE : (uint8_t)0x4;
     
     const int8_t v0 = (slot == 0) ? w : (int8_t)0; //
     const int8_t v1 = (slot == 0) ? (int8_t)0 : w;
 
-    v01_packed = (*(uint16_t*)&v0) | (((*(uint16_t*)&v1) << 8));
+    uint16_t v01 = (uint16_t)(uint8_t)v0 | ((uint16_t)(uint8_t)v1 << 8);
+    v01_packed = v01;
 }
 
 
