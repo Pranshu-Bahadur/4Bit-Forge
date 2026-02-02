@@ -159,9 +159,6 @@ __device__ __forceinline__ void decode(
     const uint16_t idx16 = (const uint16_t)(hi32 & 0xFFFFu);
     const uint32_t q4   = (qw32 >> (4 * chunk_i)) & 0xFu;
     const uint32_t idx2 = (idx16 >> (2 * chunk_i)) & 0x3u;
-
-    //const int8_t w = (int8_t)((int)q4);
-
     
     const uint8_t v0 = (idx2 & 1) ? (uint8_t)0 : (uint8_t)q4;
     const uint8_t v1 = (idx2 & 1) ? (uint8_t)q4 : (uint8_t)0;
@@ -223,7 +220,7 @@ __device__ __forceinline__ void stage_decode(
     unsigned mask = 0xFFFFFFFF; 
 
     const ulonglong2 qwTop = shfl_u64x2(mask, qwT, ((int)groupID << 2) + src_t);
-    const ulonglong2 qwBot = shfl_u64x2(mask, qwB,  ((int)groupID << 2) + (src_t + 1));
+    const ulonglong2 qwBot = shfl_u64x2(mask, qwB, ((int)groupID << 2) + (src_t + 1));
 
     out.sc_pack.x = (uint16_t)(qwTop.x >> 48);
     out.sc_pack.y = (uint16_t)(qwBot.x >> 48);
