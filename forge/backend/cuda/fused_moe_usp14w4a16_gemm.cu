@@ -292,14 +292,14 @@ __device__ __forceinline__ uint32_t park_tok(
     // Pack as: [3..0]=top0, [7..4]=top1, [11..8]=bot0, [15..12]=bot1,
     //          [19..16]=top2,[23..20]=top3,[27..24]=bot2,[31..28]=bot3
     uint32_t E =
-        (top0 <<  0) |
-        (top1 <<  4) |
-        (bot0 <<  8) |
-        (bot1 << 12) |
-        (top2 << 16) |
-        (top3 << 20) |
-        (bot2 << 24) |
-        (bot3 << 28);
+        (bot0 <<  0) |
+        (bot1 <<  4) |
+        (bot2 <<  8) |
+        (bot3 << 12) |
+        (top0 << 16) |
+        (top1 << 20) |
+        (top2 << 24) |
+        (top3 << 28);
 
     return E;
 }
