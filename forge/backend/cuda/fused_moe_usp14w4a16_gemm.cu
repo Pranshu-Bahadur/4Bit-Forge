@@ -504,10 +504,11 @@ __device__ inline void mma_f0(
     const __nv_bfloat162& fa2,
     const __nv_bfloat162& fa3,
     const uint32_t* b,
-    const uint32_t& e,
+    const uint32_t& metadata,
     float4& frag_c
 ) {
     
+    const uint32_t e = reinterpret_cast<const uint32_t>(&metadata);
     const uint32_t a0 = reinterpret_cast<const uint32_t>(&fa0);
     const uint32_t a1 = reinterpret_cast<const uint32_t>(&fa1);
     const uint32_t a2 = reinterpret_cast<const uint32_t>(&fa2);
@@ -533,10 +534,11 @@ __device__ inline void mma_f1(
     const __nv_bfloat162& fa2,
     const __nv_bfloat162& fa3,
     const uint32_t* b,
-    const uint32_t& e,
+    const uint32_t& metadata,
     float4& frag_c
 ) {
-    
+
+    const uint32_t e = reinterpret_cast<const uint32_t>(&metadata);
     const uint32_t a0 = reinterpret_cast<const uint32_t>(&fa0);
     const uint32_t a1 = reinterpret_cast<const uint32_t>(&fa1);
     const uint32_t a2 = reinterpret_cast<const uint32_t>(&fa2);
