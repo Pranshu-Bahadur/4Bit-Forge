@@ -242,10 +242,10 @@ __device__ __forceinline__ void stage_decode(
     decode(qwBot.y, i_lo, bot.z, meta_nib_bot.z);
     decode(qwBot.y, i_hi, bot.w, meta_nib_bot.w);
 
-    out.top_h0 = pack_i8x4_from_i16x2(top.x, bot.x);
-    out.bot_h0 = pack_i8x4_from_i16x2(top.y, bot.y);
-    out.top_h1 = pack_i8x4_from_i16x2(top.z, bot.z);
-    out.bot_h1 = pack_i8x4_from_i16x2(top.w, bot.w);
+    out.top_h0 = pack_i8x4_from_i16x2(top.x, top.y);
+    out.bot_h0 = pack_i8x4_from_i16x2(bot.x, bot.y);
+    out.top_h1 = pack_i8x4_from_i16x2(top.z, top.w);
+    out.bot_h1 = pack_i8x4_from_i16x2(bot.z, bot.w);
 
     out.nib_h0_lo = pack_nib2(meta_nib_top.x, meta_nib_bot.x);
     out.nib_h0_hi = pack_nib2(meta_nib_top.y, meta_nib_bot.y);
@@ -515,7 +515,7 @@ __device__ inline void mma_f0(
             "mma.sp::ordered_metadata.sync.aligned.m16n8k32.row.col.f32.bf16.bf16.f32 "
             "{%0,%1,%2,%3}, {%4,%5,%6,%7}, {%8,%9,%10,%11}, {%12,%13,%14,%15}, %16, 0x0;\n"
             : "=f"(c[0]), "=f"(c[1]), "=f"(c[2]), "=f"(c[3])
-            : "r"(a0), "r"(a1), "r"(a2), "r"(a3), "r"(b[0]), "r"(b[1]), "r"(b[2]), "r"(b[3]), "f"(c[0]), "f"(c[1]), "f"(c[2]), "f"(c[3]),
+            : "r"(a0), "r"(a1), "r"(a2), "r"(a3), "r"(b[0]), "r"(b[1]), "r"(b[2]), "r"(b[3]), "f"(z), "f"(z), "f"(z), "f"(z),
               "r"(e[0])
     );
 }
@@ -546,7 +546,7 @@ __device__ inline void mma_f1(
         "mma.sp::ordered_metadata.sync.aligned.m16n8k32.row.col.f32.bf16.bf16.f32 "
         "{%0,%1,%2,%3}, {%4,%5,%6,%7}, {%8,%9,%10,%11}, {%12,%13,%14,%15}, %16, 0x1;\n"
         : "=f"(c[0]), "=f"(c[1]), "=f"(c[2]), "=f"(c[3])
-        : "r"(a0), "r"(a1), "r"(a2), "r"(a3), "r"(b[0]), "r"(b[1]), "r"(b[2]), "r"(b[3]), "f"(c[0]), "f"(c[1]), "f"(c[2]), "f"(c[3]),
+        : "r"(a0), "r"(a1), "r"(a2), "r"(a3), "r"(b[0]), "r"(b[1]), "r"(b[2]), "r"(b[3]), "f"(z), "f"(z), "f"(z), "f"(z),
           "r"(e[0])
     );
 }
@@ -618,7 +618,7 @@ __global__ void phantom_usp14_w4a16_sym_sm80_fmoe_w13AS_mm_phase(
     const int64_t R,
     const int64_t G2
 ) {
-    const int64_t uid = (int64_t)blockIdx.y;
+    const int64_t uid = (int64_t)U[blockIdx.y];
     const int64_t m_base = offsets[uid] + (((int64_t)(blockIdx.x)) * NTOK);
     const int64_t m_end = offsets[uid + 1];
 
@@ -867,7 +867,7 @@ __global__ void phantom_usp14_w4a16_sym_sm80_fmoe_w2AS_mm(
     const int64_t R,
     const int64_t G2
 ) {
-    const int64_t uid = (int64_t)blockIdx.y;
+    const int64_t uid = (int64_t)U[blockIdx.y];
     const int64_t m_base = offsets[uid] + (((int64_t)(blockIdx.x)) * NTOK);
     const int64_t m_end = offsets[uid + 1];
 
