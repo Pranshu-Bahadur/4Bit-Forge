@@ -180,7 +180,7 @@ __device__ __forceinline__ uint32_t pack_nib2(
 
 
 __device__ __forceinline__ void stage_load(
-    const __restrict__ ulonglong2* W,
+    const ulonglong2* __restrict__ W,
     ulonglong2& qwTop,
     ulonglong2& qwBot,
     const int curr_t, // 0,...,3
