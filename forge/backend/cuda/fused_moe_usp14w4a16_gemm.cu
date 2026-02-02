@@ -50,7 +50,7 @@ __device__ __forceinline__ uint64_t shfl_u64(const uint64_t v, int src_lane, uns
     return (uint64_t)lo | ((uint64_t)hi << 32);
 }
 
-
+/*
 __device__ __forceinline__ ulonglong2 shfl_u64x2(
     const unsigned mask,
     const ulonglong2 v,
@@ -66,6 +66,13 @@ __device__ __forceinline__ ulonglong2 shfl_u64x2(
         (uint64_t)vy
     );
 }
+*/
+
+
+__device__ __forceinline__ ulonglong2 shfl_u64x2(unsigned mask, ulonglong2 v, int src_lane) {
+    return make_ulonglong2(shfl_u64(v.x, src_lane, mask), shfl_u64(v.y, src_lane, mask));
+}
+
 
 __device__ __constant__ uint16_t k_bf16_m8_p7[16] = {
   // -8 .. -1
@@ -215,8 +222,8 @@ __device__ __forceinline__ void stage_decode(
     //__activemask(); better to use entire warp acc to nvidia programming guide
     unsigned mask = 0xFFFFFFFF; 
 
-    const ulonglong2 qwTop = shfl_u64x2(mask, qwT, curr_t, src_t);
-    const ulonglong2 qwBot = shfl_u64x2(mask, qwB, curr_t, src_t + 1);
+    const ulonglong2 qwTop = shfl_u64x2(mask, qwT, ((int)groupID << 2) + src_t);
+    const ulonglong2 qwBot = shfl_u64x2(mask, qwB,  ((int)groupID << 2) + (src_t + 1));
 
     out.sc_pack.x = (uint16_t)(qwTop.x >> 48);
     out.sc_pack.y = (uint16_t)(qwBot.x >> 48);
@@ -285,7 +292,8 @@ __device__ __forceinline__ uint32_t park_tok(const uint32_t tok, const int t) {
 */
 
 __device__ __forceinline__ uint32_t park_tok(
-    const uint32_t tok, const int t
+    uint32_t& tok, 
+    int t
 ) {
     // Gather tok from lanes 0..3 within width=4 group
     uint32_t tok0 = __shfl_xor_sync(0xFFFFFFFFu, tok, (t ^ 0), 4);
@@ -337,7 +345,7 @@ __device__ __forceinline__ uint32_t park(const StageOut& out, int t) {
 
 */
 
-__device__ __forceinline__ uint32_t park_h0(const StageOut out, const int t) {
+__device__ __forceinline__ uint32_t park_h0(StageOut& out, const int t) {
     
     /*
     if ((t==0 || t==1)) {
@@ -353,7 +361,7 @@ __device__ __forceinline__ uint32_t park_h0(const StageOut out, const int t) {
 }
 
 
-__device__ __forceinline__ uint32_t park_h1(const StageOut out, const int t) {
+__device__ __forceinline__ uint32_t park_h1(StageOut& out, const int t) {
     
     /*
     if ((t==0 || t==1)) {
@@ -489,19 +497,23 @@ __device__ inline void ldsmB(
     const void* XS_ptr,
     uint32_t* b
 ) {
-    //uint32_t* b = reinterpret_cast<uint32_t*>(frag_b);
 
+    uint32_t smem_ptr;
 
-    //OG: https://forums.developer.nvidia.com/t/use-of-ldmatrix/316010/7
+    asm volatile(
+        "{ .reg .u64 smem_ptr; cvta.to.shared.u64 smem_ptr, %1; cvt.u32.u64 %0, smem_ptr; }\n"
+            : "=r"(smem_ptr) : "l"(XS_ptr)
+    );
 
     asm volatile(
         "ldmatrix.sync.aligned.m8n8.x4.shared.b16 {%0, %1, %2, %3}, [%4];\n"
         : "=r"(b[0]), "=r"(b[1]), "=r"(b[2]), "=r"(b[3])
-        : "l"(__cvta_generic_to_shared(XS_ptr))
+        : "r"(smem_ptr)
     );
 
-
 }
+
+//OG: https://forums.developer.nvidia.com/t/use-of-ldmatrix/316010/7
 
 //https://github.com/NVIDIA/cutlass/blob/a4eb0e05f6dd0403f94087b495393bdca75bf0ad/include/cute/arch/util.hpp#L92 smem ptr recast
 /*
