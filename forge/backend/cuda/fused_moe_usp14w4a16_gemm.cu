@@ -667,9 +667,6 @@ __global__ void phantom_usp14_w4a16_sym_sm80_fmoe_w13AS_mm_phase(
     uint32_t metadata_up0;
     uint32_t metadata_up1;
 
-    ushort4 scales_gate = make_ushort4(0u, 0u, 0u, 0u);
-    ushort4 scales_up = make_ushort4(0u, 0u, 0u, 0u);
-
     float4 fscales_gate = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
     float4 fscales_up = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
 
@@ -698,9 +695,6 @@ __global__ void phantom_usp14_w4a16_sym_sm80_fmoe_w13AS_mm_phase(
         stage_decode(qwTopg, qwBotg, (int)t, 0, groupID, gate);
         stage_decode(qwTopu, qwBotu, (int)t, 2, groupID, up);
 
-        scales_gate = gate.sc_pack;
-        scales_up = up.sc_pack;
-
         //metadata_gate = park(gate, (int)t);
         //metadata_up = park(up, (int)t);
 
@@ -714,15 +708,15 @@ __global__ void phantom_usp14_w4a16_sym_sm80_fmoe_w13AS_mm_phase(
             metadata_up1   = park_h1(up, (int)t);     // used with up_ah1
         }
 
-        fscales_gate.x = bf16_bits_to_f32(scales_gate.x);
-        fscales_gate.y = bf16_bits_to_f32(scales_gate.y);
-        fscales_gate.z = bf16_bits_to_f32(scales_gate.z);
-        fscales_gate.w = bf16_bits_to_f32(scales_gate.w);
+        fscales_gate.x = bf16_bits_to_f32(gate.sc_pack.x);
+        fscales_gate.y = bf16_bits_to_f32(gate.sc_pack.y);
+        fscales_gate.z = bf16_bits_to_f32(gate.sc_pack.z);
+        fscales_gate.w = bf16_bits_to_f32(gate.sc_pack.w);
 
-        fscales_up.x = bf16_bits_to_f32(scales_up.x);
-        fscales_up.y = bf16_bits_to_f32(scales_up.y);
-        fscales_up.z = bf16_bits_to_f32(scales_up.z);
-        fscales_up.w = bf16_bits_to_f32(scales_up.w);
+        fscales_up.x = bf16_bits_to_f32(up.sc_pack.x);
+        fscales_up.y = bf16_bits_to_f32(up.sc_pack.y);
+        fscales_up.z = bf16_bits_to_f32(up.sc_pack.z);
+        fscales_up.w = bf16_bits_to_f32(up.sc_pack.w);
 
         ldsmB((void*)&XS[(((int64_t)0 << 6) + ((int64_t)0 << 5)) * NTOK], bh0);
         ldsmB((void*)&XS[(((int64_t)0 << 6) + ((int64_t)1 << 5)) * NTOK], bh1);
@@ -805,12 +799,11 @@ __global__ void phantom_usp14_w4a16_sym_sm80_fmoe_w13AS_mm_phase(
 
                 stage_decode(qwTopu, qwBotu, (int)t, 0, groupID, up);
                 stage_decode(qwTopg, qwBotg, (int)t, 2, groupID, gate);
-                scales_gate = gate.sc_pack;
 
-                fscales_gate.x = bf16_bits_to_f32(scales_gate.x);
-                fscales_gate.y = bf16_bits_to_f32(scales_gate.y);
-                fscales_gate.z = bf16_bits_to_f32(scales_gate.z);
-                fscales_gate.w = bf16_bits_to_f32(scales_gate.w);
+                fscales_gate.x = bf16_bits_to_f32(gate.sc_pack.x);
+                fscales_gate.y = bf16_bits_to_f32(gate.sc_pack.y);
+                fscales_gate.z = bf16_bits_to_f32(gate.sc_pack.z);
+                fscales_gate.w = bf16_bits_to_f32(gate.sc_pack.w);
                 
                 //metadata_gate = park(gate, (int)t);
                 //metadata_up = park(up, (int)t);
@@ -826,13 +819,11 @@ __global__ void phantom_usp14_w4a16_sym_sm80_fmoe_w13AS_mm_phase(
                 }
                 
                 
-
-                scales_up = up.sc_pack;
                 
-                fscales_up.x = bf16_bits_to_f32(scales_up.x);
-                fscales_up.y = bf16_bits_to_f32(scales_up.y);
-                fscales_up.z = bf16_bits_to_f32(scales_up.z);
-                fscales_up.w = bf16_bits_to_f32(scales_up.w);
+                fscales_up.x = bf16_bits_to_f32(up.sc_pack.x);
+                fscales_up.y = bf16_bits_to_f32(up.sc_pack.y);
+                fscales_up.z = bf16_bits_to_f32(up.sc_pack.z);
+                fscales_up.w = bf16_bits_to_f32(up.sc_pack.w);
                 
                 bf16x2x2_from_i8x4(gate.top_h0, gate_h0_a0, gate_h0_a1);
                 bf16x2x2_from_i8x4(gate.bot_h0, gate_h0_a2, gate_h0_a3);
@@ -904,7 +895,6 @@ __global__ void phantom_usp14_w4a16_sym_sm80_fmoe_w2AS_mm(
     uint32_t metadata_out0;
     uint32_t metadata_out1;
 
-    ushort4 scales_out = make_ushort4(0u, 0u, 0u, 0u);
 
     float4 fscales_out = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
 
@@ -919,7 +909,6 @@ __global__ void phantom_usp14_w4a16_sym_sm80_fmoe_w2AS_mm(
 
     stage_decode(qwTop, qwBot, (int)t, 0, (int)groupID, out);
 
-    scales_out = out.sc_pack;
 
     if (t==0 or t==1) {
         metadata_out0 = park_h0(out, (int)t);
@@ -931,10 +920,10 @@ __global__ void phantom_usp14_w4a16_sym_sm80_fmoe_w2AS_mm(
 
     
 
-    fscales_out.x = bf16_bits_to_f32(scales_out.x);
-    fscales_out.y = bf16_bits_to_f32(scales_out.y);
-    fscales_out.z = bf16_bits_to_f32(scales_out.z);
-    fscales_out.w = bf16_bits_to_f32(scales_out.w);
+    fscales_out.x = bf16_bits_to_f32(out.sc_pack.x);
+    fscales_out.y = bf16_bits_to_f32(out.sc_pack.y);
+    fscales_out.z = bf16_bits_to_f32(out.sc_pack.z);
+    fscales_out.w = bf16_bits_to_f32(out.sc_pack.w);
 
 
     ldsmB((void*)&XS[(((int64_t)0 << 6) + ((int64_t)0 << 5)) * NTOK], bh0);
@@ -983,12 +972,10 @@ __global__ void phantom_usp14_w4a16_sym_sm80_fmoe_w2AS_mm(
 
                 stage_decode(qwTop, qwBot, (int)t, 2, (int)groupID, out);
                 
-                scales_out = out.sc_pack;
-
-                fscales_out.x = bf16_bits_to_f32(scales_out.x);
-                fscales_out.y = bf16_bits_to_f32(scales_out.y);
-                fscales_out.z = bf16_bits_to_f32(scales_out.z);
-                fscales_out.w = bf16_bits_to_f32(scales_out.w);
+                fscales_out.x = bf16_bits_to_f32(out.sc_pack.x);
+                fscales_out.y = bf16_bits_to_f32(out.sc_pack.y);
+                fscales_out.z = bf16_bits_to_f32(out.sc_pack.z);
+                fscales_out.w = bf16_bits_to_f32(out.sc_pack.w);
                 
                 if (t==0 or t==1) {
                     metadata_out0 = park_h0(out, (int)t);
