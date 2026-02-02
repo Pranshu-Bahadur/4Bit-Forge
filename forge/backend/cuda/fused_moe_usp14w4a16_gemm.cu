@@ -474,7 +474,7 @@ __device__ inline void ldsmB(
     //OG: https://forums.developer.nvidia.com/t/use-of-ldmatrix/316010/7
 
     asm volatile(
-        "ldmatrix.sync.aligned.m8n8.x4.shared.b16 {%0, %1, %2, %3}, [%4];\n"
+        "ldmatrix.sync.aligned.m8n8.x4.trans.shared.b16 {%0, %1, %2, %3}, [%4];\n"
         : "=r"(b[0]), "=r"(b[1]), "=r"(b[2]), "=r"(b[3])
         : "l"(__cvta_generic_to_shared(XS_ptr))
     );
@@ -656,16 +656,16 @@ __global__ void phantom_usp14_w4a16_sym_sm80_fmoe_w13AS_mm_phase(
     uint32_t bh1[4];
 
 
-    uint32_t metadata_gate0 = 0u;
-    uint32_t metadata_gate1 = 0u;
+    uint32_t metadata_gate0;
+    uint32_t metadata_gate1;
 
     StageOut up;
 
     __nv_bfloat162 up_h0_a0, up_h0_a1, up_h0_a2, up_h0_a3;
     __nv_bfloat162 up_h1_a0, up_h1_a1, up_h1_a2, up_h1_a3;
 
-    uint32_t metadata_up0 = 0u;
-    uint32_t metadata_up1 = 0u;
+    uint32_t metadata_up0;
+    uint32_t metadata_up1;
 
     ushort4 scales_gate = make_ushort4(0u, 0u, 0u, 0u);
     ushort4 scales_up = make_ushort4(0u, 0u, 0u, 0u);
@@ -901,8 +901,8 @@ __global__ void phantom_usp14_w4a16_sym_sm80_fmoe_w2AS_mm(
     uint32_t bh0[4];
     uint32_t bh1[4];
 
-    uint32_t metadata_out0 = 0u;
-    uint32_t metadata_out1 = 0u;
+    uint32_t metadata_out0;
+    uint32_t metadata_out1;
 
     ushort4 scales_out = make_ushort4(0u, 0u, 0u, 0u);
 
