@@ -50,8 +50,21 @@ __device__ __forceinline__ uint64_t shfl_u64(const uint64_t v, int src_lane, uns
     return (uint64_t)lo | ((uint64_t)hi << 32);
 }
 
-__device__ __forceinline__ ulonglong2 shfl_u64x2(const ulonglong2 v, int src_lane, unsigned mask=0xFFFFFFFFu) {
-    return make_ulonglong2(shfl_u64(v.x, src_lane, mask), shfl_u64(v.y, src_lane, mask));
+
+__device__ __forceinline__ ulonglong2 shfl_u64x2(
+    const unsigned mask,
+    const ulonglong2& v,
+    const int curr_t,
+    const int src_t
+) {
+    unsigned long long vx = (unsigned long long)v.x;
+    unsigned long long vy = (unsigned long long)v.y;
+    vx = __shfl_xor_sync(mask, vx, (curr_t ^ src_t), 4);
+    vy = __shfl_xor_sync(mask, vy, (curr_t ^ src_t), 4); 
+    return make_ulonglong2(
+        (uint64_t)vx,
+        (uint64_t)vy
+    );
 }
 
 __device__ __constant__ uint16_t k_bf16_m8_p7[16] = {
@@ -207,8 +220,8 @@ __device__ __forceinline__ void stage_decode(
     //__activemask(); better to use entire warp acc to nvidia programming guide
     unsigned mask = 0xFFFFFFFF; 
 
-    const ulonglong2 qwTop = shfl_u64x2(qwT, ((int)groupID << 2) + src_t, mask);
-    const ulonglong2 qwBot = shfl_u64x2(qwB, ((int)groupID << 2) + (src_t + 1), mask);
+    const ulonglong2 qwTop = shfl_u64x2(mask, qwT, curr_t, src_t);
+    const ulonglong2 qwBot = shfl_u64x2(mask, qwB, curr_t, src_t + 1);
 
     out.sc_pack.x = (uint16_t)(qwTop.x >> 48);
     out.sc_pack.y = (uint16_t)(qwBot.x >> 48);
@@ -466,7 +479,7 @@ __device__ __forceinline__ void ldsmB(
     //OG: https://forums.developer.nvidia.com/t/use-of-ldmatrix/316010/7
 
     asm volatile(
-        "ldmatrix.sync.aligned.m8n8.x4.shared.b16 {%0, %1, %2, %3}, [%4];\n"
+        "ldmatrix.sync.aligned.m8n8.x4.trans.shared.b16 {%0, %1, %2, %3}, [%4];\n"
         : "=r"(b[0]), "=r"(b[1]), "=r"(b[2]), "=r"(b[3])
         : "l"(__cvta_generic_to_shared(XS_ptr))
     );
@@ -674,11 +687,16 @@ __global__ void phantom_usp14_w4a16_sym_sm80_fmoe_w13AS_mm_phase(
 
         //metadata_gate = park(gate, (int)t);
         //metadata_up = park(up, (int)t);
-        metadata_gate0 = park_h0(gate, (int)t);
-        metadata_gate1 = park_h1(gate, (int)t);
 
-        metadata_up0   = park_h0(up,(int)t);     // used with up_ah0
-        metadata_up1   = park_h1(up, (int)t);     // used with up_ah1
+        if (t==0 or t==1) {
+            metadata_gate0 = park_h0(gate, (int)t);
+            metadata_up0   = park_h0(up, (int)t);     // used with up_ah0
+        }
+
+        if (t==2 || t==3) {
+            metadata_gate1 = park_h1(gate, (int)t);
+            metadata_up1   = park_h1(up, (int)t);     // used with up_ah1
+        }
 
         fscales_gate.x = bf16_bits_to_f32(scales_gate.x);
         fscales_gate.y = bf16_bits_to_f32(scales_gate.y);
@@ -779,11 +797,17 @@ __global__ void phantom_usp14_w4a16_sym_sm80_fmoe_w13AS_mm_phase(
                 //metadata_gate = park(gate, (int)t);
                 //metadata_up = park(up, (int)t);
 
-                metadata_gate0 = park_h0(gate, (int)t);
-                metadata_gate1 = park_h1(gate, (int)t);
+                if (t==0 or t==1) {
+                    metadata_gate0 = park_h0(gate, (int)t);
+                    metadata_up0   = park_h0(up, (int)t);     // used with up_ah0
+                }
 
-                metadata_up0   = park_h0(up, (int)t);     // used with up_ah0
-                metadata_up1   = park_h1(up, (int)t);     // used with up_ah1
+                if (t==2 || t==3) {
+                    metadata_gate1 = park_h1(gate, (int)t);
+                    metadata_up1   = park_h1(up, (int)t);     // used with up_ah1
+                }
+                
+                
 
                 scales_up = up.sc_pack;
                 
@@ -876,8 +900,15 @@ __global__ void phantom_usp14_w4a16_sym_sm80_fmoe_w2AS_mm(
 
     scales_out = out.sc_pack;
 
-    metadata_out0 = park_h0(out, (int)t);
-    metadata_out1 = park_h1(out, (int)t);
+    if (t==0 or t==1) {
+        metadata_out0 = park_h0(out, (int)t);
+    }
+
+    if (t==2 || t==3) {
+        metadata_out1 = park_h1(out, (int)t);
+    }
+
+    
 
     fscales_out.x = bf16_bits_to_f32(scales_out.x);
     fscales_out.y = bf16_bits_to_f32(scales_out.y);
@@ -938,8 +969,13 @@ __global__ void phantom_usp14_w4a16_sym_sm80_fmoe_w2AS_mm(
                 fscales_out.z = bf16_bits_to_f32(scales_out.z);
                 fscales_out.w = bf16_bits_to_f32(scales_out.w);
                 
-                metadata_out0 = park_h0(out, (int)t);
-                metadata_out1 = park_h1(out, (int)t);
+                if (t==0 or t==1) {
+                    metadata_out0 = park_h0(out, (int)t);
+                }
+
+                if (t==2 || t==3) {
+                    metadata_out1 = park_h1(out, (int)t);
+                }
 
                 bf16x2x2_from_i8x4(out.top_h0, out_ah0[0], out_ah0[1]);
                 bf16x2x2_from_i8x4(out.bot_h0, out_ah0[2], out_ah0[3]);
