@@ -380,8 +380,8 @@ __device__ __forceinline__ void store_tile_swiglu(
     int64_t m_base, int64_t m_end,
     int groupID, int t,
     int64_t oc_base,
-    const float4 gate4,
-    const float4 up4
+    const float4& gate4,
+    const float4& up4
 ){
     #pragma unroll
     for (int j=0;j<4;++j){
@@ -410,7 +410,7 @@ __device__ __forceinline__ void store_tile_swiglu(
                 u = up4.w;
             }
             
-            float sig = 1.0f / (1.0f + __expf(-g));
+            float sig = 1.0f / (1.0f + expf(-g));
             float y = (g * sig) * u;                // silu(g)*u
             X2[m*I + col] = __float2bfloat16(y);
         }
@@ -425,7 +425,7 @@ __device__ __forceinline__ void store(
     int64_t m_base, int64_t m_end,
     int groupID, int t,
     int64_t oc_base,
-    const float4 D4
+    const float4& D4
 ){
     #pragma unroll
     for (int j=0;j<4;++j){
@@ -508,10 +508,10 @@ __device__ inline void mma_f0(
     float4& frag_c
 ) {
     
-    const uint32_t a0 = reinterpret_cast<const uint32_t>(fa0);
-    const uint32_t a1 = reinterpret_cast<const uint32_t>(fa1);
-    const uint32_t a2 = reinterpret_cast<const uint32_t>(fa2);
-    const uint32_t a3 = reinterpret_cast<const uint32_t>(fa3);
+    const uint32_t a0 = reinterpret_cast<const uint32_t>(&fa0);
+    const uint32_t a1 = reinterpret_cast<const uint32_t>(&fa1);
+    const uint32_t a2 = reinterpret_cast<const uint32_t>(&fa2);
+    const uint32_t a3 = reinterpret_cast<const uint32_t>(&fa3);
 
     float* c = reinterpret_cast<float*>(&frag_c);
     const float z = 0.0f;
@@ -537,10 +537,10 @@ __device__ inline void mma_f1(
     float4& frag_c
 ) {
     
-    const uint32_t a0 = reinterpret_cast<const uint32_t>(fa0);
-    const uint32_t a1 = reinterpret_cast<const uint32_t>(fa1);
-    const uint32_t a2 = reinterpret_cast<const uint32_t>(fa2);
-    const uint32_t a3 = reinterpret_cast<const uint32_t>(fa3);
+    const uint32_t a0 = reinterpret_cast<const uint32_t>(&fa0);
+    const uint32_t a1 = reinterpret_cast<const uint32_t>(&fa1);
+    const uint32_t a2 = reinterpret_cast<const uint32_t>(&fa2);
+    const uint32_t a3 = reinterpret_cast<const uint32_t>(&fa3);
 
     float* c = reinterpret_cast<float*>(&frag_c);
     const float z = 0.0f;
