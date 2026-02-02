@@ -294,15 +294,15 @@ __device__ __forceinline__ uint32_t park_tok(
     uint32_t tok3 = __shfl_xor_sync(0xFFFFFFFFu, tok, (t ^ 3), 4);
 
     // Extract nibbles
-    uint32_t top0 =  tok0;//        & 0xFu;
-    uint32_t top1 =  tok1;//        & 0xFu;
-    uint32_t top2 =  tok2;//        & 0xFu;
-    uint32_t top3 =  tok3;//        & 0xFu;
+    uint32_t top0 =  tok0        & 0xFu;
+    uint32_t top1 =  tok1        & 0xFu;
+    uint32_t top2 =  tok2        & 0xFu;
+    uint32_t top3 =  tok3        & 0xFu;
 
-    uint32_t bot0 = (tok0 >> 4);//  & 0xFu;
-    uint32_t bot1 = (tok1 >> 4);//  & 0xFu;
-    uint32_t bot2 = (tok2 >> 4);//  & 0xFu;
-    uint32_t bot3 = (tok3 >> 4);//  & 0xFu;
+    uint32_t bot0 = (tok0 >> 4)  & 0xFu;
+    uint32_t bot1 = (tok1 >> 4)  & 0xFu;
+    uint32_t bot2 = (tok2 >> 4)  & 0xFu;
+    uint32_t bot3 = (tok3 >> 4)  & 0xFu;
 
    
     uint32_t E =
