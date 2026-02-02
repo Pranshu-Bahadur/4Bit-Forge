@@ -272,7 +272,7 @@ __device__ __forceinline__ uint32_t park_tok(const uint32_t tok, const int t) {
 */
 
 __device__ __forceinline__ uint32_t park_tok(
-    uint32_t tok, int t
+    const uint32_t tok, const int t
 ) {
     // Gather tok from lanes 0..3 within width=4 group
     uint32_t tok0 = __shfl_xor_sync(0xFFFFFFFFu, tok, (t ^ 0), 4);
@@ -282,22 +282,14 @@ __device__ __forceinline__ uint32_t park_tok(
 
     // Extract nibbles
     uint32_t top0 =  tok0        & 0xFu;
-    top0 =  (top0==0x4)? 0b0100 : 0b1110;
     uint32_t top1 =  tok1        & 0xFu;
-    top1 =  (top1==0x4)? 0b0100 : 0b1110;
     uint32_t top2 =  tok2        & 0xFu;
-    top2 =  (top2==0x4)? 0b0100 : 0b1110;
     uint32_t top3 =  tok3        & 0xFu;
-    top3 =  (top3==0x4)? 0b0100 : 0b1110;
 
     uint32_t bot0 = (tok0 >> 4)  & 0xFu;
-    bot0 =  (bot0==0x4)? 0b0100 : 0b1110;
     uint32_t bot1 = (tok1 >> 4)  & 0xFu;
-    bot1 =  (bot1==0x4)? 0b0100 : 0b1110;
     uint32_t bot2 = (tok2 >> 4)  & 0xFu;
-    bot2 =  (bot2==0x4)? 0b0100 : 0b1110;
     uint32_t bot3 = (tok3 >> 4)  & 0xFu;
-    bot3 =  (bot3==0x4)? 0b0100 : 0b1110;
 
    
     uint32_t E =
@@ -315,6 +307,8 @@ __device__ __forceinline__ uint32_t park_tok(
 
 
 
+/*
+
 __device__ __forceinline__ uint32_t park(const StageOut& out, int t) {
     const uint32_t e0_0_3 = park_tok((uint32_t)out.nib_h0_lo, t); //0...3
     const uint32_t e0_4_7 = park_tok((uint32_t)out.nib_h0_hi, t); //4...7
@@ -328,15 +322,21 @@ __device__ __forceinline__ uint32_t park(const StageOut& out, int t) {
     return 0u;
 }
 
+*/
+
 __device__ __forceinline__ uint32_t park_h0(const StageOut& out, const int t) {
-    uint32_t e0_0_3 = park_tok((uint32_t)out.nib_h0_lo, t);
-    uint32_t e0_4_7 = park_tok((uint32_t)out.nib_h0_hi, t);
-    return (t & 1)? e0_4_7 : e0_0_3;  // even->0..15, odd->16..31
+    uint32_t e = 0u;
+    if ((t==0 || t==1)) {
+        e = park_tok((t==0)? (uint32_t)out.nib_h0_lo : (uint32_t)out.nib_h0_hi, t);
+    }
+    return e; 
 }
-__device__ __forceinline__ uint32_t park_h1(const StageOut& out, const int t) {
-    uint32_t e1_0_3 = park_tok((uint32_t)out.nib_h1_lo, t);
-    uint32_t e1_4_7 = park_tok((uint32_t)out.nib_h1_hi, t);
-    return (t & 1)? e1_4_7 : e1_0_3;  // even->0..15, odd->16..31
+__device__ __forceinline__ uint32_t park_h1(const StageOut& out, const int t) {  // even->0..15, odd->16..31
+    uint32_t e = 0u;
+    if ((t==2 || t==3)) {
+        e = park_tok((t==2)? (uint32_t)out.nib_h1_lo : (uint32_t)out.nib_h1_hi, t);
+    }
+    return e;
 }
 
 
