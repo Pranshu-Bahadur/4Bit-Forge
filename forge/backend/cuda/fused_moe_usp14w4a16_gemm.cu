@@ -507,7 +507,7 @@ __device__ inline void mma_f0(
     const uint32_t& metadata,
     float4& frag_c
 ) {
-    
+
     const uint32_t e = reinterpret_cast<const uint32_t>(&metadata);
     const uint32_t a0 = reinterpret_cast<const uint32_t>(&fa0);
     const uint32_t a1 = reinterpret_cast<const uint32_t>(&fa1);
@@ -768,8 +768,8 @@ __global__ void phantom_usp14_w4a16_sym_sm80_fmoe_w13AS_mm_phase(
             }
 
             D3.x = __fmaf_rn(C3.x, fscales_up.z, D3.x);
-            D3.y = __fmaf_rn(C3.y, fscales_up.w, D3.y);
-            D3.z = __fmaf_rn(C3.z, fscales_up.z, D3.z);
+            D3.y = __fmaf_rn(C3.y, fscales_up.z, D3.y);
+            D3.z = __fmaf_rn(C3.z, fscales_up.w, D3.z);
             D3.w = __fmaf_rn(C3.w, fscales_up.w, D3.w);
 
             C3 = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
@@ -782,8 +782,8 @@ __global__ void phantom_usp14_w4a16_sym_sm80_fmoe_w13AS_mm_phase(
 
 
             D1.x = __fmaf_rn(C1.x, fscales_gate.x, D1.x);
-            D1.y = __fmaf_rn(C1.y, fscales_gate.y, D1.y);
-            D1.z = __fmaf_rn(C1.z, fscales_gate.x, D1.z);
+            D1.y = __fmaf_rn(C1.y, fscales_gate.x, D1.y);
+            D1.z = __fmaf_rn(C1.z, fscales_gate.y, D1.z);
             D1.w = __fmaf_rn(C1.w, fscales_gate.y, D1.w);
 
             C1 = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
@@ -796,14 +796,14 @@ __global__ void phantom_usp14_w4a16_sym_sm80_fmoe_w13AS_mm_phase(
             
 
             D3.x = __fmaf_rn(C3.x, fscales_up.x, D3.x);
-            D3.y = __fmaf_rn(C3.y, fscales_up.y, D3.y);
-            D3.z = __fmaf_rn(C3.z, fscales_up.x, D3.z);
+            D3.y = __fmaf_rn(C3.y, fscales_up.x, D3.y);
+            D3.z = __fmaf_rn(C3.z, fscales_up.y, D3.z);
             D3.w = __fmaf_rn(C3.w, fscales_up.y, D3.w);
            
 
             D1.x = __fmaf_rn(C1.x, fscales_gate.z, D1.x);
-            D1.y = __fmaf_rn(C1.y, fscales_gate.w, D1.y);
-            D1.z = __fmaf_rn(C1.z, fscales_gate.z, D1.z);
+            D1.y = __fmaf_rn(C1.y, fscales_gate.z, D1.y);
+            D1.z = __fmaf_rn(C1.z, fscales_gate.w, D1.z);
             D1.w = __fmaf_rn(C1.w, fscales_gate.w, D1.w);
 
             if (g2 < G2) {
@@ -975,13 +975,13 @@ __global__ void phantom_usp14_w4a16_sym_sm80_fmoe_w2AS_mm(
             }
 
             D.x = __fmaf_rn(C1.x, fscales_out.x, D.x);
-            D.y = __fmaf_rn(C1.y, fscales_out.y, D.y);
-            D.z = __fmaf_rn(C1.z, fscales_out.x, D.z);
+            D.y = __fmaf_rn(C1.y, fscales_out.x, D.y);
+            D.z = __fmaf_rn(C1.z, fscales_out.y, D.z);
             D.w = __fmaf_rn(C1.w, fscales_out.y, D.w);
 
             D.x = __fmaf_rn(C2.x, fscales_out.z, D.x);
-            D.y = __fmaf_rn(C2.y, fscales_out.w, D.y);
-            D.z = __fmaf_rn(C2.z, fscales_out.z, D.z);
+            D.y = __fmaf_rn(C2.y, fscales_out.z, D.y);
+            D.z = __fmaf_rn(C2.z, fscales_out.w, D.z);
             D.w = __fmaf_rn(C2.w, fscales_out.w, D.w);
 
             if (g2 < G2) {
