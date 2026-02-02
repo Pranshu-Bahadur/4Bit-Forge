@@ -147,25 +147,22 @@ __device__ __forceinline__ void decode(
     uint16_t& v01_packed,    
     uint8_t& meta_nibble
 ) {
-    const uint32_t qw32  = (uint32_t)(u64 & 0xFFFFFFFFull);
-    const uint32_t hi32  = (uint32_t)(u64 >> 32);
-    const uint16_t idx16 = (uint16_t)(hi32 & 0xFFFFu);
+    const uint32_t qw32  = (const uint32_t)(u64 & 0xFFFFFFFFull);
+    const uint32_t hi32  = (const uint32_t)(u64 >> 32);
+    const uint16_t idx16 = (const uint16_t)(hi32 & 0xFFFFu);
     const uint32_t q4   = (qw32 >> (4 * chunk_i)) & 0xFu;
-    const uint32_t idx2 = (idx16 >> (2 * chunk_i)) & 0x3u;
+    const uint16_t idx2 = (idx16 >> (2 * chunk_i)) & 0x3u;
 
     const int8_t w = (int8_t)((int)q4 - 8);
 
-    const uint32_t pair = idx2 >> 1;
-    const uint32_t slot = idx2 & 1;
-
     
-    const int8_t v0 = (slot == 0) ? (int8_t)w : 0;
-    const int8_t v1 = (slot == 0) ? 0 : (int8_t)w;
+    const int8_t v0 = (idx2 & 1) ? (int8_t)w : 0;
+    const int8_t v1 = (idx2 & 1) ? 0 : (int8_t)w;
 
     uint16_t v01 = (uint16_t)(uint8_t)v0 | ((uint16_t)(uint8_t)v1 << 8);
     v01_packed = v01;
 
-    meta_nibble = (pair == 0) ? (uint8_t)0b0100 : (uint8_t)0b1110;
+    meta_nibble = (idx2 >> 1) ? (uint8_t)0b0100 : (uint8_t)0b1110;
 
 }
 
@@ -504,7 +501,7 @@ __device__ inline void mma_f0(
     const __nv_bfloat162 fa2,
     const __nv_bfloat162 fa3,
     const uint32_t* b,
-    const uint32_t& metadata,
+    const uint32_t metadata,
     float4& frag_c
 ) {
 
