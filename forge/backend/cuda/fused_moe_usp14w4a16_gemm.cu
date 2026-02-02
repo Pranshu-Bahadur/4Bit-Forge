@@ -95,9 +95,9 @@ __device__ __forceinline__ uint16_t bf16bits_from_i8_small(int8_t v) {
     return (uint16_t)k_bf16_m8_p7[(int)v + 8];
 }
 
-__device__ __forceinline__ __nv_bfloat162 bf16x2_from_packed_i8pair(uint16_t packed_u) {
-    int8_t v0 = (int8_t)(packed_u & 0xFFu);
-    int8_t v1 = (int8_t)((packed_u >> 8) & 0xFFu);
+__device__ __forceinline__ __nv_bfloat162 bf16x2_from_packed_i8pair(const uint16_t packed_u) {
+    //int8_t v0 = (int8_t)(packed_u & 0xFFu);
+    //int8_t v1 = (int8_t)((packed_u >> 8) & 0xFFu);
 
     /*
     uint16_t b0 = bf16bits_from_i8_small(v0);
@@ -107,8 +107,8 @@ __device__ __forceinline__ __nv_bfloat162 bf16x2_from_packed_i8pair(uint16_t pac
 
     __nv_bfloat162 frag_a;
     
-    frag_a.x = __float2bfloat16((float)v0);
-    frag_a.y = __float2bfloat16((float)v1);
+    frag_a.x = __float2bfloat16((float)((packed_u & 0xFFu)) - 8.0f);
+    frag_a.y = __float2bfloat16((float)(((packed_u >> 8) & 0xFFu)) - 8.0f);
 
     return frag_a;
 }
@@ -153,7 +153,7 @@ __device__ __forceinline__ void decode(
     const uint32_t q4   = (qw32 >> (4 * chunk_i)) & 0xFu;
     const uint16_t idx2 = (idx16 >> (2 * chunk_i)) & 0x3u;
 
-    const int8_t w = (int8_t)((int)q4 - 8);
+    const int8_t w = (int8_t)((int)q4);
 
     
     const int8_t v0 = (idx2 & 1) ? (int8_t)w : 0;
