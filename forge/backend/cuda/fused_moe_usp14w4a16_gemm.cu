@@ -136,8 +136,8 @@ struct StageOut {
 
     ushort4 sc_pack;
 
-    uint16_t nib_h0_lo, nib_h0_hi;
-    uint16_t nib_h1_lo, nib_h1_hi;
+    uint32_t nib_h0_lo, nib_h0_hi;
+    uint32_t nib_h1_lo, nib_h1_hi;
 };
 
 
@@ -145,7 +145,7 @@ __device__ __forceinline__ void decode(
     const uint64_t u64,
     const int chunk_i,
     uint16_t& v01_packed,    
-    uint8_t& meta_nibble
+    uint32_t& meta_nibble
 ) {
     const uint32_t qw32  = (const uint32_t)(u64 & 0xFFFFFFFFull);
     const uint32_t hi32  = (const uint32_t)(u64 >> 32);
@@ -153,16 +153,14 @@ __device__ __forceinline__ void decode(
     const uint32_t q4   = (qw32 >> (4 * chunk_i)) & 0xFu;
     const uint16_t idx2 = (idx16 >> (2 * chunk_i)) & 0x3u;
 
-    const int8_t w = (int8_t)((int)q4);
+    //const int8_t w = (int8_t)((int)q4);
 
     
-    const int8_t v0 = (idx2 & 1) ? (int8_t)w : 0;
-    const int8_t v1 = (idx2 & 1) ? 0 : (int8_t)w;
+    const uint8_t v0 = (idx2 & 1) ? (const uint8_t)q4 : (const uint8_t)0;
+    const uint8_t v1 = (idx2 & 1) ? (const uint8_t)0 : (const uint8_t)q4;
 
-    uint16_t v01 = (uint16_t)(uint8_t)v0 | ((uint16_t)(uint8_t)v1 << 8);
-    v01_packed = v01;
-
-    meta_nibble = (idx2 >> 1) ? (uint8_t)0b0100 : (uint8_t)0b1110;
+    v01_packed = (uint16_t)v0 | ((uint16_t)v1 << 8);
+    meta_nibble = (idx2 >> 1) ? (uint32_t)0x4 : (uint32_t)0xE;
 
 }
 
@@ -172,11 +170,11 @@ __device__ __forceinline__ uint32_t pack_i8x4_from_i16x2(const uint16_t lo_packe
 }
 
 
-__device__ __forceinline__ uint16_t pack_nib2(
-    const uint8_t top,
-    const uint8_t bot
+__device__ __forceinline__ uint32_t pack_nib2(
+    const uint32_t top,
+    const uint32_t bot
 ) {
-    return ((uint16_t)(top)) | (((uint16_t)(bot)) << 4);
+    return ((uint32_t)(top)) | (((uint32_t)(bot)) << 4);
 
 }
 
@@ -225,11 +223,11 @@ __device__ __forceinline__ void stage_decode(
     out.sc_pack.z = (uint16_t)(qwTop.y >> 48);
     out.sc_pack.w = (uint16_t)(qwBot.y >> 48);
 
-    ushort4 top = make_ushort4(0, 0, 0, 0);
-    ushort4 bot = make_ushort4(0, 0, 0, 0);
+    ushort4 top = make_ushort4(0u, 0u, 0u, 0u);
+    ushort4 bot = make_ushort4(0u, 0u, 0u, 0u);
 
-    uchar4 meta_nib_top = make_uchar4(0, 0, 0, 0);
-    uchar4 meta_nib_bot = make_uchar4(0, 0, 0, 0);
+    uint4 meta_nib_top = make_uint4(0u, 0u, 0u, 0u);
+    uint4 meta_nib_bot = make_uint4(0u, 0u, 0u, 0u);
 
     const int i_lo = curr_t;      // 0..3
     const int i_hi = curr_t + 4;  // 4..7
