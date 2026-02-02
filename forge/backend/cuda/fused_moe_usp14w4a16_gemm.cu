@@ -146,8 +146,8 @@ __device__ __forceinline__ void decode(
     const uint32_t slot = idx2 & 1;
 
     
-    const int8_t v0 = (slot == 0) ? w : (int8_t)0; //
-    const int8_t v1 = (slot == 0) ? (int8_t)0 : w;
+    const int8_t v0 = (slot == 0) ? 0 : (int8_t)w; //
+    const int8_t v1 = (slot == 0) ? (int8_t)w : 0;
 
     uint16_t v01 = (uint16_t)(uint8_t)v0 | ((uint16_t)(uint8_t)v1 << 8);
     v01_packed = v01;
@@ -221,8 +221,8 @@ __device__ __forceinline__ void stage_decode(
     uchar4 meta_nib_top = make_uchar4(0, 0, 0, 0);
     uchar4 meta_nib_bot = make_uchar4(0, 0, 0, 0);
 
-    const int i_hi = curr_t;      // 0..3
-    const int i_lo = curr_t + 4;  // 4..7
+    const int i_lo = curr_t;      // 0..3
+    const int i_hi = curr_t + 4;  // 4..7
 
     decode(qwTop.x, i_lo, top.x, meta_nib_top.x);
     decode(qwTop.x, i_hi, top.y, meta_nib_top.y);
