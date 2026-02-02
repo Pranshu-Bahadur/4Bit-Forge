@@ -145,13 +145,15 @@ __device__ __forceinline__ void decode(
     const uint32_t pair = idx2 >> 1;
     const uint32_t slot = idx2 & 1;
 
-    meta_nibble = (pair == 0) ? (uint8_t)0x4 : (uint8_t)0xE;
     
     const int8_t v0 = (slot == 0) ? w : (int8_t)0; //
     const int8_t v1 = (slot == 0) ? (int8_t)0 : w;
 
     uint16_t v01 = (uint16_t)(uint8_t)v0 | ((uint16_t)(uint8_t)v1 << 8);
     v01_packed = v01;
+
+    meta_nibble = (pair == 0) ? (uint8_t)0b0100 : (uint8_t)0b1110;
+
 }
 
 
@@ -219,8 +221,8 @@ __device__ __forceinline__ void stage_decode(
     uchar4 meta_nib_top = make_uchar4(0, 0, 0, 0);
     uchar4 meta_nib_bot = make_uchar4(0, 0, 0, 0);
 
-    const int i_lo = curr_t;      // 0..3
-    const int i_hi = curr_t + 4;  // 4..7
+    const int i_hi = curr_t;      // 0..3
+    const int i_lo = curr_t + 4;  // 4..7
 
     decode(qwTop.x, i_lo, top.x, meta_nib_top.x);
     decode(qwTop.x, i_hi, top.y, meta_nib_top.y);
@@ -289,17 +291,16 @@ __device__ __forceinline__ uint32_t park_tok(
     uint32_t bot2 = (tok2 >> 4)  & 0xFu;
     uint32_t bot3 = (tok3 >> 4)  & 0xFu;
 
-    // Pack as: [3..0]=top0, [7..4]=top1, [11..8]=bot0, [15..12]=bot1,
-    //          [19..16]=top2,[23..20]=top3,[27..24]=bot2,[31..28]=bot3
+   
     uint32_t E =
-        (bot0 <<  0) |
-        (bot1 <<  4) |
-        (bot2 <<  8) |
-        (bot3 << 12) |
-        (top0 << 16) |
-        (top1 << 20) |
-        (top2 << 24) |
-        (top3 << 28);
+        (top0 <<  0) | //[3..0]
+        (top1 <<  4) | //[7..4]
+        (top2 <<  8) | //[11..8]
+        (top3 << 12) | //[15..12]
+        (bot0 << 16) | //[19..16]
+        (bot1 << 20) | //[23..20]
+        (bot2 << 24) | //[27..24]
+        (bot3 << 28);  //[31..28]
 
     return E;
 }
