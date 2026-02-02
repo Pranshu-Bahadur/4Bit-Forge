@@ -242,10 +242,10 @@ __device__ __forceinline__ void stage_decode(
     decode(qwBot.y, i_lo, bot.z, meta_nib_bot.z);
     decode(qwBot.y, i_hi, bot.w, meta_nib_bot.w);
 
-    out.top_h0 = pack_i8x4_from_i16x2(top.x, top.y);
-    out.bot_h0 = pack_i8x4_from_i16x2(bot.x, bot.y);
-    out.top_h1 = pack_i8x4_from_i16x2(top.z, top.w);
-    out.bot_h1 = pack_i8x4_from_i16x2(bot.z, bot.w);
+    out.top_h0 = pack_i8x4_from_i16x2(top.x, bot.x);
+    out.bot_h0 = pack_i8x4_from_i16x2(top.y, bot.y);
+    out.top_h1 = pack_i8x4_from_i16x2(top.z, bot.z);
+    out.bot_h1 = pack_i8x4_from_i16x2(top.w, bot.w);
 
     out.nib_h0_lo = pack_nib2(meta_nib_top.x, meta_nib_bot.x);
     out.nib_h0_hi = pack_nib2(meta_nib_top.y, meta_nib_bot.y);
