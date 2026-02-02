@@ -146,8 +146,8 @@ __device__ __forceinline__ void decode(
     const uint32_t slot = idx2 & 1;
 
     
-    const int8_t v0 = (slot == 0) ? 0 : (int8_t)w; //
-    const int8_t v1 = (slot == 0) ? (int8_t)w : 0;
+    const int8_t v0 = (slot == 0) ? (int8_t)w : 0;
+    const int8_t v1 = (slot == 0) ? 0 : (int8_t)w;
 
     uint16_t v01 = (uint16_t)(uint8_t)v0 | ((uint16_t)(uint8_t)v1 << 8);
     v01_packed = v01;
@@ -282,14 +282,22 @@ __device__ __forceinline__ uint32_t park_tok(
 
     // Extract nibbles
     uint32_t top0 =  tok0        & 0xFu;
+    top0 =  (top0==0x4)? 0b0100 : 0b1110;
     uint32_t top1 =  tok1        & 0xFu;
+    top1 =  (top1==0x4)? 0b0100 : 0b1110;
     uint32_t top2 =  tok2        & 0xFu;
+    top2 =  (top2==0x4)? 0b0100 : 0b1110;
     uint32_t top3 =  tok3        & 0xFu;
+    top3 =  (top3==0x4)? 0b0100 : 0b1110;
 
     uint32_t bot0 = (tok0 >> 4)  & 0xFu;
+    bot0 =  (bot0==0x4)? 0b0100 : 0b1110;
     uint32_t bot1 = (tok1 >> 4)  & 0xFu;
+    bot1 =  (bot1==0x4)? 0b0100 : 0b1110;
     uint32_t bot2 = (tok2 >> 4)  & 0xFu;
+    bot2 =  (bot2==0x4)? 0b0100 : 0b1110;
     uint32_t bot3 = (tok3 >> 4)  & 0xFu;
+    bot3 =  (bot3==0x4)? 0b0100 : 0b1110;
 
    
     uint32_t E =
