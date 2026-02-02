@@ -499,20 +499,20 @@ uint32_t smem_ptr;
 
 
 __device__ inline void mma_f0(
-    const __nv_bfloat162 fa0,
-    const __nv_bfloat162 fa1,
-    const __nv_bfloat162 fa2,
-    const __nv_bfloat162 fa3,
+    const __nv_bfloat162& fa0,
+    const __nv_bfloat162& fa1,
+    const __nv_bfloat162& fa2,
+    const __nv_bfloat162& fa3,
     const uint32_t* b,
-    const uint32_t metadata,
+    const uint32_t& metadata,
     float4& frag_c
 ) {
 
-    const uint32_t e = reinterpret_cast<const uint32_t>(metadata);
-    const uint32_t a0 = reinterpret_cast<const uint32_t>(&fa0);
-    const uint32_t a1 = reinterpret_cast<const uint32_t>(&fa1);
-    const uint32_t a2 = reinterpret_cast<const uint32_t>(&fa2);
-    const uint32_t a3 = reinterpret_cast<const uint32_t>(&fa3);
+    const uint32_t* e = reinterpret_cast<const uint32_t*>(&metadata);
+    const uint32_t a0 = reinterpret_cast<const uint32_t>(fa0);
+    const uint32_t a1 = reinterpret_cast<const uint32_t>(fa1);
+    const uint32_t a2 = reinterpret_cast<const uint32_t>(fa2);
+    const uint32_t a3 = reinterpret_cast<const uint32_t>(fa3);
 
     float* c = reinterpret_cast<float*>(&frag_c);
     const float z = 0.0f;
@@ -521,7 +521,7 @@ __device__ inline void mma_f0(
             "{%0,%1,%2,%3}, {%4,%5,%6,%7}, {%8,%9,%10,%11}, {%12,%13,%14,%15}, %16, 0x0;\n"
             : "=f"(c[0]), "=f"(c[1]), "=f"(c[2]), "=f"(c[3])
             : "r"(a0), "r"(a1), "r"(a2), "r"(a3), "r"(b[0]), "r"(b[1]), "r"(b[2]), "r"(b[3]), "f"(c[0]), "f"(c[1]), "f"(c[2]), "f"(c[3]),
-              "r"(e)
+              "r"(e[0])
     );
 }
 
@@ -529,20 +529,20 @@ __device__ inline void mma_f0(
 
 
 __device__ inline void mma_f1(
-    const __nv_bfloat162 fa0,
-    const __nv_bfloat162 fa1,
-    const __nv_bfloat162 fa2,
-    const __nv_bfloat162 fa3,
+    const __nv_bfloat162& fa0,
+    const __nv_bfloat162& fa1,
+    const __nv_bfloat162& fa2,
+    const __nv_bfloat162& fa3,
     const uint32_t* b,
     const uint32_t metadata,
     float4& frag_c
 ) {
 
-    const uint32_t e = reinterpret_cast<const uint32_t>(metadata);
-    const uint32_t a0 = reinterpret_cast<const uint32_t>(&fa0);
-    const uint32_t a1 = reinterpret_cast<const uint32_t>(&fa1);
-    const uint32_t a2 = reinterpret_cast<const uint32_t>(&fa2);
-    const uint32_t a3 = reinterpret_cast<const uint32_t>(&fa3);
+    const uint32_t* e = reinterpret_cast<const uint32_t*>(&metadata);
+    const uint32_t a0 = reinterpret_cast<const uint32_t>(fa0);
+    const uint32_t a1 = reinterpret_cast<const uint32_t>(fa1);
+    const uint32_t a2 = reinterpret_cast<const uint32_t>(fa2);
+    const uint32_t a3 = reinterpret_cast<const uint32_t>(fa3);
 
     float* c = reinterpret_cast<float*>(&frag_c);
     const float z = 0.0f;
@@ -552,7 +552,7 @@ __device__ inline void mma_f1(
         "{%0,%1,%2,%3}, {%4,%5,%6,%7}, {%8,%9,%10,%11}, {%12,%13,%14,%15}, %16, 0x1;\n"
         : "=f"(c[0]), "=f"(c[1]), "=f"(c[2]), "=f"(c[3])
         : "r"(a0), "r"(a1), "r"(a2), "r"(a3), "r"(b[0]), "r"(b[1]), "r"(b[2]), "r"(b[3]), "f"(c[0]), "f"(c[1]), "f"(c[2]), "f"(c[3]),
-          "r"(e)
+          "r"(e[0])
     );
 }
 
