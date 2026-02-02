@@ -332,14 +332,14 @@ __device__ __forceinline__ uint32_t park(const StageOut& out, int t) {
 
 */
 
-__device__ __forceinline__ uint32_t park_h0(const StageOut& out, const int t) {
+__device__ __forceinline__ uint32_t park_h0(const StageOut out, const int t) {
     uint32_t e = 0u;
     if ((t==0 || t==1)) {
         e = park_tok((t==0)? (uint32_t)out.nib_h0_lo : (uint32_t)out.nib_h0_hi, t);
     }
     return e; 
 }
-__device__ __forceinline__ uint32_t park_h1(const StageOut& out, const int t) {  // even->0..15, odd->16..31
+__device__ __forceinline__ uint32_t park_h1(const StageOut out, const int t) {  // even->0..15, odd->16..31
     uint32_t e = 0u;
     if ((t==2 || t==3)) {
         e = park_tok((t==2)? (uint32_t)out.nib_h1_lo : (uint32_t)out.nib_h1_hi, t);
