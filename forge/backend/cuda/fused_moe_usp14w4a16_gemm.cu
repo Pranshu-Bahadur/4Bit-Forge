@@ -174,7 +174,7 @@ __device__ __forceinline__ uint32_t pack_nib2(
     const uint32_t top,
     const uint32_t bot
 ) {
-    return ((uint32_t)(top)) | (((uint32_t)(bot)) << 4);
+    return ((uint32_t)(top & 0xF)) | (((uint32_t)(bot & 0xF)) << 4);
 
 }
 
