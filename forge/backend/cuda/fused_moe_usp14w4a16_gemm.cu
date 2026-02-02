@@ -156,11 +156,11 @@ __device__ __forceinline__ void decode(
     //const int8_t w = (int8_t)((int)q4);
 
     
-    const uint8_t v0 = (idx2 & 1) ? (const uint8_t)q4 : (const uint8_t)0;
-    const uint8_t v1 = (idx2 & 1) ? (const uint8_t)0 : (const uint8_t)q4;
+    const uint8_t v0 = (idx2 & 1) ? (const uint8_t)0 : (const uint8_t)q4;
+    const uint8_t v1 = (idx2 & 1) ? (const uint8_t)q4 : (const uint8_t)0;
 
     v01_packed = (uint16_t)v0 | ((uint16_t)v1 << 8);
-    meta_nibble = (idx2 >> 1) ? (uint32_t)0x4 : (uint32_t)0xE;
+    meta_nibble = (idx2 >> 1) ? (uint32_t)0xE : (uint32_t)0x4;
 
 }
 
@@ -242,6 +242,11 @@ __device__ __forceinline__ void stage_decode(
     decode(qwBot.y, i_lo, bot.z, meta_nib_bot.z);
     decode(qwBot.y, i_hi, bot.w, meta_nib_bot.w);
 
+    //out.top_h0 = pack_i8x4_from_i16x2(top.x, top.y);
+    //out.bot_h0 = pack_i8x4_from_i16x2(bot.x, bot.y);
+    //out.top_h1 = pack_i8x4_from_i16x2(top.z, top.w);
+    //out.bot_h1 = pack_i8x4_from_i16x2(bot.z, bot.w);
+
     out.top_h0 = pack_i8x4_from_i16x2(top.x, bot.x);
     out.bot_h0 = pack_i8x4_from_i16x2(top.y, bot.y);
     out.top_h1 = pack_i8x4_from_i16x2(top.z, bot.z);
@@ -289,15 +294,15 @@ __device__ __forceinline__ uint32_t park_tok(
     uint32_t tok3 = __shfl_xor_sync(0xFFFFFFFFu, tok, (t ^ 3), 4);
 
     // Extract nibbles
-    uint32_t top0 =  tok0        & 0xFu;
-    uint32_t top1 =  tok1        & 0xFu;
-    uint32_t top2 =  tok2        & 0xFu;
-    uint32_t top3 =  tok3        & 0xFu;
+    uint32_t top0 =  tok0;//        & 0xFu;
+    uint32_t top1 =  tok1;//        & 0xFu;
+    uint32_t top2 =  tok2;//        & 0xFu;
+    uint32_t top3 =  tok3;//        & 0xFu;
 
-    uint32_t bot0 = (tok0 >> 4)  & 0xFu;
-    uint32_t bot1 = (tok1 >> 4)  & 0xFu;
-    uint32_t bot2 = (tok2 >> 4)  & 0xFu;
-    uint32_t bot3 = (tok3 >> 4)  & 0xFu;
+    uint32_t bot0 = (tok0 >> 4);//  & 0xFu;
+    uint32_t bot1 = (tok1 >> 4);//  & 0xFu;
+    uint32_t bot2 = (tok2 >> 4);//  & 0xFu;
+    uint32_t bot3 = (tok3 >> 4);//  & 0xFu;
 
    
     uint32_t E =
