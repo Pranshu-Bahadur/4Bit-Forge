@@ -245,7 +245,7 @@ __device__ __forceinline__ void stage_decode(
 
 
 
-
+/*
 __device__ __forceinline__ uint32_t park_tok(const uint32_t tok, const int t) {
     uint32_t meta_top = 0u, meta_bot = 0u;
     
@@ -256,8 +256,54 @@ __device__ __forceinline__ uint32_t park_tok(const uint32_t tok, const int t) {
         meta_bot |= ((pkt >> 4)) << (i << 2);  // & 0xFu
     }
     //@TODO ...31...16 is higher?
+
+    uint32_t metadata = 0u;
+
+    #pragma unroll
+    for (int i = 0; i < 2; ++i) {
+        metadata |= (meta_top)        >> ((2*i) << 2);
+        metadata |= (meta_bot)        >> ((2*i) << 2);  // & 0xFu
+    }
+
     return (uint32_t)(meta_top | (meta_bot << 16));
 }
+*/
+
+__device__ __forceinline__ uint32_t park_tok(
+    uint32_t tok, int t
+) {
+    // Gather tok from lanes 0..3 within width=4 group
+    uint32_t tok0 = __shfl_xor_sync(0xFFFFFFFFu, tok, (t ^ 0), 4);
+    uint32_t tok1 = __shfl_xor_sync(0xFFFFFFFFu, tok, (t ^ 1), 4);
+    uint32_t tok2 = __shfl_xor_sync(0xFFFFFFFFu, tok, (t ^ 2), 4);
+    uint32_t tok3 = __shfl_xor_sync(0xFFFFFFFFu, tok, (t ^ 3), 4);
+
+    // Extract nibbles
+    uint32_t top0 =  tok0        & 0xFu;
+    uint32_t top1 =  tok1        & 0xFu;
+    uint32_t top2 =  tok2        & 0xFu;
+    uint32_t top3 =  tok3        & 0xFu;
+
+    uint32_t bot0 = (tok0 >> 4)  & 0xFu;
+    uint32_t bot1 = (tok1 >> 4)  & 0xFu;
+    uint32_t bot2 = (tok2 >> 4)  & 0xFu;
+    uint32_t bot3 = (tok3 >> 4)  & 0xFu;
+
+    // Pack as: [3..0]=top0, [7..4]=top1, [11..8]=bot0, [15..12]=bot1,
+    //          [19..16]=top2,[23..20]=top3,[27..24]=bot2,[31..28]=bot3
+    uint32_t E =
+        (top0 <<  0) |
+        (top1 <<  4) |
+        (bot0 <<  8) |
+        (bot1 << 12) |
+        (top2 << 16) |
+        (top3 << 20) |
+        (bot2 << 24) |
+        (bot3 << 28);
+
+    return E;
+}
+
 
 
 __device__ __forceinline__ uint32_t park(const StageOut& out, int t) {
