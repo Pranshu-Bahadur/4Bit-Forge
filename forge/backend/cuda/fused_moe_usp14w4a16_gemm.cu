@@ -107,8 +107,8 @@ __device__ __forceinline__ __nv_bfloat162 bf16x2_from_packed_i8pair(const uint16
 
     __nv_bfloat162 frag_a;
     
-    frag_a.x = __float2bfloat16((float)((packed_u & 0xFFu)) - 8.0f);
-    frag_a.y = __float2bfloat16((float)(((packed_u >> 8) & 0xFFu)) - 8.0f);
+    frag_a.x = __float2bfloat16(((float)(uint32_t)((packed_u & 0xFFu))) - 8.0f);
+    frag_a.y = __float2bfloat16(((float)(uint32_t)(((packed_u >> 8) & 0xFFu))) - 8.0f);
 
     return frag_a;
 }
@@ -156,8 +156,8 @@ __device__ __forceinline__ void decode(
     //const int8_t w = (int8_t)((int)q4);
 
     
-    const uint8_t v0 = (idx2 & 1) ? (const uint8_t)0 : (const uint8_t)q4;
-    const uint8_t v1 = (idx2 & 1) ? (const uint8_t)q4 : (const uint8_t)0;
+    const uint8_t v0 = (idx2 & 1) ? (uint8_t)0 : (uint8_t)q4;
+    const uint8_t v1 = (idx2 & 1) ? (uint8_t)q4 : (uint8_t)0;
 
     v01_packed = (uint16_t)v0 | ((uint16_t)v1 << 8);
     meta_nibble = (idx2 >> 1) ? (uint32_t)0xE : (uint32_t)0x4;
@@ -520,11 +520,11 @@ __device__ inline void mma_f0(
     const __nv_bfloat162 fa2,
     const __nv_bfloat162 fa3,
     const uint32_t* b,
-    const uint32_t metadata,
+    const uint32_t e,
     float4& frag_c
 ) {
 
-    const uint32_t* e = reinterpret_cast<const uint32_t*>(&metadata);
+    //const uint32_t* e = reinterpret_cast<const uint32_t*>(&metadata);
     const uint32_t a0 = reinterpret_cast<const uint32_t&>(fa0);
     const uint32_t a1 = reinterpret_cast<const uint32_t&>(fa1);
     const uint32_t a2 = reinterpret_cast<const uint32_t&>(fa2);
@@ -537,7 +537,7 @@ __device__ inline void mma_f0(
             "{%0,%1,%2,%3}, {%4,%5,%6,%7}, {%8,%9,%10,%11}, {%12,%13,%14,%15}, %16, 0x0;\n"
             : "=f"(c[0]), "=f"(c[1]), "=f"(c[2]), "=f"(c[3])
             : "r"(a0), "r"(a1), "r"(a2), "r"(a3), "r"(b[0]), "r"(b[1]), "r"(b[2]), "r"(b[3]), "f"(z), "f"(z), "f"(z), "f"(z),
-              "r"(e[0])
+              "r"(e)
     );
 }
 
@@ -550,11 +550,11 @@ __device__ inline void mma_f1(
     const __nv_bfloat162 fa2,
     const __nv_bfloat162 fa3,
     const uint32_t* b,
-    const uint32_t metadata,
+    const uint32_t e,
     float4& frag_c
 ) {
 
-    const uint32_t* e = reinterpret_cast<const uint32_t*>(&metadata);
+    //const uint32_t* e = reinterpret_cast<const uint32_t*>(&metadata);
     const uint32_t a0 = reinterpret_cast<const uint32_t&>(fa0);
     const uint32_t a1 = reinterpret_cast<const uint32_t&>(fa1);
     const uint32_t a2 = reinterpret_cast<const uint32_t&>(fa2);
@@ -568,7 +568,7 @@ __device__ inline void mma_f1(
         "{%0,%1,%2,%3}, {%4,%5,%6,%7}, {%8,%9,%10,%11}, {%12,%13,%14,%15}, %16, 0x1;\n"
         : "=f"(c[0]), "=f"(c[1]), "=f"(c[2]), "=f"(c[3])
         : "r"(a0), "r"(a1), "r"(a2), "r"(a3), "r"(b[0]), "r"(b[1]), "r"(b[2]), "r"(b[3]), "f"(z), "f"(z), "f"(z), "f"(z),
-          "r"(e[0])
+          "r"(e)
     );
 }
 
