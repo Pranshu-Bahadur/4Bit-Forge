@@ -380,8 +380,8 @@ __device__ __forceinline__ void store_tile_swiglu(
     int64_t m_base, int64_t m_end,
     int groupID, int t,
     int64_t oc_base,
-    const float4& gate4,
-    const float4& up4
+    float4& gate4,
+    float4& up4
 ){
     #pragma unroll
     for (int j=0;j<4;++j){
@@ -425,7 +425,7 @@ __device__ __forceinline__ void store(
     int64_t m_base, int64_t m_end,
     int groupID, int t,
     int64_t oc_base,
-    const float4& D4
+    float4& D4
 ){
     #pragma unroll
     for (int j=0;j<4;++j){
@@ -479,7 +479,7 @@ __device__ inline void ldsmB(
     //OG: https://forums.developer.nvidia.com/t/use-of-ldmatrix/316010/7
 
     asm volatile(
-        "ldmatrix.sync.aligned.m8n8.x4.trans.shared.b16 {%0, %1, %2, %3}, [%4];\n"
+        "ldmatrix.sync.aligned.m8n8.x4.shared.b16 {%0, %1, %2, %3}, [%4];\n"
         : "=r"(b[0]), "=r"(b[1]), "=r"(b[2]), "=r"(b[3])
         : "l"(__cvta_generic_to_shared(XS_ptr))
     );
@@ -504,11 +504,11 @@ __device__ inline void mma_f0(
     const __nv_bfloat162& fa2,
     const __nv_bfloat162& fa3,
     const uint32_t* b,
-    const uint32_t& metadata,
+    const uint32_t metadata,
     float4& frag_c
 ) {
 
-    const uint32_t e = reinterpret_cast<const uint32_t>(&metadata);
+    const uint32_t e = reinterpret_cast<const uint32_t>(metadata);
     const uint32_t a0 = reinterpret_cast<const uint32_t>(&fa0);
     const uint32_t a1 = reinterpret_cast<const uint32_t>(&fa1);
     const uint32_t a2 = reinterpret_cast<const uint32_t>(&fa2);
@@ -534,11 +534,11 @@ __device__ inline void mma_f1(
     const __nv_bfloat162& fa2,
     const __nv_bfloat162& fa3,
     const uint32_t* b,
-    const uint32_t& metadata,
+    const uint32_t metadata,
     float4& frag_c
 ) {
 
-    const uint32_t e = reinterpret_cast<const uint32_t>(&metadata);
+    const uint32_t e = reinterpret_cast<const uint32_t>(metadata);
     const uint32_t a0 = reinterpret_cast<const uint32_t>(&fa0);
     const uint32_t a1 = reinterpret_cast<const uint32_t>(&fa1);
     const uint32_t a2 = reinterpret_cast<const uint32_t>(&fa2);
