@@ -53,7 +53,7 @@ __device__ __forceinline__ uint64_t shfl_u64(const uint64_t v, int src_lane, uns
 
 __device__ __forceinline__ ulonglong2 shfl_u64x2(
     const unsigned mask,
-    const ulonglong2& v,
+    const ulonglong2 v,
     const int curr_t,
     const int src_t
 ) {
@@ -242,10 +242,10 @@ __device__ __forceinline__ void stage_decode(
     decode(qwBot.y, i_lo, bot.z, meta_nib_bot.z);
     decode(qwBot.y, i_hi, bot.w, meta_nib_bot.w);
 
-    out.top_h0 = pack_i8x4_from_i16x2(top.x, top.y);
-    out.bot_h0 = pack_i8x4_from_i16x2(bot.x, bot.y);
-    out.top_h1 = pack_i8x4_from_i16x2(top.z, top.w);
-    out.bot_h1 = pack_i8x4_from_i16x2(bot.z, bot.w);
+    out.top_h0 = pack_i8x4_from_i16x2(top.x, bot.x);
+    out.bot_h0 = pack_i8x4_from_i16x2(top.y, bot.y);
+    out.top_h1 = pack_i8x4_from_i16x2(top.z, bot.z);
+    out.bot_h1 = pack_i8x4_from_i16x2(top.w, bot.w);
 
     out.nib_h0_lo = pack_nib2(meta_nib_top.x, meta_nib_bot.x);
     out.nib_h0_hi = pack_nib2(meta_nib_top.y, meta_nib_bot.y);
@@ -333,18 +333,34 @@ __device__ __forceinline__ uint32_t park(const StageOut& out, int t) {
 */
 
 __device__ __forceinline__ uint32_t park_h0(const StageOut out, const int t) {
-    uint32_t e = 0u;
+    
+    /*
     if ((t==0 || t==1)) {
         e = park_tok((t==0)? (uint32_t)out.nib_h0_lo : (uint32_t)out.nib_h0_hi, t);
     }
-    return e; 
+
+    */
+
+    uint32_t e0_0_3 = park_tok((uint32_t)out.nib_h0_lo, t);
+    uint32_t e0_4_3 = park_tok((uint32_t)out.nib_h0_hi, t);
+    
+    return (t & 1) e0_4_3 : e0_0_3; 
 }
-__device__ __forceinline__ uint32_t park_h1(const StageOut out, const int t) {  // even->0..15, odd->16..31
-    uint32_t e = 0u;
-    if ((t==2 || t==3)) {
-        e = park_tok((t==2)? (uint32_t)out.nib_h1_lo : (uint32_t)out.nib_h1_hi, t);
+
+
+__device__ __forceinline__ uint32_t park_h1(const StageOut out, const int t) {
+    
+    /*
+    if ((t==0 || t==1)) {
+        e = park_tok((t==0)? (uint32_t)out.nib_h0_lo : (uint32_t)out.nib_h0_hi, t);
     }
-    return e;
+
+    */
+
+    uint32_t e1_0_3 = park_tok((uint32_t)out.nib_h0_lo, t);
+    uint32_t e1_4_3 = park_tok((uint32_t)out.nib_h0_hi, t);
+    
+    return (t & 1) e1_4_3 : e1_0_3; 
 }
 
 
@@ -698,15 +714,15 @@ __global__ void phantom_usp14_w4a16_sym_sm80_fmoe_w13AS_mm_phase(
         //metadata_gate = park(gate, (int)t);
         //metadata_up = park(up, (int)t);
 
-        if (t==0 or t==1) {
-            metadata_gate0 = park_h0(gate, (int)t);
-            metadata_up0   = park_h0(up, (int)t);     // used with up_ah0
-        }
+        //if (t==0 or t==1) {
+        metadata_gate0 = park_h0(gate, (int)t);
+        metadata_up0   = park_h0(up, (int)t);     // used with up_ah0
+        //}
 
-        if (t==2 || t==3) {
-            metadata_gate1 = park_h1(gate, (int)t);
-            metadata_up1   = park_h1(up, (int)t);     // used with up_ah1
-        }
+        //if (t==2 || t==3) {
+        metadata_gate1 = park_h1(gate, (int)t);
+        metadata_up1   = park_h1(up, (int)t);     // used with up_ah1
+        //}
 
         fscales_gate.x = bf16_bits_to_f32(gate.sc_pack.x);
         fscales_gate.y = bf16_bits_to_f32(gate.sc_pack.y);
@@ -808,15 +824,15 @@ __global__ void phantom_usp14_w4a16_sym_sm80_fmoe_w13AS_mm_phase(
                 //metadata_gate = park(gate, (int)t);
                 //metadata_up = park(up, (int)t);
 
-                if (t==0 or t==1) {
-                    metadata_gate0 = park_h0(gate, (int)t);
-                    metadata_up0   = park_h0(up, (int)t);     // used with up_ah0
-                }
+                //if (t==0 or t==1) {
+                metadata_gate0 = park_h0(gate, (int)t);
+                metadata_up0   = park_h0(up, (int)t);     // used with up_ah0
+                //}
 
-                if (t==2 || t==3) {
-                    metadata_gate1 = park_h1(gate, (int)t);
-                    metadata_up1   = park_h1(up, (int)t);     // used with up_ah1
-                }
+                //if (t==2 || t==3) {
+                metadata_gate1 = park_h1(gate, (int)t);
+                metadata_up1   = park_h1(up, (int)t);     // used with up_ah1
+                //}
                 
                 
                 
@@ -910,13 +926,13 @@ __global__ void phantom_usp14_w4a16_sym_sm80_fmoe_w2AS_mm(
     stage_decode(qwTop, qwBot, (int)t, 0, (int)groupID, out);
 
 
-    if (t==0 or t==1) {
-        metadata_out0 = park_h0(out, (int)t);
-    }
+    //if (t==0 or t==1) {
+    metadata_out0 = park_h0(out, (int)t);
+    //}
 
-    if (t==2 || t==3) {
-        metadata_out1 = park_h1(out, (int)t);
-    }
+    //if (t==2 || t==3) {
+    metadata_out1 = park_h1(out, (int)t);
+    //}
 
     
 
@@ -977,13 +993,13 @@ __global__ void phantom_usp14_w4a16_sym_sm80_fmoe_w2AS_mm(
                 fscales_out.z = bf16_bits_to_f32(out.sc_pack.z);
                 fscales_out.w = bf16_bits_to_f32(out.sc_pack.w);
                 
-                if (t==0 or t==1) {
-                    metadata_out0 = park_h0(out, (int)t);
-                }
+                //if (t==0 or t==1) {
+                metadata_out0 = park_h0(out, (int)t);
+                //}
 
-                if (t==2 || t==3) {
-                    metadata_out1 = park_h1(out, (int)t);
-                }
+                //if (t==2 || t==3) {
+                metadata_out1 = park_h1(out, (int)t);
+                //}
 
                 bf16x2x2_from_i8x4(out.top_h0, out_h0_a0, out_h0_a1);
                 bf16x2x2_from_i8x4(out.bot_h0, out_h0_a2, out_h0_a3);
