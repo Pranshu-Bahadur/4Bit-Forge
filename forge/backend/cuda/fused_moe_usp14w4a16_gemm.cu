@@ -151,7 +151,7 @@ __device__ __forceinline__ void decode(
     const uint32_t hi32  = (const uint32_t)(u64 >> 32);
     const uint16_t idx16 = (const uint16_t)(hi32 & 0xFFFFu);
     const uint32_t q4   = (qw32 >> (4 * chunk_i)) & 0xFu;
-    const uint16_t idx2 = (idx16 >> (2 * chunk_i)) & 0x3u;
+    const uint32_t idx2 = (idx16 >> (2 * chunk_i)) & 0x3u;
 
     //const int8_t w = (int8_t)((int)q4);
 
