@@ -499,10 +499,10 @@ uint32_t smem_ptr;
 
 
 __device__ inline void mma_f0(
-    const __nv_bfloat162& fa0,
-    const __nv_bfloat162& fa1,
-    const __nv_bfloat162& fa2,
-    const __nv_bfloat162& fa3,
+    const __nv_bfloat162 fa0,
+    const __nv_bfloat162 fa1,
+    const __nv_bfloat162 fa2,
+    const __nv_bfloat162 fa3,
     const uint32_t* b,
     const uint32_t metadata,
     float4& frag_c
@@ -529,10 +529,10 @@ __device__ inline void mma_f0(
 
 
 __device__ inline void mma_f1(
-    const __nv_bfloat162& fa0,
-    const __nv_bfloat162& fa1,
-    const __nv_bfloat162& fa2,
-    const __nv_bfloat162& fa3,
+    const __nv_bfloat162 fa0,
+    const __nv_bfloat162 fa1,
+    const __nv_bfloat162 fa2,
+    const __nv_bfloat162 fa3,
     const uint32_t* b,
     const uint32_t metadata,
     float4& frag_c
