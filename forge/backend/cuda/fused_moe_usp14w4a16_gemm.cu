@@ -255,7 +255,7 @@ __device__ __forceinline__ uint32_t park_tok(const uint32_t tok, const int t) {
         meta_top |= (pkt & 0xFu)        << (i << 2);
         meta_bot |= ((pkt >> 4) & 0xFu) << (i << 2);
     }
-    
+    //@TODO ...31...16 is higher?
     return (uint32_t)(meta_bot | (meta_top << 16));
 }
 
