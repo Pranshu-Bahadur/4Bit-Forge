@@ -36,7 +36,8 @@ def list_layers(block: nn.Module) -> Dict[str, Union[nn.Linear, ParamSliceProxy]
     for n, m in block.named_modules():
         if isinstance(m, nn.Linear):
             layers[n] = m
-            
+        
+    """
     # GPT-OSS path: fused expert weights as Parameters on block.mlp.experts
     mlp = getattr(block, "mlp", None)
     experts = getattr(mlp, "experts", None) if mlp is not None else None
@@ -50,6 +51,7 @@ def list_layers(block: nn.Module) -> Dict[str, Union[nn.Linear, ParamSliceProxy]
             for e in range(E):
                 layers[f"mlp.experts.{e}.gate_up_proj"] = ParamSliceProxy(experts, "gate_up_proj", e)
                 layers[f"mlp.experts.{e}.down_proj"]    = ParamSliceProxy(experts, "down_proj", e)
+    """
 
     return layers
 
@@ -92,10 +94,12 @@ def dequantize_forge_full(dtype, qweight, scales, qzeros, group_size, device):
     qzero = qzeros_rg.repeat_interleave(group_size, dim=1)[:, :C]
 
     w = (qweight.to(torch.float32) - qzero.to(torch.float32)) * scale.to(torch.float32)
-    return w.to(dtype), scale, qzero
+    return w.to(dtype)
 
 
 def forward(block, X, position_ids, N, bs, device, offload_device, act_update=False, rotary_emb=None):
+    block.to(device)
+    #X.to(device)
     for s in range(0, N, bs):
         e = min(N, s + bs)
 
@@ -116,11 +120,12 @@ def forward(block, X, position_ids, N, bs, device, offload_device, act_update=Fa
         out = out.to(offload_device) if offload_device is not None else out
         if act_update:
             for j in range(B):
-                X[s + j] = out[j:j+1].contiguous()
+                X[s + j] = out[j:j+1].to(offload_device).contiguous()
 
         del x, pos, out
+    block.to(offload_device)
     if act_update:
-        return X
+        return X#.to(offload_device)
     else:
         return None
     

@@ -9,10 +9,33 @@ import torch
 from transformers import AutoConfig, AutoTokenizer, AutoModelForCausalLM
 
 from accelerate import init_empty_weights
+from safetensors import safe_open 
+
 
 import forge.utils
 
 from forge.gptq import GPTQ
+
+def to_u8_nibble_sym_int4(qw: torch.Tensor) -> torch.Tensor:
+    qw16 = qw.to(torch.int16)
+    # Heuristic: if any negatives exist, it's signed [-8..7] and needs +8.
+    if (qw16 < 0).any():
+        qw16 = qw16 + 8
+    # Now force into nibble range
+    return qw16.clamp_(0, 15).to(torch.uint8).contiguous()
+
+
+def _parse_expert_id(handle_name: str) -> int:
+    m = re.search(r"\.experts\.(\d+)\.", handle_name)
+    if not m:
+        raise RuntimeError(f"Could not parse expert id from handle_name={handle_name}")
+    return int(m.group(1))
+
+def _save_Wpair_u64(path: str, Wpair_u64: torch.Tensor):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    # Wpair_u64 is uint64 [G2, R, 2] (contiguous)
+    torch.save({"Wpair_u64": Wpair_u64.contiguous()}, path)
+
 
 
 def parse_args():
@@ -46,6 +69,11 @@ def parse_args():
         default=128,
     )
 
+    parser.add_argument(
+        "--algorithm",
+         type=str, default="gptq",
+                   choices=["gptq", "sparsegptq"])
+
     parser.add_argument("--attn_implementation", type=str, default="flash_attention_2",
                    choices=["sdpa", "eager", "flash_attention_2"])
     
@@ -53,7 +81,7 @@ def parse_args():
     parser.add_argument("--rel_damp", type=float, default=1e-1)
     parser.add_argument("--block_size", type=int, default=32)
     parser.add_argument("--quantization_scale", type=str, default="mse", choices=["absmax", "mse"])
-    parser.add_argument("--quantization_order", type=str, default="activation", choices=["default", "activation"])
+    parser.add_argument("--quantization_order", type=str, default="default", choices=["default", "activation"])
     parser.add_argument(
         "--quantize_only_routed_experts",
         default=False,
@@ -106,18 +134,39 @@ def main():
             torch_dtype=dtype
         ).eval()
         model.config.use_cache = False
-    ROUTED_EXPERTS_REGEX = r".*\.experts\.\d+\.(down_proj|gate_proj|up_proj|gate_up_proj|w\d+)$"
+    ROUTED_EXPERTS_REGEX = r".*mlp.experts.\d+.(down|gate|up)_proj$"
 
     #ROUTED_EXPERTS_REGEX = ROUTED_EXPERTS_REGEX if "deepseek" in str(args.model_name_or_path).lower() else r".*mlp\.experts\.(down|gate|up|gate_up)_proj.*"
     shard_ids = forge.utils.io.load_safetensors_index(args.model_name_or_path, tmp_dir=args.hf_tmp_dir)
     weight_map = shard_ids["weight_map"]
     num_shards = len(set(weight_map.values()))
 
+    if args.save_dir and args.algorithm=="sparsegptq":
+        os.makedirs(args.save_dir, exist_ok=True)
+
+        # copy small files once
+        import shutil
+        for fname in ["config.json", "generation_config.json",
+                    "tokenizer.json", "tokenizer_config.json",
+                    "special_tokens_map.json", "tokenizer.model"]:
+            src = os.path.join(args.model_name_or_path, fname)
+            if os.path.exists(src):
+                dst = os.path.join(args.save_dir, fname)
+                if not os.path.exists(dst):
+                    shutil.copy2(src, dst)
+
+        # load base index dict you already have as `shard_ids`
+        idx_writer = forge.utils.io.IncrementalIndexWriter(args.model_name_or_path, args.save_dir, shard_ids)
+        idx_writer.flush()
+    else:
+        idx_writer = None
+
+
 
     # --- IO objects (create once) ---
     lru = forge.utils.io.ShardLRU(max_bytes=int(args.lru_ram_gb * (1024**3)))
 
-    assumed_shard_bytes = int(4.63 * (1024**3)) if args.jit_stream else 0
+    assumed_shard_bytes = int(5.36 * (1024**3)) if args.jit_stream else 0
 
     disk_cfg = forge.utils.io.DiskWindowConfig(
         shard_bytes=assumed_shard_bytes,
@@ -128,13 +177,16 @@ def main():
     disk_window = forge.utils.io.ShardDiskWindow(args.hf_tmp_dir, disk_cfg)
 
 
-    tokenizer = AutoTokenizer.from_pretrained(args.model_name_or_path, trust_remote_code=True)
+    tokenizer = AutoTokenizer.from_pretrained("deepseek-ai/DeepSeek-V3.2", trust_remote_code=True)
     if tokenizer.pad_token_id is None:
                 print("[WARN] Tokenizer has no pad_token_id! Using eos_token_id as pad_token.")
                 tokenizer.pad_token = tokenizer.eos_token
                 tokenizer.pad_token_id = tokenizer.eos_token_id
 
     #Assumptions: your model has a chat template & your dataset contains instruction & output columns & contains split=train
+    if tokenizer.chat_template is None:
+          tokenizer.chat_template = "{% if not add_generation_prompt is defined %}{% set add_generation_prompt = false %}{% endif %}{% if not thinking is defined %}{% set thinking = false %}{% endif %}{% set ns = namespace(is_first=false, is_tool=false, system_prompt='', is_first_sp=true, is_last_user=false, is_only_sys=false, is_prefix=false) %}{%- for message in messages %}{%- if message['role'] == 'system' %}{%- if ns.is_first_sp %}{% set ns.system_prompt = ns.system_prompt + message['content'] %}{% set ns.is_first_sp = false %}{%- else %}{% set ns.system_prompt = ns.system_prompt + '\n\n' + message['content'] %}{%- endif %}{% set ns.is_only_sys = true %}{%- endif %}{%- endfor %}{{ bos_token }}{{ ns.system_prompt }}{%- for message in messages %}{%- if message['role'] == 'user' %}{%- set ns.is_tool = false -%}{%- set ns.is_first = false -%}{%- set ns.is_last_user = true -%}{{'<｜User｜>' + message['content']}}{%- endif %}{%- if message['role'] == 'assistant' and message['tool_calls'] is defined and message['tool_calls'] is not none %}{%- if ns.is_last_user or ns.is_only_sys %}{{'<｜Assistant｜></think>'}}{%- endif %}{%- set ns.is_last_user = false -%}{%- set ns.is_first = false %}{%- set ns.is_tool = false -%}{%- for tool in message['tool_calls'] %}{%- if not ns.is_first %}{%- if message['content'] is none %}{{'<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>'+ tool['function']['name'] + '<｜tool▁sep｜>' + tool['function']['arguments'] + '<｜tool▁call▁end｜>'}}{%- else %}{{message['content'] + '<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>' + tool['function']['name'] + '<｜tool▁sep｜>' + tool['function']['arguments'] + '<｜tool▁call▁end｜>'}}{%- endif %}{%- set ns.is_first = true -%}{%- else %}{{'<｜tool▁call▁begin｜>'+ tool['function']['name'] + '<｜tool▁sep｜>' + tool['function']['arguments'] + '<｜tool▁call▁end｜>'}}{%- endif %}{%- endfor %}{{'<｜tool▁calls▁end｜><｜end▁of▁sentence｜>'}}{%- endif %}{%- if message['role'] == 'assistant' and (message['tool_calls'] is not defined or message['tool_calls'] is none) %}{%- if ns.is_last_user %}{{'<｜Assistant｜>'}}{%- if message['prefix'] is defined and message['prefix'] and thinking %}{{'<think>'}}{%- else %}{{'</think>'}}{%- endif %}{%- endif %}{%- if message['prefix'] is defined and message['prefix'] %}{%- set ns.is_prefix = true -%}{%- endif %}{%- set ns.is_last_user = false -%}{%- if ns.is_tool %}{{message['content'] + '<｜end▁of▁sentence｜>'}}{%- set ns.is_tool = false -%}{%- else %}{%- set content = message['content'] -%}{%- if '</think>' in content %}{%- set content = content.split('</think>', 1)[1] -%}{%- endif %}{{content + '<｜end▁of▁sentence｜>'}}{%- endif %}{%- endif %}{%- if message['role'] == 'tool' %}{%- set ns.is_last_user = false -%}{%- set ns.is_tool = true -%}{{'<｜tool▁output▁begin｜>' + message['content'] + '<｜tool▁output▁end｜>'}}{%- endif %}{%- if message['role'] != 'system' %}{% set ns.is_only_sys = false %}{%- endif %}{%- endfor -%}{% if add_generation_prompt and not ns.is_tool%}{% if ns.is_last_user or ns.is_only_sys or not ns.is_prefix %}{{'<｜Assistant｜>'}}{%- if not thinking %}{{'</think>'}}{%- else %}{{'<think>'}}{%- endif %}{% endif %}{% endif %}"
+
     calibration_dataset = forge.utils.preprocess.prepare_dataset(str(args.dataset_name_or_path),
                                                                 tokenizer, 
                                                                 int(args.max_sequence_length), 
@@ -150,6 +202,7 @@ def main():
     X = [None] * N
 
     embed = model.model.embed_tokens
+    
 
     forge.utils.io.jit_load_prefix_to_cpu(
         model,
@@ -162,6 +215,36 @@ def main():
         disk_window=disk_window,
     )
 
+    if args.algorithm=="sparsegptq":
+        block_tensors = {}
+        block_tensors["model.embed_tokens.weight"] = embed.weight.cpu().contiguous()
+        lm_head = model.lm_head
+        norm = model.model.norm
+
+        forge.utils.io.jit_load_prefix_to_cpu(
+            model,
+            args.model_name_or_path,
+            weight_map,
+            ["lm_head."],
+            args.hf_tmp_dir,
+            lru,
+            reserve_bytes=0,
+            disk_window=disk_window,
+        )
+
+        block_tensors["lm_head.weight"] = lm_head.weight.cpu().contiguous()
+
+        forge.utils.io.jit_load_prefix_to_cpu(
+            model,
+            args.model_name_or_path,
+            weight_map,
+            ["model.norm."],
+            args.hf_tmp_dir,
+            lru,
+            reserve_bytes=0,
+            disk_window=disk_window,
+        )
+        block_tensors["model.norm.weight"] = norm.weight.cpu().contiguous()
 
     embed.to(device)
     X = forge.utils.preprocess.prepare_embeddings(embed, calibration_dataset, X, N, B, device, offload_device)
@@ -209,11 +292,19 @@ def main():
             device=device
         )
     
+    #if rotary_emb:
+    #    if args.algorithm=="sparsegptq":
+    #        block_tensors["model.model.rotary_emb.weight"] = rotary_emb.weight.cpu().contiguous()
+    
+        
 
     blocks = model.model.layers
 
     for block_id, block in tqdm(enumerate(blocks)):
         prefix = f"model.layers.{block_id}."
+
+        
+
         forge.utils.io.jit_load_prefix_to_cpu(
             model,
             args.model_name_or_path,
@@ -226,13 +317,27 @@ def main():
             materialize_block=block,
             materialize_prefix=prefix,
             materialize_fn=forge.utils.io.materialize_block_weights_to_fp,
-            group_size=int(args.group_size),
+            group_size=128,
             bits=int(args.bits),
             dtype=dtype,
-            list_layers_fn=forge.utils.engine.list_layers,
+            list_layers_fn=forge.utils.io.list_layers,
         )
         meta_names = [n for n, p in block.named_parameters(recurse=True) if getattr(p, "is_meta", False)]
         assert not meta_names, f"Still meta params in block {block_id}: {meta_names[:10]}"
+
+        prefix = f"model.layers.{block_id}."
+
+        # collect ALL block tensors now (still CPU)
+        if args.algorithm=="sparsegptq":
+            if not block_tensors:
+                block_tensors = {}
+
+            #_block_tensors, base_shard_name = forge.utils.io.collect_block_tensors_from_base_shard(args.hf_tmp_dir, weight_map, prefix)
+
+            for k, v in block.state_dict().items():
+                block_tensors[prefix + k] = v.contiguous()
+        
+
         block.to(device)
         
         #Calibration Pass
@@ -255,7 +360,7 @@ def main():
                             quantization_order=args.quantization_order,
                             quantization_scale=args.quantization_scale,
                             owner=owner,
-                            algorithm="gptq",
+                            algorithm=str(args.algorithm),
                             device = device
                         )
                 experts_hook = forge.utils.engine.fused_expert_hooks(block, handles)
@@ -286,46 +391,280 @@ def main():
                         quantization_order=args.quantization_order,
                         quantization_scale=args.quantization_scale,
                         owner=owner,
-                        algorithm="gptq",
+                        algorithm=str(args.algorithm),
                         device = device
                     )
                 if owner is None:
                     hooks[layer_name] = layer.register_forward_hook(update_handle_hook(layer_name))
 
+        if args.algorithm == "sparsegptq":
+            num_experts = 128  # or derive from model/config
+            packed_gateup = [None] * num_experts
+            packed_down   = [None] * num_experts
 
         with torch.no_grad():
             _ = forge.utils.engine.forward(block, X, position_ids, N, B, device, offload_device, False, rotary_emb)
+            del _
             
             for _, h in hooks.items():
                 h.remove()
 
+            _pending_gate_Wpair = {}
+
             for handle_name, handle in handles.items():
                 if handle._is_owner():
-                    qweight, scales, qzeros = handle.quantize()
-                    deq, scales, qzeros = forge.utils.engine.dequantize_forge_full(handle.layer.weight.dtype, qweight, scales, qzeros,
-                                                                int(args.group_size), int(args.bits),
-                                                                )
-                    handle.layer.weight.copy_(deq)
-                    if args.save_dir:
-                        os.makedirs(os.path.join(args.save_dir + f"/block.{block_id}", handle_name), exist_ok=True)
-                        torch.save(
-                                {"qweight": qweight.to(torch.int8), "scale": scales.to(dtype), "zero": qzeros.to(torch.int8)},
-                                os.path.join(args.save_dir, f"block.{block_id}", handle_name, f"quantized_weight.pt"),
+                    if str(args.algorithm) == "sparsegptq":
+                        qweight, scales, qzeros, M = handle.quantize()
+
+                        # keep this if you still want dense deq checkpoint / sanity path
+                        deq = forge.utils.engine.dequantize_forge_full(
+                            handle.layer.weight.dtype,
+                            qweight, scales, qzeros,
+                            int(args.group_size), int(args.bits),
+                        )
+                        handle.layer.weight.copy_(deq)
+
+                        # ---- PACK NOW (no intermediate disk) ----
+                        # qweight is [R,C] int8, M is [G32,R] uint32, scales is [G32,R] float-ish
+                        # pack kernel expects qweight_rc uint8 nibbles 0..15
+                        #qw_u8 = to_u8_nibble_sym_int4(qweight)
+
+                        # ensure dtypes match packer expectations
+                        scales_f32 = scales.to(torch.float32).contiguous()
+                        M_u32 = M.to(torch.uint32).contiguous()
+
+                        # packed: uint64 [G2, R, 2]
+                        G32 = (qweight.shape[1] + 32 - 1) // 32
+                        Wpair_u64 = forge.backend.cuda.kernels.pack_sparsegptq14_to_u64x2(
+                            qweight, M_u32, scales_f32.view(qweight.shape[0], G32).transpose(0, 1).contiguous()
+                        )
+
+                        # ---- SAVE PACKED IN YOUR DESIRED LAYOUT ----
+                        if args.save_dir:
+                            # Detect proj type from handle_name
+                            is_gate = handle_name.endswith("gate_proj")
+                            is_up   = handle_name.endswith("up_proj")
+                            is_down = handle_name.endswith("down_proj")
+
+                            if is_gate:
+                                eid = _parse_expert_id(handle_name)
+                                _pending_gate_Wpair[(block_id, eid)] = Wpair_u64.detach().contiguous()
+
+                            elif is_up:
+                                eid = _parse_expert_id(handle_name)
+                                key = (block_id, eid)
+                                if key not in _pending_gate_Wpair:
+                                    raise RuntimeError(f"Missing cached gate Wpair for block={block_id} expert={eid}. "
+                                                    f"Loop order unexpected; need to pack+cache gate first.")
+
+                                Wgate = _pending_gate_Wpair.pop(key)  # [G2, 2048, 2]
+                                Wup   = Wpair_u64.detach().contiguous()  # [G2, 2048, 2]
+
+                                # Stack along R -> [G2, 4096, 2]
+                                W13 = torch.cat([Wgate, Wup], dim=1).contiguous()
+
+                                # Save under gate_up_proj folder (Option B)
+                                #gateup_name = handle_name.replace("up_proj", "gate_up_proj")
+                                #out_dir = os.path.join(args.save_dir, f"block.{block_id}", gateup_name)
+                                #_save_Wpair_u64(os.path.join(out_dir, "Wpair_u64.pt"), W13)
+
+                                packed_gateup[int(eid)] = W13.detach().cpu().contiguous() 
+
+                                del Wgate, Wup, W13
+
+                            elif is_down:
+                                eid = _parse_expert_id(handle_name)
+                                #out_dir = os.path.join(args.save_dir, f"block.{block_id}", handle_name)
+                                #_save_Wpair_u64(os.path.join(out_dir, "Wpair_u64.pt"), Wpair_u64.detach())
+                                packed_down[int(eid)] = Wpair_u64.detach().cpu().contiguous()
+
+                            else:
+                                # If you have non-expert or different names, decide what to do here.
+                                pass
+
+                        # aggressively free
+                        del deq, scales_f32, M_u32, Wpair_u64
+                        del qweight, scales, qzeros, M
+                    else:
+                        qweight, scales, qzeros = handle.quantize()
+
+                        deq = forge.utils.engine.dequantize_forge_full(
+                            handle.layer.weight.dtype,
+                            qweight, scales, qzeros,
+                            int(args.group_size), int(args.bits),
+                        )
+                        handle.layer.weight.copy_(deq)
+
+                        if args.save_dir:
+                            out_dir = os.path.join(args.save_dir, f"block.{block_id}", handle_name)
+                            os.makedirs(out_dir, exist_ok=True)
+                            torch.save(
+                                {
+                                    "qweight": qweight.to(torch.int8),        # pre-nibble
+                                    "scales": scales.to(torch.float32),
+                                    "qzeros": qzeros.to(torch.int32),
+                                    "group_size": int(args.group_size),
+                                    "bits": int(args.bits),
+                                    "shape": tuple(handle.layer.weight.shape),
+                                },
+                                os.path.join(out_dir, "quantized_weight.pt"),
                             )
+                        del deq, scales, qzeros
 
             for handle_name, handle in handles.items():
                 if not handle._is_owner():
-                    qweight, scales, qzeros = handle.quantize()
-                    deq, scales, qzeros = forge.utils.engine.dequantize_forge_full(handle.layer.weight.dtype, qweight, scales, qzeros,
-                                                                int(args.group_size), int(args.bits),
-                                                                )
-                    handle.layer.weight.copy_(deq)
-                    if args.save_dir:
-                        os.makedirs(os.path.join(args.save_dir + f"/block.{block_id}", handle_name), exist_ok=True)
-                        torch.save(
-                                {"qweight": qweight.to(torch.int8), "scale": scales.to(dtype), "zero": qzeros.to(torch.int8)},
-                                os.path.join(args.save_dir + f"/block.{block_id}", handle_name, f"quantized_weight.pt"),
+                    if str(args.algorithm) == "sparsegptq":
+                        qweight, scales, qzeros, M = handle.quantize()
+
+                        # keep this if you still want dense deq checkpoint / sanity path
+                        deq = forge.utils.engine.dequantize_forge_full(
+                            handle.layer.weight.dtype,
+                            qweight, scales, qzeros,
+                            int(args.group_size), int(args.bits),
+                        )
+                        handle.layer.weight.copy_(deq)
+
+                        # ---- PACK NOW (no intermediate disk) ----
+                        # qweight is [R,C] int8, M is [G32,R] uint32, scales is [G32,R] float-ish
+                        # pack kernel expects qweight_rc uint8 nibbles 0..15
+                        #qw_u8 = to_u8_nibble_sym_int4(qweight)
+
+                        # ensure dtypes match packer expectations
+                        scales_f32 = scales.to(torch.float32).contiguous()
+                        M_u32 = M.to(torch.uint32).contiguous()
+
+                        # packed: uint64 [G2, R, 2]
+                        G32 = (qweight.shape[1] + 32 - 1) // 32
+                        Wpair_u64 = forge.backend.cuda.kernels.pack_sparsegptq14_to_u64x2(
+                            qweight, M_u32, scales_f32.view(qweight.shape[0], G32).transpose(0, 1).contiguous()
+                        )
+
+                        # ---- SAVE PACKED IN YOUR DESIRED LAYOUT ----
+                        if args.save_dir:
+                            # Detect proj type from handle_name
+                            is_gate = handle_name.endswith("gate_proj")
+                            is_up   = handle_name.endswith("up_proj")
+                            is_down = handle_name.endswith("down_proj")
+
+                            if is_gate:
+                                eid = _parse_expert_id(handle_name)
+                                _pending_gate_Wpair[(block_id, eid)] = Wpair_u64.detach().contiguous()
+
+                            elif is_up:
+                                eid = _parse_expert_id(handle_name)
+                                key = (block_id, eid)
+                                if key not in _pending_gate_Wpair:
+                                    raise RuntimeError(f"Missing cached gate Wpair for block={block_id} expert={eid}. "
+                                                    f"Loop order unexpected; need to pack+cache gate first.")
+
+                                Wgate = _pending_gate_Wpair.pop(key)  # [G2, 2048, 2]
+                                Wup   = Wpair_u64.detach().contiguous()  # [G2, 2048, 2]
+
+                                # Stack along R -> [G2, 4096, 2]
+                                W13 = torch.cat([Wgate, Wup], dim=1).contiguous()
+
+                                # Save under gate_up_proj folder (Option B)
+                                #gateup_name = handle_name.replace("up_proj", "gate_up_proj")
+                                #out_dir = os.path.join(args.save_dir, f"block.{block_id}", gateup_name)
+                                #_save_Wpair_u64(os.path.join(out_dir, "Wpair_u64.pt"), W13)
+
+                                packed_gateup[int(eid)] = W13.detach().cpu().contiguous() 
+
+                                del Wgate, Wup, W13
+
+                            elif is_down:
+                                eid = _parse_expert_id(handle_name)
+                                #out_dir = os.path.join(args.save_dir, f"block.{block_id}", handle_name)
+                                #_save_Wpair_u64(os.path.join(out_dir, "Wpair_u64.pt"), Wpair_u64.detach())
+                                packed_down[int(eid)] = Wpair_u64.detach().cpu().contiguous()
+
+                            else:
+                                # If you have non-expert or different names, decide what to do here.
+                                pass
+
+                        # aggressively free
+                        del deq, scales_f32, M_u32, Wpair_u64
+                        del qweight, scales, qzeros, M
+                    else:
+                        qweight, scales, qzeros = handle.quantize()
+
+                        deq = forge.utils.engine.dequantize_forge_full(
+                            handle.layer.weight.dtype,
+                            qweight, scales, qzeros,
+                            int(args.group_size), int(args.bits),
+                        )
+                        handle.layer.weight.copy_(deq)
+
+                        if args.save_dir:
+                            out_dir = os.path.join(args.save_dir, f"block.{block_id}", handle_name)
+                            os.makedirs(out_dir, exist_ok=True)
+                            torch.save(
+                                {
+                                    "qweight": qweight.to(torch.int8),        # pre-nibble
+                                    "scales": scales.to(torch.float32),
+                                    "qzeros": qzeros.to(torch.int32),
+                                    "group_size": int(args.group_size),
+                                    "bits": int(args.bits),
+                                    "shape": tuple(handle.layer.weight.shape),
+                                },
+                                os.path.join(out_dir, "quantized_weight.pt"),
                             )
+                        del deq, scales, qzeros
+
+            if args.algorithm == "sparsegptq" and args.save_dir and handles:
+                W13_all = torch.stack(packed_gateup, dim=0).contiguous()  # [E, G2, R13, 2]
+                W2_all  = torch.stack(packed_down,   dim=0).contiguous()  # [E, G2, R2,  2]
+
+                # choose keys your vLLM patch will load later
+                k_w13 = f"{prefix}mlp.experts.gate_up_proj.w13_weight"
+                k_w2  = f"{prefix}mlp.experts.down_proj.w2_weight"
+                block_tensors[k_w13] = W13_all.contiguous() #.view(torch.int64)
+                block_tensors[k_w2]  = W2_all.contiguous()
+                del W13_all, W2_all
+                
+            if idx_writer is not None and args.algorithm == "sparsegptq" and args.save_dir:
+                    def _load_tensor_from_shard(full_key: str) -> torch.Tensor:
+                        shard = weight_map[full_key]
+                        tensors = lru.get(shard) or {}
+                        if full_key in tensors:
+                            return tensors[full_key].contiguous()
+
+                        shard_path = disk_window.download_shard(
+                            args.model_name_or_path, shard,
+                            reserve_bytes=0,
+                            pinned_filenames=set([shard]),
+                        )
+                        with safe_open(shard_path, framework="pt", device="cpu") as f:
+                            t = f.get_tensor(full_key)
+                        tensors[full_key] = t
+                        lru.put(shard, tensors, sum(forge.utils.io._tensor_bytes(x) for x in tensors.values()))
+                        return t.contiguous()
+                    
+                    all_block_keys = [k for k in weight_map.keys() if k.startswith(prefix)]
+                    
+                    for k in all_block_keys:
+                        block_tensors[k] = _load_tensor_from_shard(k)
+                    
+                    ROUTED_EXPERTS_WEIGHT = re.compile(
+                        rf"^{re.escape(prefix)}mlp.experts\.\d+\.(gate_proj|up_proj|down_proj).(weight|weight_scale_inv|weight_inv_scale|bias|bias_scale|bias_scale_inv|bias_inv_scale)$"
+                    )
+                    drop_keys = set([k for k in block_tensors.keys() if ROUTED_EXPERTS_WEIGHT.match(k)])
+                    if drop_keys:
+                        for k in drop_keys:
+                            if "shared_experts" not in k:
+                                del block_tensors[k]
+                    
+                    print(f'updating shards...block_{block_id:03d}.safetensors')
+                    shard_name = f"block_{block_id:03d}.safetensors"
+
+                    idx_writer.write_block_shard(
+                        block_id=block_id,
+                        prefix=prefix,
+                        tensors=block_tensors,
+                        shard_name=shard_name,
+                        drop_keys=drop_keys
+                    )
+                    del block_tensors
 
             for _, handle in handles.items():
                 handle.reset()
@@ -340,11 +679,13 @@ def main():
             X = forge.utils.engine.forward(block, X, position_ids, N, B, device, offload_device, True, rotary_emb)
 
         if args.offload:
+            #X.to(offload_device)
             block.to("cpu")
             forge.utils.io.metaize_module_(block)
 
         torch.cuda.empty_cache()
         gc.collect()
+        block_tensors = None
 
     if args.save_dir:
         torch.save(

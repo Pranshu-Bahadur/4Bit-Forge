@@ -131,6 +131,10 @@ class GPTQ(object):
         scales, qzeros = self._quant_grid()
         A = self._h_factor()
         W = self.W.clone().transpose(-2, -1)[self.perm]#.contiguous()
+        if self.algorithm=="sparsegptq":
+            qweight, M = self._solver(A, W, scales, qzeros)
+            return qweight[self.perm_inv].transpose(-2, -1).contiguous(), scales, qzeros, M
+
         qweight = self._solver(A, W, scales, qzeros)
         return qweight[self.perm_inv].transpose(-2, -1).contiguous(), scales, qzeros
 
@@ -152,16 +156,22 @@ class GPTQ(object):
 
         if self.algorithm == "babai":
             H, info = torch.linalg.cholesky_ex(H, upper=True)  # A where H = A^T A
-        else:
+        elif self.algorithm == "gptq":
             H, info = torch.linalg.cholesky_ex(H, upper=False)
             H = torch.cholesky_inverse(H, upper=False)    # H^{-1}
             H, info2 = torch.linalg.cholesky_ex(H, upper=True)
             info.add_(info2)
             H.div_(H.diag()[:, None])
+        else: #Sparsegptq
+            H, info = torch.linalg.cholesky_ex(H, upper=False)
+            H = torch.cholesky_inverse(H, upper=False)    # H^{-1}
+            H, info2 = torch.linalg.cholesky_ex(H, upper=True)
+            info.add_(info2)
+            #H.div_(H.diag()[:, None])
 
         if info.item() > 0:
             self.issue_non_invertible = True
-            print(f"[HESSIAN] factorization failed at {self.layer.name}")  # enable during bring-up
+            #print(f"[HESSIAN] factorization failed at {self.layer}")  # enable during bring-up
             H = torch.eye(self.W.shape[-1], device=self.device, dtype=torch.float32)
         
         return H#.to(torch.float32)
@@ -249,3 +259,18 @@ class GPTQ(object):
             )
 
             return qw
+        
+        if self.algorithm == 'sparsegptq':
+            C, R = W.shape
+
+            scales = scales.clone().view(R, self.G).repeat_interleave(self.group_size, dim=1)[:, :C].transpose(-2, -1)[self.perm]   # (C, R) fp32
+            qzeros = qzeros.clone().view(R, self.G).repeat_interleave(self.group_size, dim=1)[:, :C].transpose(-2, -1)[self.perm]
+            qw, M = kernels.sparsegptq14_solver(
+                W.to(torch.float32),
+                A,
+                scales,
+                qzeros,
+                self.bits
+            )
+
+            return qw, M

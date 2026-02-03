@@ -62,9 +62,10 @@ def list_layers(block: nn.Module) -> Dict[str, Union[nn.Linear, ParamSliceProxy]
     # Normal path: nn.Linear modules (DeepSeek-style experts are nn.Linear)
     detect_experts = False
     for n, m in block.named_modules():
-        if isinstance(m, nn.Linear):
+        #if isinstance(m, nn.Linear):
             layers[n] = m
         
+    """
     # GPT-OSS path: fused expert weights as Parameters on block.mlp.experts
     mlp = getattr(block, "mlp", None)
     experts = getattr(mlp, "experts", None) if mlp is not None else None
@@ -78,6 +79,7 @@ def list_layers(block: nn.Module) -> Dict[str, Union[nn.Linear, ParamSliceProxy]
             for e in range(E):
                 layers[f"mlp.experts.{e}.gate_up_proj"] = ParamSliceProxy(experts, "gate_up_proj", e)
                 layers[f"mlp.experts.{e}.down_proj"]    = ParamSliceProxy(experts, "down_proj", e)
+    """
 
     return layers
 # -----------------------------
@@ -529,17 +531,192 @@ def _dequant_mxfp4_blocks_to_fp(blocks_u8: torch.Tensor, scales_u8: torch.Tensor
     return out.transpose(-2, -1)  # fp32
 
 def _apply_block_scale_inv_2d(w_fp32: torch.Tensor, s_inv_2d: torch.Tensor) -> torch.Tensor:
-    # w: [O, I], s_inv: [O/128, I/128]
+    # w_fp32: [O, I]
+    # s_inv_2d: [nO, nI] for ceil(O/so), ceil(I/si) tiles (DeepSeek FP8 uses 128x128)
     O, I = w_fp32.shape
-    so, si = s_inv_2d.shape
-    assert O % so == 0 and I % si == 0, (w_fp32.shape, s_inv_2d.shape)
+    nO, nI = s_inv_2d.shape
 
-    br = O // so
-    bc = I // si
-    w4 = w_fp32.reshape(so, br, si, bc)
-    s = s_inv_2d.to(torch.float32)
-    w4 = w4 * (1.0 / s).reshape(so, 1, si, 1)
-    return w4.reshape(O, I)
+    # Infer si from I dimension (must be exact)
+    assert I % nI == 0, (w_fp32.shape, s_inv_2d.shape)
+    si = I // nI
+
+    # Infer so: usually equals si (128). Use the fact nO == ceil(O/so).
+    # Prefer so=si if it matches ceil, else fall back to ceil_div.
+    def ceil_div(a, b): return (a + b - 1) // b
+    so = si if ceil_div(O, si) == nO else ceil_div(O, nO)
+
+    O_pad = nO * so
+    I_pad = nI * si  # equals I by construction
+
+    # Pad only along O if needed (DeepSeek often has partial last O tile)
+    if O_pad != O:
+        w_pad = torch.zeros((O_pad, I_pad), device=w_fp32.device, dtype=w_fp32.dtype)
+        w_pad[:O, :I] = w_fp32
+    else:
+        w_pad = w_fp32.contiguous()
+
+    # Apply per-tile inverse scales via a 4D view (no giant expanded scale tensor)
+    w4 = w_pad.view(nO, so, nI, si)
+    w4.mul_(s_inv_2d.to(w_fp32.dtype)[:, None, :, None])
+
+    # Slice back to original
+    return w4.view(O_pad, I_pad)[:O, :I].contiguous()
+
+
+from collections import defaultdict
+from pathlib import Path
+import shutil
+
+def _parse_block_id_from_key(k: str):
+    # expects "model.layers.<int>."
+    if not k.startswith("model.layers."):
+        return None
+    parts = k.split(".")
+    if len(parts) < 3:
+        return None
+    try:
+        return int(parts[2])
+    except:
+        return None
+
+def build_block_to_shards(weight_map: dict):
+    block_to_shards = defaultdict(set)
+    global_shards = set()
+
+    for k, shard in weight_map.items():
+        bid = _parse_block_id_from_key(k)
+        if bid is None:
+            global_shards.add(shard)
+        else:
+            block_to_shards[bid].add(shard)
+
+    return block_to_shards, global_shards
+
+from safetensors import safe_open
+from pathlib import Path
+
+from pathlib import Path
+from safetensors.torch import safe_open
+
+def collect_block_tensors_from_all_shards(base_dir: str, weight_map: dict, prefix: str):
+    # map shard -> keys under this prefix
+    shard2keys = {}
+    for k, shard in weight_map.items():
+        if k.startswith(prefix):
+            shard2keys.setdefault(shard, []).append(k)
+
+    out = {}
+    for shard, keys in shard2keys.items():
+        shard_path = str(Path(base_dir) / shard)
+        with safe_open(shard_path, framework="pt", device="cpu") as f:
+            fkeys = set(f.keys())
+            for k in keys:
+                if k not in fkeys:
+                    # mismatch between index and shard contents = bad checkpoint, surface it
+                    raise KeyError(f"Key {k} not found in shard {shard}")
+                out[k] = f.get_tensor(k).contiguous()
+
+    # return something useful for logging
+    shard_names = sorted(shard2keys.keys())
+    return out, shard_names
+
+
+
+
+from safetensors.torch import save_file
+from pathlib import Path
+import json
+
+class IncrementalIndexWriter:
+    def __init__(self, base_model_dir: str, out_dir: str, base_index: dict):
+        self.base_model_dir = Path(base_model_dir)
+        self.out_dir = Path(out_dir)
+        self.out_dir.mkdir(parents=True, exist_ok=True)
+
+        self.metadata = base_index.get("metadata", {})
+        self.weight_map = dict(base_index["weight_map"])  # we will mutate
+
+        self.index_path = self.out_dir / "model.safetensors.index.json"
+
+    def flush(self):
+        with self.index_path.open("w") as f:
+            json.dump({"metadata": self.metadata, "weight_map": self.weight_map}, f, indent=2, sort_keys=True)
+
+    def write_block_shard(
+        self,
+        block_id: int,
+        prefix: str,          # e.g. "model.layers.12."
+        tensors: dict,        # full-key -> CPU tensor
+        shard_name: str,
+        drop_keys: set,       # full keys to delete from index (dense expert weights etc.)
+    ):
+        # 1) Write shard
+        save_file(tensors, str(self.out_dir / shard_name))
+
+        # 2) Any key we wrote -> point to shard_name
+        for k in tensors.keys():
+            self.weight_map[k] = shard_name
+
+        # 3) Any key we intentionally removed -> delete from index
+        for k in drop_keys:
+            if k in self.weight_map and "shared_experts" not in k:
+                del self.weight_map[k]
+
+        # 4) Also re-point *all* remaining keys under this block prefix that still exist in index
+        # to this shard *only if* we actually included them in tensors.
+        # (Avoid mapping to missing tensors.)
+        for k in list(self.weight_map.keys()):
+            if k.startswith(prefix) and k in tensors:
+                self.weight_map[k] = shard_name
+
+        self.flush()
+
+
+class ShardExporter:
+    def __init__(self, hf_tmp_dir: str, out_dir: str, use_hardlink: bool = True):
+        self.hf_tmp_dir = Path(hf_tmp_dir)
+        self.out_dir = Path(out_dir)
+        self.out_dir.mkdir(parents=True, exist_ok=True)
+        self.use_hardlink = use_hardlink
+        self.done = set()
+        self._path_cache = {}  # shard_name -> absolute path
+
+    def _find_shard_path(self, shard_name: str) -> Path:
+        if shard_name in self._path_cache and self._path_cache[shard_name].exists():
+            return self._path_cache[shard_name]
+
+        hits = list(self.hf_tmp_dir.rglob(shard_name))
+        if not hits:
+            raise FileNotFoundError(f"Shard {shard_name} not found under tmp_dir={self.hf_tmp_dir}")
+        # pick the first; shard filenames are unique
+        p = hits[0]
+        self._path_cache[shard_name] = p
+        return p
+
+    def export(self, shard_name: str):
+        if shard_name in self.done:
+            return
+
+        src = self._find_shard_path(shard_name)
+        dst = self.out_dir / shard_name
+        if dst.exists():
+            self.done.add(shard_name)
+            return
+
+        # Try hardlink (fast, no extra disk) if same filesystem; else fall back to copy
+        try:
+            if self.use_hardlink:
+                os.link(src, dst)
+            else:
+                shutil.copy2(src, dst)
+        except Exception:
+            shutil.copy2(src, dst)
+
+        self.done.add(shard_name)
+
+    def export_many(self, shard_names):
+        for s in shard_names:
+            self.export(s)
 
 
 def _apply_block_scale(
@@ -836,7 +1013,7 @@ def jit_load_prefix_to_cpu(
         materialize_fn(
             materialize_block,
             rel,
-            group_size=group_size,
+            group_size=128,
             bits=bits,
             dtype=dtype,
             list_layers_fn=list_layers_fn

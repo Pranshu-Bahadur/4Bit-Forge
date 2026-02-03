@@ -2,7 +2,7 @@
 
 This repo builds upon the solid foundation laid in MoE-Quant. Thank you for your amazing work!
 
-Supports: MiniMax M2.1, DeepSeek V3.2, GPT-OSS-120B (Prolly more models) (technicallly kimi k2 as well, but need multigpu support to confirm / downcasting Hessians / dispatch solver kernel)
+Supports: MiniMax M2.1, DeepSeek V3.2, Qwen3, (Prolly more models) (technicallly kimi k2 as well, but need multigpu support to confirm / downcasting Hessians / dispatch solver kernel)
 
 Runs GPTQ quantization on a Single A100...and its like supa fast...!
 
@@ -19,7 +19,7 @@ Todo(s):
 - [ ] fp8, fp16, bf16 kernel dispatcher (important for speed and efficieny.)
 - [ ] sparsegptq 2:4 vllm inference compatible format
     - [ ] build interblock Mask update sparsegptq 2:4 kernel
-    - [ ] Test sparsegptq on gpt 120B oss ("mvp")
+    - [ ] Test sparsegptq on qwen3 ("mvp")
 
 - [ ] metrics.py / stat view during compression run (?)
 - [ ] multigpu support
