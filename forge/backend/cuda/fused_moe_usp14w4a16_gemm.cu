@@ -535,12 +535,12 @@ __device__ inline void mma_f0(
 ) {
 
     //const uint32_t* e = reinterpret_cast<const uint32_t*>(&metadata);
-    const uint32_t a0 = reinterpret_cast<const uint32_t&>(fa0);
-    const uint32_t a1 = reinterpret_cast<const uint32_t&>(fa1);
-    const uint32_t a2 = reinterpret_cast<const uint32_t&>(fa2);
-    const uint32_t a3 = reinterpret_cast<const uint32_t&>(fa3);
+    const uint32_t a0 = reinterpret_cast<const uint32_t&>(&fa0);
+    const uint32_t a1 = reinterpret_cast<const uint32_t&>(&fa1);
+    const uint32_t a2 = reinterpret_cast<const uint32_t&>(&fa2);
+    const uint32_t a3 = reinterpret_cast<const uint32_t&>(&fa3);
 
-    float* c = reinterpret_cast<float*>(frag_c);
+    float* c = reinterpret_cast<float*>(&frag_c);
     const float z = 0.0f;
     asm volatile(
             "mma.sp::ordered_metadata.sync.aligned.m16n8k32.row.col.f32.bf16.bf16.f32 "
@@ -565,12 +565,12 @@ __device__ inline void mma_f1(
 ) {
 
     //const uint32_t* e = reinterpret_cast<const uint32_t*>(&metadata);
-    const uint32_t a0 = reinterpret_cast<const uint32_t&>(fa0);
-    const uint32_t a1 = reinterpret_cast<const uint32_t&>(fa1);
-    const uint32_t a2 = reinterpret_cast<const uint32_t&>(fa2);
-    const uint32_t a3 = reinterpret_cast<const uint32_t&>(fa3);
+    const uint32_t a0 = reinterpret_cast<const uint32_t&>(&fa0);
+    const uint32_t a1 = reinterpret_cast<const uint32_t&>(&fa1);
+    const uint32_t a2 = reinterpret_cast<const uint32_t&>(&fa2);
+    const uint32_t a3 = reinterpret_cast<const uint32_t&>(&fa3);
 
-    float* c = reinterpret_cast<float*>(frag_c);
+    float* c = reinterpret_cast<float*>(&frag_c);
     const float z = 0.0f;
    
     asm volatile(
