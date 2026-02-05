@@ -223,10 +223,10 @@ __device__ __forceinline__ void stage_decode(
     const ulonglong2 qwTop = shfl_u64x2(mask, qwT, curr_t, src_t);
     const ulonglong2 qwBot = shfl_u64x2(mask, qwB, curr_t, (src_t + 1));
 
-    out->sc_pack.x = (uint16_t)(qwTop.x >> 48);
-    out->sc_pack.y = (uint16_t)(qwBot.x >> 48);
-    out->sc_pack.z = (uint16_t)(qwTop.y >> 48);
-    out->sc_pack.w = (uint16_t)(qwBot.y >> 48);
+    out.sc_pack.x = (uint16_t)(qwTop.x >> 48);
+    out.sc_pack.y = (uint16_t)(qwBot.x >> 48);
+    out.sc_pack.z = (uint16_t)(qwTop.y >> 48);
+    out.sc_pack.w = (uint16_t)(qwBot.y >> 48);
 
     ushort4 top = make_ushort4(0u, 0u, 0u, 0u);
     ushort4 bot = make_ushort4(0u, 0u, 0u, 0u);
@@ -247,20 +247,20 @@ __device__ __forceinline__ void stage_decode(
     decode(qwBot.y, i_lo, bot.z, meta_nib_bot.z);
     decode(qwBot.y, i_hi, bot.w, meta_nib_bot.w);
 
-    out->top_h0 = pack_i8x4_from_i16x2(top.x, top.y);
-    out->bot_h0 = pack_i8x4_from_i16x2(bot.x, bot.y);
-    out->top_h1 = pack_i8x4_from_i16x2(top.z, top.w);
-    out->bot_h1 = pack_i8x4_from_i16x2(bot.z, bot.w);
+    out.top_h0 = pack_i8x4_from_i16x2(top.x, top.y);
+    out.bot_h0 = pack_i8x4_from_i16x2(bot.x, bot.y);
+    out.top_h1 = pack_i8x4_from_i16x2(top.z, top.w);
+    out.bot_h1 = pack_i8x4_from_i16x2(bot.z, bot.w);
 
     //out.top_h0 = pack_i8x4_from_i16x2(top.x, bot.x);
     //out.bot_h0 = pack_i8x4_from_i16x2(top.y, bot.y);
     //out.top_h1 = pack_i8x4_from_i16x2(top.z, bot.z);
     //out.bot_h1 = pack_i8x4_from_i16x2(top.w, bot.w);
 
-    out->nib_h0_lo = pack_nib2(meta_nib_top.x, meta_nib_bot.x);
-    out->nib_h0_hi = pack_nib2(meta_nib_top.y, meta_nib_bot.y);
-    out->nib_h1_lo = pack_nib2(meta_nib_top.z, meta_nib_bot.z);
-    out->nib_h1_hi = pack_nib2(meta_nib_top.w, meta_nib_bot.w);
+    out.nib_h0_lo = pack_nib2(meta_nib_top.x, meta_nib_bot.x);
+    out.nib_h0_hi = pack_nib2(meta_nib_top.y, meta_nib_bot.y);
+    out.nib_h1_lo = pack_nib2(meta_nib_top.z, meta_nib_bot.z);
+    out.nib_h1_hi = pack_nib2(meta_nib_top.w, meta_nib_bot.w);
 }
 
 
