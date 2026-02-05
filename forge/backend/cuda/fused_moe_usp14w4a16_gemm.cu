@@ -494,10 +494,12 @@ __device__ __forceinline__ void store(
 //    b+0+16t+(0, 1)      b+8+16t+(0, 1)     b+16+16t+(0, 1)   b+24+16t+(0, 1)  for +n=groupID forall (b=base)
 
 
-__device__ inline void ldsmB(
-    const __nv_bfloat16* XS_ptr,
-    uint32_t* b
+__device__ forceinline void ldsmB(
+    const __nv_bfloat16* XS_ptr
 ) {
+
+    uint32_t b[4] = {0u, 0u, 0u, 0u};
+
 
     unsigned smem_ptr = __cvta_generic_to_shared(XS_ptr);
 
@@ -507,6 +509,7 @@ __device__ inline void ldsmB(
         : "r"(smem_ptr)
     );
 
+    return b;
 }
 
 //OG: https://forums.developer.nvidia.com/t/use-of-ldmatrix/316010/7
@@ -655,13 +658,13 @@ __global__ void phantom_usp14_w4a16_sym_sm80_fmoe_w13AS_mm_phase(
     
     const int64_t tid = (int64_t)threadIdx.x;
 
-    extern __shared__ __nv_bfloat16 XS[];
+    extern __shared__ __nv_bfloat16 XS[7168][NTOK];
     
     for (int64_t c = (int64_t)threadIdx.x; c < C; c += (int64_t)blockDim.x) {
         #pragma unroll NTOK
         for (int64_t n = 0; n < NTOK; ++n) {
             //contiguous along N is cleaner
-            XS[c * NTOK + n] = ((m_base + n) < m_end) ? X[(m_base + n) * C + c] : __float2bfloat16(0.0f);
+            XS[c][n] = ((m_base + n) < m_end) ? X[(m_base + n) * C + c] : __float2bfloat16(0.0f);
         }
     }
     __syncthreads();
@@ -747,8 +750,8 @@ __global__ void phantom_usp14_w4a16_sym_sm80_fmoe_w13AS_mm_phase(
         fscales_up.z = bf16_bits_to_f32(up.sc_pack.z);
         fscales_up.w = bf16_bits_to_f32(up.sc_pack.w);
 
-        ldsmB(&XS[(((int64_t)0 << 6) + ((int64_t)0 << 5)) * NTOK], bh0);
-        ldsmB(&XS[(((int64_t)0 << 6) + ((int64_t)1 << 5)) * NTOK], bh1);
+        bh0 = ldsmB(&XS[(((int64_t)0 << 6) + ((int64_t)0 << 5))]);
+        bh1 = ldsmB(&XS[(((int64_t)0 << 6) + ((int64_t)1 << 5))]);
 
         bf16x2x2_from_i8x4(gate.top_h0, gate_h0_a0, gate_h0_a1);
         bf16x2x2_from_i8x4(gate.bot_h0, gate_h0_a2, gate_h0_a3);
@@ -762,7 +765,7 @@ __global__ void phantom_usp14_w4a16_sym_sm80_fmoe_w13AS_mm_phase(
         bf16x2x2_from_i8x4(up.top_h1, up_h1_a0, up_h1_a1);
         bf16x2x2_from_i8x4(up.bot_h1, up_h1_a2, up_h1_a3);
         
-        for (int64_t g2 = 1; g2 < G2+1; ++g2) {
+        for (int64_t g2 = 1; g2 <= G2; ++g2) {
 
             float4 C1 = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
             float4 C3 = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
@@ -795,7 +798,7 @@ __global__ void phantom_usp14_w4a16_sym_sm80_fmoe_w13AS_mm_phase(
             mma_f0(up_h0_a0, up_h0_a1, up_h0_a2, up_h0_a3, bh0, metadata_up0, C3);
 
             if (g2 < G2) {
-                ldsmB(&XS[((g2 << 6) + ((int64_t)0 << 5)) * NTOK], bh0);
+                bh0 = ldsmB(&XS[((g2 << 6) + ((int64_t)0 << 5))]);
             }
 
 
@@ -809,7 +812,7 @@ __global__ void phantom_usp14_w4a16_sym_sm80_fmoe_w13AS_mm_phase(
             mma_f1(gate_h1_a0, gate_h1_a1, gate_h1_a2, gate_h1_a3, bh1, metadata_gate1, C1);
 
             if (g2 < G2) {
-                ldsmB(&XS[((g2 << 6) + ((int64_t)1 << 5)) * NTOK], bh1);
+                bh1 = ldsmB(&XS[((g2 << 6) + ((int64_t)1 << 5))]);
             }
             
 
@@ -895,14 +898,13 @@ __global__ void phantom_usp14_w4a16_sym_sm80_fmoe_w2AS_mm(
     
     const int64_t tid = (int64_t)threadIdx.x;
 
-    extern __shared__ __nv_bfloat16 XS[];
+    extern __shared__ __nv_bfloat16 XS[2048][NTOK];
 
     
-    for (int64_t c = tid; c < C; c += (int64_t)blockDim.x) {
-        #pragma unroll NTOK
+    for (int64_t c = (int64_t)threadIdx.x; c < C; c += (int64_t)blockDim.x) {
         for (int64_t n = 0; n < NTOK; ++n) {
             //contiguous along N is cleaner
-            XS[c * NTOK + n] = ((m_base + n) < m_end) ? X2[(m_base + n) * C + c] : __float2bfloat16(0.0f);
+            XS[c][n] = ((m_base + n) < m_end) ? X2[(m_base + n) * C + c] : __float2bfloat16(0.0f);
         }
     }
     __syncthreads();
@@ -956,15 +958,15 @@ __global__ void phantom_usp14_w4a16_sym_sm80_fmoe_w2AS_mm(
     fscales_out.w = bf16_bits_to_f32(out.sc_pack.w);
 
 
-    ldsmB(&XS[(((int64_t)0 << 6) + ((int64_t)0 << 5)) * NTOK], bh0);
-    ldsmB(&XS[(((int64_t)0 << 6) + ((int64_t)1 << 5)) * NTOK], bh1);
+    bh0 = ldsmB(&XS[(((int64_t)0 << 6) + ((int64_t)0 << 5))]);
+    bh1 = ldsmB(&XS[(((int64_t)0 << 6) + ((int64_t)1 << 5))]);
 
     bf16x2x2_from_i8x4(out.top_h0, out_h0_a0, out_h0_a1);
     bf16x2x2_from_i8x4(out.bot_h0, out_h0_a2, out_h0_a3);
     bf16x2x2_from_i8x4(out.top_h1, out_h1_a0, out_h1_a1);
     bf16x2x2_from_i8x4(out.bot_h1, out_h1_a2, out_h1_a3);
         
-    for (int64_t g2 = 1; g2 < G2+1; ++g2) {
+    for (int64_t g2 = 1; g2 <= G2; ++g2) {
 
             float4 C1 = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
             float4 C2 = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
@@ -978,14 +980,14 @@ __global__ void phantom_usp14_w4a16_sym_sm80_fmoe_w2AS_mm(
             mma_f1(out_h1_a0, out_h1_a1, out_h1_a2, out_h1_a3, bh1, metadata_out1, C2);
 
              if (g2 < G2) {
-                ldsmB(&XS[((g2 << 6) + ((int64_t)1 << 5)) * NTOK], bh1);
+                bh1 = ldsmB(&XS[((g2 << 6) + ((int64_t)1 << 5))]);
             }
 
 
             mma_f0(out_h0_a0, out_h0_a1, out_h0_a2, out_h0_a3, bh0, metadata_out0, C1);
 
             if (g2 < G2) {
-                ldsmB(&XS[((g2 << 6) + ((int64_t)0 << 5)) * NTOK], bh0);
+                bh0 = ldsmB(&XS[((g2 << 6) + ((int64_t)0 << 5))]);
             }
 
             D.x = __fmaf_rn(C1.x, fscales_out.x, D.x);
