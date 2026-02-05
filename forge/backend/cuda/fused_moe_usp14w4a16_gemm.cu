@@ -213,7 +213,7 @@ __device__ __forceinline__ StageOut stage_decode(
     const ulonglong2 qwB,
     const int curr_t, // 0,...,3
     const int src_t, // t=0 (f=0), t=2 (f=1)
-    const int64_t groupID,
+    const int64_t groupID
 ) {    
 
     StageOut out;
@@ -495,16 +495,11 @@ __device__ __forceinline__ void store(
 
 
 __device__ inline void ldsmB(
-    const void* XS_ptr,
+    const __nv_bfloat16* XS_ptr,
     uint32_t* b
 ) {
 
-    uint32_t smem_ptr;
-
-    asm volatile(
-        "{ .reg .u64 smem_ptr; cvta.to.shared.u64 smem_ptr, %1; cvt.u32.u64 %0, smem_ptr; }\n"
-            : "=r"(smem_ptr) : "l"(XS_ptr)
-    );
+    unsigned smem_ptr = __cvta_generic_to_shared(XS_ptr);
 
     asm volatile(
         "ldmatrix.sync.aligned.m8n8.x4.shared.b16 {%0, %1, %2, %3}, [%4];\n"
@@ -752,8 +747,8 @@ __global__ void phantom_usp14_w4a16_sym_sm80_fmoe_w13AS_mm_phase(
         fscales_up.z = bf16_bits_to_f32(up.sc_pack.z);
         fscales_up.w = bf16_bits_to_f32(up.sc_pack.w);
 
-        ldsmB((void*)&XS[(((int64_t)0 << 6) + ((int64_t)0 << 5)) * NTOK], bh0);
-        ldsmB((void*)&XS[(((int64_t)0 << 6) + ((int64_t)1 << 5)) * NTOK], bh1);
+        ldsmB(&XS[(((int64_t)0 << 6) + ((int64_t)0 << 5)) * NTOK], bh0);
+        ldsmB(&XS[(((int64_t)0 << 6) + ((int64_t)1 << 5)) * NTOK], bh1);
 
         bf16x2x2_from_i8x4(gate.top_h0, gate_h0_a0, gate_h0_a1);
         bf16x2x2_from_i8x4(gate.bot_h0, gate_h0_a2, gate_h0_a3);
@@ -800,7 +795,7 @@ __global__ void phantom_usp14_w4a16_sym_sm80_fmoe_w13AS_mm_phase(
             mma_f0(up_h0_a0, up_h0_a1, up_h0_a2, up_h0_a3, bh0, metadata_up0, C3);
 
             if (g2 < G2) {
-                ldsmB((void*)&XS[((g2 << 6) + ((int64_t)0 << 5)) * NTOK], bh0);
+                ldsmB(&XS[((g2 << 6) + ((int64_t)0 << 5)) * NTOK], bh0);
             }
 
 
@@ -814,7 +809,7 @@ __global__ void phantom_usp14_w4a16_sym_sm80_fmoe_w13AS_mm_phase(
             mma_f1(gate_h1_a0, gate_h1_a1, gate_h1_a2, gate_h1_a3, bh1, metadata_gate1, C1);
 
             if (g2 < G2) {
-                ldsmB((void*)&XS[((g2 << 6) + ((int64_t)1 << 5)) * NTOK], bh1);
+                ldsmB(&XS[((g2 << 6) + ((int64_t)1 << 5)) * NTOK], bh1);
             }
             
 
@@ -961,8 +956,8 @@ __global__ void phantom_usp14_w4a16_sym_sm80_fmoe_w2AS_mm(
     fscales_out.w = bf16_bits_to_f32(out.sc_pack.w);
 
 
-    ldsmB((void*)&XS[(((int64_t)0 << 6) + ((int64_t)0 << 5)) * NTOK], bh0);
-    ldsmB((void*)&XS[(((int64_t)0 << 6) + ((int64_t)1 << 5)) * NTOK], bh1);
+    ldsmB(&XS[(((int64_t)0 << 6) + ((int64_t)0 << 5)) * NTOK], bh0);
+    ldsmB(&XS[(((int64_t)0 << 6) + ((int64_t)1 << 5)) * NTOK], bh1);
 
     bf16x2x2_from_i8x4(out.top_h0, out_h0_a0, out_h0_a1);
     bf16x2x2_from_i8x4(out.bot_h0, out_h0_a2, out_h0_a3);
@@ -983,14 +978,14 @@ __global__ void phantom_usp14_w4a16_sym_sm80_fmoe_w2AS_mm(
             mma_f1(out_h1_a0, out_h1_a1, out_h1_a2, out_h1_a3, bh1, metadata_out1, C2);
 
              if (g2 < G2) {
-                ldsmB((void*)&XS[((g2 << 6) + ((int64_t)1 << 5)) * NTOK], bh1);
+                ldsmB(&XS[((g2 << 6) + ((int64_t)1 << 5)) * NTOK], bh1);
             }
 
 
             mma_f0(out_h0_a0, out_h0_a1, out_h0_a2, out_h0_a3, bh0, metadata_out0, C1);
 
             if (g2 < G2) {
-                ldsmB((void*)&XS[((g2 << 6) + ((int64_t)0 << 5)) * NTOK], bh0);
+                ldsmB(&XS[((g2 << 6) + ((int64_t)0 << 5)) * NTOK], bh0);
             }
 
             D.x = __fmaf_rn(C1.x, fscales_out.x, D.x);
