@@ -895,13 +895,13 @@ __global__ void phantom_usp14_w4a16_sym_sm80_fmoe_w2AS_mm(
     
     const int64_t tid = (int64_t)threadIdx.x;
 
-    extern __shared__ __nv_bfloat16 XS[2048][NTOK];
+    extern __shared__ __nv_bfloat16 XS1[2048][NTOK];
 
     
     for (int64_t c = (int64_t)threadIdx.x; c < C; c += (int64_t)blockDim.x) {
         for (int64_t n = 0; n < NTOK; ++n) {
             //contiguous along N is cleaner
-            XS[c][n] = ((m_base + n) < m_end) ? X2[(m_base + n) * C + c] : __float2bfloat16(0.0f);
+            XS1[c][n] = ((m_base + n) < m_end) ? X2[(m_base + n) * C + c] : __float2bfloat16(0.0f);
         }
     }
     __syncthreads();
@@ -955,8 +955,8 @@ __global__ void phantom_usp14_w4a16_sym_sm80_fmoe_w2AS_mm(
     fscales_out.w = bf16_bits_to_f32(out.sc_pack.w);
 
 
-    ldsmB(&(XS[(((int64_t)0 << 6) + ((int64_t)0 << 5))][0]), bh0);
-    ldsmB(&(XS[(((int64_t)0 << 6) + ((int64_t)1 << 5))][0]), bh1);
+    ldsmB(&(XS1[(((int64_t)0 << 6) + ((int64_t)0 << 5))][0]), bh0);
+    ldsmB(&(XS1[(((int64_t)0 << 6) + ((int64_t)1 << 5))][0]), bh1);
 
     bf16x2x2_from_i8x4(out.top_h0, out_h0_a0, out_h0_a1);
     bf16x2x2_from_i8x4(out.bot_h0, out_h0_a2, out_h0_a3);
@@ -977,14 +977,14 @@ __global__ void phantom_usp14_w4a16_sym_sm80_fmoe_w2AS_mm(
             mma_f1(out_h1_a0, out_h1_a1, out_h1_a2, out_h1_a3, bh1, metadata_out1, C2);
 
              if (g2 < G2) {
-                ldsmB(&(XS[((g2 << 6) + ((int64_t)1 << 5))][0]), bh1);
+                ldsmB(&(XS1[((g2 << 6) + ((int64_t)1 << 5))][0]), bh1);
             }
 
 
             mma_f0(out_h0_a0, out_h0_a1, out_h0_a2, out_h0_a3, bh0, metadata_out0, C1);
 
             if (g2 < G2) {
-                ldsmB(&(XS[((g2 << 6) + ((int64_t)0 << 5))][0]), bh0);
+                ldsmB(&(XS1[((g2 << 6) + ((int64_t)0 << 5))][0]), bh0);
             }
 
             D.x = __fmaf_rn(C1.x, fscales_out.x, D.x);
