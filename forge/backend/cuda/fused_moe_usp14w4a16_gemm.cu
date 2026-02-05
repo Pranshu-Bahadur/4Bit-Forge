@@ -127,7 +127,7 @@ __device__ __forceinline__ void bf16x2x2_from_i8x4(
     __nv_bfloat162& out_hi_bf16x2
 ) {
     uint16_t lo = (uint16_t)(i8x4 & 0xFFFFu);
-    uint16_t hi = (uint16_t)(i8x4 >> 16);
+    uint16_t hi = (uint16_t)((i8x4 >> 16)  & 0xFFFFu);
     __nv_bfloat162 frag_a0 = bf16x2_from_packed_i8pair(lo);
     __nv_bfloat162 frag_a1 = bf16x2_from_packed_i8pair(hi);
     out_lo_bf16x2.x = frag_a0.x;
@@ -152,17 +152,17 @@ struct StageOut {
 __device__ __forceinline__ void decode(
     const uint64_t u64,
     const int chunk_i,
-    uint16_t v01_packed,    
-    uint32_t meta_nibble
+    uint16_t& v01_packed,    
+    uint32_t& meta_nibble
 ) {
     const uint32_t qw32  = (const uint32_t)(u64 & 0xFFFFFFFFull);
     const uint32_t hi32  = (const uint32_t)(u64 >> 32);
-    const uint32_t idx16 = (const uint16_t)(hi32 & 0xFFFFu);
+    const uint32_t idx16 = (hi32 & 0xFFFFu);
     const uint32_t q4   = (qw32 >> (4 * chunk_i)) & 0xFu;
     const uint32_t idx2 = (idx16 >> (2 * chunk_i)) & 0x3u;
     
-    const uint16_t v0 = (idx2 & 1) ? (uint16_t)0 : (uint16_t)q4;
-    const uint16_t v1 = (idx2 & 1) ? (uint16_t)q4 : (uint16_t)0;
+    const uint16_t v0 = (idx2 & 1) ? (uint16_t)0 : (uint16_t)(q4 & 0xFFu);
+    const uint16_t v1 = (idx2 & 1) ? (uint16_t)(q4 & 0xFFu) : (uint16_t)0;
 
     v01_packed = v0 | (v1 << 8);
     meta_nibble = (idx2 >> 1) ? (uint32_t)0b1110 : (uint32_t)0b0100;
@@ -171,7 +171,7 @@ __device__ __forceinline__ void decode(
 
 
 __device__ __forceinline__ uint32_t pack_i8x4_from_i16x2(const uint16_t lo_packed, const uint16_t hi_packed) {
-    return ((uint32_t)lo_packed) | ((uint32_t)hi_packed << 16);
+    return ((uint32_t)lo_packed & 0xFFFFu) | (((uint32_t)hi_packed & 0xFFFFu) << 16);
 }
 
 
@@ -179,7 +179,7 @@ __device__ __forceinline__ uint32_t pack_nib2(
     const uint32_t top,
     const uint32_t bot
 ) {
-    return ((uint32_t)(top & 0xFu)) | (((uint32_t)(bot & 0xFu)) << 4);
+    return ((uint32_t)(top & 0xEu)) | (((uint32_t)(bot & 0xEu)) << 4);
 
 }
 
@@ -290,7 +290,7 @@ __device__ __forceinline__ uint32_t park_tok(const uint32_t tok, const int t) {
 */
 
 __device__ __forceinline__ uint32_t park_tok(
-    uint32_t tok, 
+    uint32_t& tok, 
     int t
 ) {
     // Gather tok from lanes 0..3 within width=4 group
@@ -300,15 +300,15 @@ __device__ __forceinline__ uint32_t park_tok(
     uint32_t tok3 = __shfl_xor_sync(0xFFFFFFFFu, tok, (t ^ 3), 4);
 
     // Extract nibbles
-    uint32_t top0 =  tok0        & 0xFu;
-    uint32_t top1 =  tok1        & 0xFu;
-    uint32_t top2 =  tok2        & 0xFu;
-    uint32_t top3 =  tok3        & 0xFu;
+    uint32_t top0 =  tok0        & 0xEu;
+    uint32_t top1 =  tok1        & 0xEu;
+    uint32_t top2 =  tok2        & 0xEu;
+    uint32_t top3 =  tok3        & 0xEu;
 
-    uint32_t bot0 = (tok0 >> 4)  & 0xFu;
-    uint32_t bot1 = (tok1 >> 4)  & 0xFu;
-    uint32_t bot2 = (tok2 >> 4)  & 0xFu;
-    uint32_t bot3 = (tok3 >> 4)  & 0xFu;
+    uint32_t bot0 = (tok0 >> 4)  & 0xEu;
+    uint32_t bot1 = (tok1 >> 4)  & 0xEu;
+    uint32_t bot2 = (tok2 >> 4)  & 0xEu;
+    uint32_t bot3 = (tok3 >> 4)  & 0xEu;
 
    
     uint32_t E =
@@ -540,7 +540,7 @@ __device__ inline void mma_f0(
     const uint32_t a2 = reinterpret_cast<const uint32_t&>(fa2);
     const uint32_t a3 = reinterpret_cast<const uint32_t&>(fa3);
 
-    float* c = reinterpret_cast<float*>(&frag_c);
+    float* c = reinterpret_cast<float*>(frag_c);
     const float z = 0.0f;
     asm volatile(
             "mma.sp::ordered_metadata.sync.aligned.m16n8k32.row.col.f32.bf16.bf16.f32 "
@@ -570,7 +570,7 @@ __device__ inline void mma_f1(
     const uint32_t a2 = reinterpret_cast<const uint32_t&>(fa2);
     const uint32_t a3 = reinterpret_cast<const uint32_t&>(fa3);
 
-    float* c = reinterpret_cast<float*>(&frag_c);
+    float* c = reinterpret_cast<float*>(frag_c);
     const float z = 0.0f;
    
     asm volatile(
