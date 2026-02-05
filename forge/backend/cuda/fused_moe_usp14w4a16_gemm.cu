@@ -976,7 +976,7 @@ __global__ void phantom_usp14_w4a16_sym_sm80_fmoe_w2AS_mm(
                 stage_load(W2, qwTop, qwBot, (int)t, 2, uid, g2, G2, R, oc_base, groupID);
             }
 
-            mma_f1(out_h1_a0, out_h1_a1, out_h1_a2, out_h1_a3, bh1, metadata_out1, C2);
+            mma_f1(out_h1_a0, out_h1_a1, out_h1_a2, out_h1_a3, (uint32_t*)bh1, metadata_out1, C2);
 
              if (g2 < G2) {
                 ldsmB((void*)&XS[((g2 << 6) + ((int64_t)1 << 5)) * NTOK], (uint32_t*)bh1);
