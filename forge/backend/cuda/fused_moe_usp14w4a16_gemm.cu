@@ -152,8 +152,8 @@ struct StageOut {
 __device__ __forceinline__ void decode(
     const uint64_t u64,
     const int chunk_i,
-    uint16_t& v01_packed,    
-    uint32_t& meta_nibble
+    uint16_t &v01_packed,    
+    uint32_t &meta_nibble
 ) {
     const uint32_t qw32  = (const uint32_t)(u64 & 0xFFFFFFFFull);
     const uint32_t hi32  = (const uint32_t)(u64 >> 32);
@@ -214,7 +214,7 @@ __device__ __forceinline__ void stage_decode(
     const int curr_t, // 0,...,3
     const int src_t, // t=0 (f=0), t=2 (f=1)
     const int64_t groupID,
-    StageOut& out
+    StageOut* out
 ) {    
 
     //__activemask(); better to use entire warp acc to nvidia programming guide
@@ -223,10 +223,10 @@ __device__ __forceinline__ void stage_decode(
     const ulonglong2 qwTop = shfl_u64x2(mask, qwT, curr_t, src_t);
     const ulonglong2 qwBot = shfl_u64x2(mask, qwB, curr_t, (src_t + 1));
 
-    out.sc_pack.x = (uint16_t)(qwTop.x >> 48);
-    out.sc_pack.y = (uint16_t)(qwBot.x >> 48);
-    out.sc_pack.z = (uint16_t)(qwTop.y >> 48);
-    out.sc_pack.w = (uint16_t)(qwBot.y >> 48);
+    out->sc_pack.x = (uint16_t)(qwTop.x >> 48);
+    out->sc_pack.y = (uint16_t)(qwBot.x >> 48);
+    out->sc_pack.z = (uint16_t)(qwTop.y >> 48);
+    out->sc_pack.w = (uint16_t)(qwBot.y >> 48);
 
     ushort4 top = make_ushort4(0u, 0u, 0u, 0u);
     ushort4 bot = make_ushort4(0u, 0u, 0u, 0u);
@@ -247,20 +247,20 @@ __device__ __forceinline__ void stage_decode(
     decode(qwBot.y, i_lo, bot.z, meta_nib_bot.z);
     decode(qwBot.y, i_hi, bot.w, meta_nib_bot.w);
 
-    out.top_h0 = pack_i8x4_from_i16x2(top.x, top.y);
-    out.bot_h0 = pack_i8x4_from_i16x2(bot.x, bot.y);
-    out.top_h1 = pack_i8x4_from_i16x2(top.z, top.w);
-    out.bot_h1 = pack_i8x4_from_i16x2(bot.z, bot.w);
+    out->top_h0 = pack_i8x4_from_i16x2(top.x, top.y);
+    out->bot_h0 = pack_i8x4_from_i16x2(bot.x, bot.y);
+    out->top_h1 = pack_i8x4_from_i16x2(top.z, top.w);
+    out->bot_h1 = pack_i8x4_from_i16x2(bot.z, bot.w);
 
     //out.top_h0 = pack_i8x4_from_i16x2(top.x, bot.x);
     //out.bot_h0 = pack_i8x4_from_i16x2(top.y, bot.y);
     //out.top_h1 = pack_i8x4_from_i16x2(top.z, bot.z);
     //out.bot_h1 = pack_i8x4_from_i16x2(top.w, bot.w);
 
-    out.nib_h0_lo = pack_nib2(meta_nib_top.x, meta_nib_bot.x);
-    out.nib_h0_hi = pack_nib2(meta_nib_top.y, meta_nib_bot.y);
-    out.nib_h1_lo = pack_nib2(meta_nib_top.z, meta_nib_bot.z);
-    out.nib_h1_hi = pack_nib2(meta_nib_top.w, meta_nib_bot.w);
+    out->nib_h0_lo = pack_nib2(meta_nib_top.x, meta_nib_bot.x);
+    out->nib_h0_hi = pack_nib2(meta_nib_top.y, meta_nib_bot.y);
+    out->nib_h1_lo = pack_nib2(meta_nib_top.z, meta_nib_bot.z);
+    out->nib_h1_hi = pack_nib2(meta_nib_top.w, meta_nib_bot.w);
 }
 
 
@@ -290,7 +290,7 @@ __device__ __forceinline__ uint32_t park_tok(const uint32_t tok, const int t) {
 */
 
 __device__ __forceinline__ uint32_t park_tok(
-    uint32_t& tok, 
+    const uint32_t tok, 
     int t
 ) {
     // Gather tok from lanes 0..3 within width=4 group
@@ -343,7 +343,7 @@ __device__ __forceinline__ uint32_t park(const StageOut& out, int t) {
 
 */
 
-__device__ __forceinline__ uint32_t park_h0(const StageOut out, const int t) {
+__device__ __forceinline__ uint32_t park_h0(const StageOut* out, const int t) {
     
     /*
     if ((t==0 || t==1)) {
@@ -359,7 +359,7 @@ __device__ __forceinline__ uint32_t park_h0(const StageOut out, const int t) {
 }
 
 
-__device__ __forceinline__ uint32_t park_h1(const StageOut out, const int t) {
+__device__ __forceinline__ uint32_t park_h1(const StageOut* out, const int t) {
     
     /*
     if ((t==0 || t==1)) {
