@@ -657,7 +657,7 @@ __global__ void phantom_usp14_w4a16_sym_sm80_fmoe_w13AS_mm_phase(
     
     const int64_t tid = (int64_t)threadIdx.x;
 
-    extern __shared__ __nv_bfloat16 XS[];
+    extern __shared__ __nv_bfloat16* XS;
     
     for (int64_t c = (int64_t)threadIdx.x; c < C; c += (int64_t)blockDim.x) {
         #pragma unroll NTOK
@@ -723,20 +723,20 @@ __global__ void phantom_usp14_w4a16_sym_sm80_fmoe_w13AS_mm_phase(
         stage_load(W13, qwTopg, qwBotg, (int)t, 0, uid, 0, G2, R, oc_base, groupID);
         stage_load(W13, qwTopu, qwBotu, (int)t, 2, uid, 0, G2, R, oc_base + (R/2), groupID);
 
-        stage_decode(qwTopg, qwBotg, (int)t, 0, groupID, gate);
-        stage_decode(qwTopu, qwBotu, (int)t, 2, groupID, up);
+        stage_decode(qwTopg, qwBotg, (int)t, 0, groupID, &gate);
+        stage_decode(qwTopu, qwBotu, (int)t, 2, groupID, &up);
 
         //metadata_gate = park(gate, (int)t);
         //metadata_up = park(up, (int)t);
 
         if (t==0 or t==1) {
-            metadata_gate0 = park_h0(gate, (int)t);
-            metadata_up0   = park_h0(up, (int)t);     // used with up_ah0
+            metadata_gate0 = park_h0(&gate, (int)t);
+            metadata_up0   = park_h0(&up, (int)t);     // used with up_ah0
         }
 
         if (t==2 || t==3) {
-            metadata_gate1 = park_h1(gate, (int)t);
-            metadata_up1   = park_h1(up, (int)t);     // used with up_ah1
+            metadata_gate1 = park_h1(&gate, (int)t);
+            metadata_up1   = park_h1(&up, (int)t);     // used with up_ah1
         }
 
         fscales_gate.x = bf16_bits_to_f32(gate.sc_pack.x);
@@ -749,8 +749,8 @@ __global__ void phantom_usp14_w4a16_sym_sm80_fmoe_w13AS_mm_phase(
         fscales_up.z = bf16_bits_to_f32(up.sc_pack.z);
         fscales_up.w = bf16_bits_to_f32(up.sc_pack.w);
 
-        ldsmB((void*)&XS[(((int64_t)0 << 6) + ((int64_t)0 << 5)) * NTOK], bh0);
-        ldsmB((void*)&XS[(((int64_t)0 << 6) + ((int64_t)1 << 5)) * NTOK], bh1);
+        ldsmB((void*)&XS[(((int64_t)0 << 6) + ((int64_t)0 << 5)) * NTOK], &bh0);
+        ldsmB((void*)&XS[(((int64_t)0 << 6) + ((int64_t)1 << 5)) * NTOK], &bh1);
 
         bf16x2x2_from_i8x4(gate.top_h0, gate_h0_a0, gate_h0_a1);
         bf16x2x2_from_i8x4(gate.bot_h0, gate_h0_a2, gate_h0_a3);
@@ -769,7 +769,7 @@ __global__ void phantom_usp14_w4a16_sym_sm80_fmoe_w13AS_mm_phase(
             float4 C1 = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
             float4 C3 = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
 
-            mma_f0(gate_h0_a0, gate_h0_a1, gate_h0_a2, gate_h0_a3, bh0, metadata_gate0, C1);
+            mma_f0(gate_h0_a0, gate_h0_a1, gate_h0_a2, gate_h0_a3, &bh0, metadata_gate0, C1);
 
             if (g2 < G2) {
 
@@ -778,7 +778,7 @@ __global__ void phantom_usp14_w4a16_sym_sm80_fmoe_w13AS_mm_phase(
                 stage_load(W13, qwTopg, qwBotg, (int)t, 2, uid, g2, G2, R, oc_base, groupID);
             }
             
-            mma_f1(up_h1_a0, up_h1_a1, up_h1_a2, up_h1_a3, bh1, metadata_up1, C3);
+            mma_f1(up_h1_a0, up_h1_a1, up_h1_a2, up_h1_a3, &bh1, metadata_up1, C3);
 
             if (g2 < G2) {
 
@@ -794,10 +794,10 @@ __global__ void phantom_usp14_w4a16_sym_sm80_fmoe_w13AS_mm_phase(
 
             C3 = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
 
-            mma_f0(up_h0_a0, up_h0_a1, up_h0_a2, up_h0_a3, bh0, metadata_up0, C3);
+            mma_f0(up_h0_a0, up_h0_a1, up_h0_a2, up_h0_a3, &bh0, metadata_up0, C3);
 
             if (g2 < G2) {
-                ldsmB((void*)&XS[((g2 << 6) + ((int64_t)0 << 5)) * NTOK], bh0);
+                ldsmB((void*)&XS[((g2 << 6) + ((int64_t)0 << 5)) * NTOK], &bh0);
             }
 
 
@@ -808,10 +808,10 @@ __global__ void phantom_usp14_w4a16_sym_sm80_fmoe_w13AS_mm_phase(
 
             C1 = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
 
-            mma_f1(gate_h1_a0, gate_h1_a1, gate_h1_a2, gate_h1_a3, bh1, metadata_gate1, C1);
+            mma_f1(gate_h1_a0, gate_h1_a1, gate_h1_a2, gate_h1_a3, &bh1, metadata_gate1, C1);
 
             if (g2 < G2) {
-                ldsmB((void*)&XS[((g2 << 6) + ((int64_t)1 << 5)) * NTOK], bh1);
+                ldsmB((void*)&XS[((g2 << 6) + ((int64_t)1 << 5)) * NTOK], &bh1);
             }
             
 
@@ -828,8 +828,8 @@ __global__ void phantom_usp14_w4a16_sym_sm80_fmoe_w13AS_mm_phase(
 
             if (g2 < G2) {
 
-                stage_decode(qwTopu, qwBotu, (int)t, 0, groupID, up);
-                stage_decode(qwTopg, qwBotg, (int)t, 2, groupID, gate);
+                stage_decode(qwTopu, qwBotu, (int)t, 0, groupID, &up);
+                stage_decode(qwTopg, qwBotg, (int)t, 2, groupID, &gate);
 
                 fscales_gate.x = bf16_bits_to_f32(gate.sc_pack.x);
                 fscales_gate.y = bf16_bits_to_f32(gate.sc_pack.y);
@@ -840,13 +840,13 @@ __global__ void phantom_usp14_w4a16_sym_sm80_fmoe_w13AS_mm_phase(
                 //metadata_up = park(up, (int)t);
 
                 if (t==0 or t==1) {
-                    metadata_gate0 = park_h0(gate, (int)t);
-                    metadata_up0   = park_h0(up, (int)t);     // used with up_ah0
+                    metadata_gate0 = park_h0(&gate, (int)t);
+                    metadata_up0   = park_h0(&up, (int)t);     // used with up_ah0
                 }
 
                 if (t==2 || t==3) {
-                    metadata_gate1 = park_h1(gate, (int)t);
-                    metadata_up1   = park_h1(up, (int)t);     // used with up_ah1
+                    metadata_gate1 = park_h1(&gate, (int)t);
+                    metadata_up1   = park_h1(&up, (int)t);     // used with up_ah1
                 }
                 
                 
@@ -897,7 +897,7 @@ __global__ void phantom_usp14_w4a16_sym_sm80_fmoe_w2AS_mm(
     
     const int64_t tid = (int64_t)threadIdx.x;
 
-    extern __shared__ __nv_bfloat16 XS[];
+    extern __shared__ __nv_bfloat16* XS;
     
     for (int64_t c = tid; c < C; c += (int64_t)blockDim.x) {
         #pragma unroll NTOK
@@ -938,15 +938,15 @@ __global__ void phantom_usp14_w4a16_sym_sm80_fmoe_w2AS_mm(
 
     stage_load(W2, qwTop, qwBot, (int)t, 0, uid, 0, G2, R, oc_base, groupID);
 
-    stage_decode(qwTop, qwBot, (int)t, 0, (int)groupID, out);
+    stage_decode(qwTop, qwBot, (int)t, 0, (int)groupID, &out);
 
 
     if (t==0 or t==1) {
-        metadata_out0 = park_h0(out, (int)t);
+        metadata_out0 = park_h0(&out, (int)t);
     }
 
     if (t==2 || t==3) {
-        metadata_out1 = park_h1(out, (int)t);
+        metadata_out1 = park_h1(&out, (int)t);
     }
 
     
@@ -957,8 +957,8 @@ __global__ void phantom_usp14_w4a16_sym_sm80_fmoe_w2AS_mm(
     fscales_out.w = bf16_bits_to_f32(out.sc_pack.w);
 
 
-    ldsmB((void*)&XS[(((int64_t)0 << 6) + ((int64_t)0 << 5)) * NTOK], bh0);
-    ldsmB((void*)&XS[(((int64_t)0 << 6) + ((int64_t)1 << 5)) * NTOK], bh1);
+    ldsmB((void*)&XS[(((int64_t)0 << 6) + ((int64_t)0 << 5)) * NTOK], &bh0);
+    ldsmB((void*)&XS[(((int64_t)0 << 6) + ((int64_t)1 << 5)) * NTOK], &bh1);
 
     bf16x2x2_from_i8x4(out.top_h0, out_h0_a0, out_h0_a1);
     bf16x2x2_from_i8x4(out.bot_h0, out_h0_a2, out_h0_a3);
@@ -976,17 +976,17 @@ __global__ void phantom_usp14_w4a16_sym_sm80_fmoe_w2AS_mm(
                 stage_load(W2, qwTop, qwBot, (int)t, 2, uid, g2, G2, R, oc_base, groupID);
             }
 
-            mma_f1(out_h1_a0, out_h1_a1, out_h1_a2, out_h1_a3, bh1, metadata_out1, C2);
+            mma_f1(out_h1_a0, out_h1_a1, out_h1_a2, out_h1_a3, bh1, &metadata_out1, C2);
 
              if (g2 < G2) {
-                ldsmB((void*)&XS[((g2 << 6) + ((int64_t)1 << 5)) * NTOK], bh1);
+                ldsmB((void*)&XS[((g2 << 6) + ((int64_t)1 << 5)) * NTOK], &bh1);
             }
 
 
-            mma_f0(out_h0_a0, out_h0_a1, out_h0_a2, out_h0_a3, bh0, metadata_out0, C1);
+            mma_f0(out_h0_a0, out_h0_a1, out_h0_a2, out_h0_a3, &bh0, metadata_out0, C1);
 
             if (g2 < G2) {
-                ldsmB((void*)&XS[((g2 << 6) + ((int64_t)0 << 5)) * NTOK], bh0);
+                ldsmB((void*)&XS[((g2 << 6) + ((int64_t)0 << 5)) * NTOK], &bh0);
             }
 
             D.x = __fmaf_rn(C1.x, fscales_out.x, D.x);
@@ -1001,7 +1001,7 @@ __global__ void phantom_usp14_w4a16_sym_sm80_fmoe_w2AS_mm(
 
             if (g2 < G2) {
 
-                stage_decode(qwTop, qwBot, (int)t, 2, (int)groupID, out);
+                stage_decode(qwTop, qwBot, (int)t, 2, (int)groupID, &out);
                 
                 fscales_out.x = bf16_bits_to_f32(out.sc_pack.x);
                 fscales_out.y = bf16_bits_to_f32(out.sc_pack.y);
