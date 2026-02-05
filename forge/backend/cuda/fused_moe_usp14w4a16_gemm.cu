@@ -494,7 +494,7 @@ __device__ __forceinline__ void store(
 //    b+0+16t+(0, 1)      b+8+16t+(0, 1)     b+16+16t+(0, 1)   b+24+16t+(0, 1)  for +n=groupID forall (b=base)
 
 
-__device__ forceinline void ldsmB(
+__device__ __forceinline__ uint32_t* ldsmB(
     const __nv_bfloat16* XS_ptr
 ) {
 
