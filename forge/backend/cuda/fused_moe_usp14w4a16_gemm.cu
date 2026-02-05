@@ -171,7 +171,7 @@ __device__ __forceinline__ void decode(
 
 
 __device__ __forceinline__ uint32_t pack_i8x4_from_i16x2(const uint16_t lo_packed, const uint16_t hi_packed) {
-    return ((uint32_t)(uint16_t)lo_packed) | ((uint32_t)(uint16_t)hi_packed << 16);
+    return ((uint32_t)lo_packed) | ((uint32_t)hi_packed << 16);
 }
 
 
