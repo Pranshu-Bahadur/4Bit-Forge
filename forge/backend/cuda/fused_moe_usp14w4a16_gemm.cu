@@ -165,7 +165,7 @@ __device__ __forceinline__ void decode(
     const uint16_t v1 = (idx2 & 1) ? (uint16_t)q4 : (uint16_t)0;
 
     v01_packed = v0 | (v1 << 8);
-    meta_nibble = (idx2 >> 1) ? (uint32_t)0xE : (uint32_t)0x4;
+    meta_nibble = (idx2 >> 1) ? (uint32_t)0b1110 : (uint32_t)0b0100;
 
 }
 
@@ -179,7 +179,7 @@ __device__ __forceinline__ uint32_t pack_nib2(
     const uint32_t top,
     const uint32_t bot
 ) {
-    return ((uint32_t)(top & 0xFu)) | (((uint32_t)(bot & 0xFu)) << 4);
+    return ((uint32_t)(top & 0b1111)) | (((uint32_t)(bot & 0b1111)) << 6);
 
 }
 
@@ -300,15 +300,15 @@ __device__ __forceinline__ uint32_t park_tok(
     uint32_t tok3 = __shfl_xor_sync(0xFFFFFFFFu, tok, (t ^ 3), 4);
 
     // Extract nibbles
-    uint32_t top0 =  tok0        & 0xFu;
-    uint32_t top1 =  tok1        & 0xFu;
-    uint32_t top2 =  tok2        & 0xFu;
-    uint32_t top3 =  tok3        & 0xFu;
+    uint32_t top0 =  tok0        & 0b1111;
+    uint32_t top1 =  tok1        & 0b1111;
+    uint32_t top2 =  tok2        & 0b1111;
+    uint32_t top3 =  tok3        & 0b1111;
 
-    uint32_t bot0 = (tok0 >> 4)  & 0xFu;
-    uint32_t bot1 = (tok1 >> 4)  & 0xFu;
-    uint32_t bot2 = (tok2 >> 4)  & 0xFu;
-    uint32_t bot3 = (tok3 >> 4)  & 0xFu;
+    uint32_t bot0 = (tok0 >> 6)  & 0b1111;
+    uint32_t bot1 = (tok1 >> 6)  & 0b1111;
+    uint32_t bot2 = (tok2 >> 6)  & 0b1111;
+    uint32_t bot3 = (tok3 >> 6)  & 0b1111;
 
    
     uint32_t E =
