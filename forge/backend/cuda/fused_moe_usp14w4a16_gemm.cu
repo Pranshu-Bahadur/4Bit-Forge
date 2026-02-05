@@ -214,7 +214,7 @@ __device__ __forceinline__ void stage_decode(
     const int curr_t, // 0,...,3
     const int src_t, // t=0 (f=0), t=2 (f=1)
     const int64_t groupID,
-    StageOut* out
+    StageOut& out
 ) {    
 
     //__activemask(); better to use entire warp acc to nvidia programming guide
@@ -343,7 +343,7 @@ __device__ __forceinline__ uint32_t park(const StageOut& out, int t) {
 
 */
 
-__device__ __forceinline__ uint32_t park_h0(const StageOut* out, const int t) {
+__device__ __forceinline__ uint32_t park_h0(const StageOut out, const int t) {
     
     /*
     if ((t==0 || t==1)) {
@@ -359,7 +359,7 @@ __device__ __forceinline__ uint32_t park_h0(const StageOut* out, const int t) {
 }
 
 
-__device__ __forceinline__ uint32_t park_h1(const StageOut* out, const int t) {
+__device__ __forceinline__ uint32_t park_h1(const StageOut out, const int t) {
     
     /*
     if ((t==0 || t==1)) {
@@ -723,20 +723,20 @@ __global__ void phantom_usp14_w4a16_sym_sm80_fmoe_w13AS_mm_phase(
         stage_load(W13, qwTopg, qwBotg, (int)t, 0, uid, 0, G2, R, oc_base, groupID);
         stage_load(W13, qwTopu, qwBotu, (int)t, 2, uid, 0, G2, R, oc_base + (R/2), groupID);
 
-        stage_decode(qwTopg, qwBotg, (int)t, 0, groupID, (StageOut*)gate);
-        stage_decode(qwTopu, qwBotu, (int)t, 2, groupID, (StageOut*)up);
+        stage_decode(qwTopg, qwBotg, (int)t, 0, groupID, gate);
+        stage_decode(qwTopu, qwBotu, (int)t, 2, groupID, up);
 
         //metadata_gate = park(gate, (int)t);
         //metadata_up = park(up, (int)t);
 
         if (t==0 or t==1) {
-            metadata_gate0 = park_h0((StageOut*)gate, (int)t);
-            metadata_up0   = park_h0((StageOut*)up, (int)t);     // used with up_ah0
+            metadata_gate0 = park_h0(gate, (int)t);
+            metadata_up0   = park_h0(up, (int)t);     // used with up_ah0
         }
 
         if (t==2 || t==3) {
-            metadata_gate1 = park_h1((StageOut*)gate, (int)t);
-            metadata_up1   = park_h1((StageOut*)up, (int)t);     // used with up_ah1
+            metadata_gate1 = park_h1(gate, (int)t);
+            metadata_up1   = park_h1(up, (int)t);     // used with up_ah1
         }
 
         fscales_gate.x = bf16_bits_to_f32(gate.sc_pack.x);
@@ -828,8 +828,8 @@ __global__ void phantom_usp14_w4a16_sym_sm80_fmoe_w13AS_mm_phase(
 
             if (g2 < G2) {
 
-                stage_decode(qwTopu, qwBotu, (int)t, 0, groupID, (StageOut*)up);
-                stage_decode(qwTopg, qwBotg, (int)t, 2, groupID, (StageOut*)gate);
+                stage_decode(qwTopu, qwBotu, (int)t, 0, groupID, up);
+                stage_decode(qwTopg, qwBotg, (int)t, 2, groupID, gate);
 
                 fscales_gate.x = bf16_bits_to_f32(gate.sc_pack.x);
                 fscales_gate.y = bf16_bits_to_f32(gate.sc_pack.y);
@@ -840,13 +840,13 @@ __global__ void phantom_usp14_w4a16_sym_sm80_fmoe_w13AS_mm_phase(
                 //metadata_up = park(up, (int)t);
 
                 if (t==0 or t==1) {
-                    metadata_gate0 = park_h0((StageOut*)gate, (int)t);
-                    metadata_up0   = park_h0((StageOut*)up, (int)t);     // used with up_ah0
+                    metadata_gate0 = park_h0(gate, (int)t);
+                    metadata_up0   = park_h0(up, (int)t);     // used with up_ah0
                 }
 
                 if (t==2 || t==3) {
-                    metadata_gate1 = park_h1((StageOut*)gate, (int)t);
-                    metadata_up1   = park_h1((StageOut*)up, (int)t);     // used with up_ah1
+                    metadata_gate1 = park_h1(gate, (int)t);
+                    metadata_up1   = park_h1(up, (int)t);     // used with up_ah1
                 }
                 
                 
@@ -938,15 +938,15 @@ __global__ void phantom_usp14_w4a16_sym_sm80_fmoe_w2AS_mm(
 
     stage_load(W2, qwTop, qwBot, (int)t, 0, uid, 0, G2, R, oc_base, groupID);
 
-    stage_decode(qwTop, qwBot, (int)t, 0, (int)groupID, (StageOut*)out);
+    stage_decode(qwTop, qwBot, (int)t, 0, (int)groupID, out);
 
 
     if (t==0 or t==1) {
-        metadata_out0 = park_h0((StageOut*)out, (int)t);
+        metadata_out0 = park_h0(out, (int)t);
     }
 
     if (t==2 || t==3) {
-        metadata_out1 = park_h1((StageOut*)out, (int)t);
+        metadata_out1 = park_h1(out, (int)t);
     }
 
     
@@ -1001,7 +1001,7 @@ __global__ void phantom_usp14_w4a16_sym_sm80_fmoe_w2AS_mm(
 
             if (g2 < G2) {
 
-                stage_decode(qwTop, qwBot, (int)t, 2, (int)groupID, (StageOut*)out);
+                stage_decode(qwTop, qwBot, (int)t, 2, (int)groupID, out);
                 
                 fscales_out.x = bf16_bits_to_f32(out.sc_pack.x);
                 fscales_out.y = bf16_bits_to_f32(out.sc_pack.y);
