@@ -50,7 +50,7 @@ __device__ __forceinline__ uint64_t shfl_u64(const uint64_t v, int src_lane, uns
     return (uint64_t)lo | ((uint64_t)hi << 32);
 }
 
-/*
+
 __device__ __forceinline__ ulonglong2 shfl_u64x2(
     const unsigned mask,
     const ulonglong2 v,
@@ -66,12 +66,13 @@ __device__ __forceinline__ ulonglong2 shfl_u64x2(
         (uint64_t)vy
     );
 }
-*/
 
 
+/*
 __device__ __forceinline__ ulonglong2 shfl_u64x2(unsigned mask, ulonglong2 v, int src_lane) {
     return make_ulonglong2(shfl_u64(v.x, src_lane, mask), shfl_u64(v.y, src_lane, mask));
 }
+*/
 
 
 __device__ __constant__ uint16_t k_bf16_m8_p7[16] = {
@@ -151,20 +152,20 @@ struct StageOut {
 __device__ __forceinline__ void decode(
     const uint64_t u64,
     const int chunk_i,
-    uint16_t& v01_packed,    
-    uint32_t& meta_nibble
+    uint16_t v01_packed,    
+    uint32_t meta_nibble
 ) {
     const uint32_t qw32  = (const uint32_t)(u64 & 0xFFFFFFFFull);
     const uint32_t hi32  = (const uint32_t)(u64 >> 32);
-    const uint16_t idx16 = (const uint16_t)(hi32 & 0xFFFFu);
+    const uint32_t idx16 = (const uint16_t)(hi32 & 0xFFFFu);
     const uint32_t q4   = (qw32 >> (4 * chunk_i)) & 0xFu;
     const uint32_t idx2 = (idx16 >> (2 * chunk_i)) & 0x3u;
     
-    const uint8_t v0 = (idx2 & 1) ? (uint8_t)0 : (uint8_t)q4;
-    const uint8_t v1 = (idx2 & 1) ? (uint8_t)q4 : (uint8_t)0;
+    const uint16_t v0 = (idx2 & 1) ? (uint16_t)0 : (uint16_t)q4;
+    const uint16_t v1 = (idx2 & 1) ? (uint16_t)q4 : (uint16_t)0;
 
-    v01_packed = (uint16_t)v0 | ((uint16_t)v1 << 8);
-    meta_nibble = (idx2 >> 1) ? (uint32_t)0xE : (uint32_t)0x4;
+    v01_packed = v0 | (v1 << 8);
+    meta_nibble = (idx2 >> 1) ? (uint32_t)0b1110 : (uint32_t)0b0100;
 
 }
 
@@ -217,10 +218,10 @@ __device__ __forceinline__ void stage_decode(
 ) {    
 
     //__activemask(); better to use entire warp acc to nvidia programming guide
-    unsigned mask = 0xFFFFFFFF; 
+    unsigned mask = __activemask(); 
 
-    const ulonglong2 qwTop = shfl_u64x2(mask, qwT, ((int)groupID << 2) + src_t);
-    const ulonglong2 qwBot = shfl_u64x2(mask, qwB, ((int)groupID << 2) + (src_t + 1));
+    const ulonglong2 qwTop = shfl_u64x2(mask, qwT, curr_t, src_t);
+    const ulonglong2 qwBot = shfl_u64x2(mask, qwB, curr_t, (src_t + 1));
 
     out.sc_pack.x = (uint16_t)(qwTop.x >> 48);
     out.sc_pack.y = (uint16_t)(qwBot.x >> 48);
@@ -342,7 +343,7 @@ __device__ __forceinline__ uint32_t park(const StageOut& out, int t) {
 
 */
 
-__device__ __forceinline__ uint32_t park_h0(StageOut& out, const int t) {
+__device__ __forceinline__ uint32_t park_h0(const StageOut out, const int t) {
     
     /*
     if ((t==0 || t==1)) {
@@ -358,7 +359,7 @@ __device__ __forceinline__ uint32_t park_h0(StageOut& out, const int t) {
 }
 
 
-__device__ __forceinline__ uint32_t park_h1(StageOut& out, const int t) {
+__device__ __forceinline__ uint32_t park_h1(const StageOut out, const int t) {
     
     /*
     if ((t==0 || t==1)) {
@@ -401,8 +402,8 @@ __device__ __forceinline__ void store_tile_swiglu(
     int64_t m_base, int64_t m_end,
     int groupID, int t,
     int64_t oc_base,
-    float4& gate4,
-    float4& up4
+    const float4 gate4,
+    const float4 up4
 ){
     #pragma unroll
     for (int j=0;j<4;++j){
@@ -446,7 +447,7 @@ __device__ __forceinline__ void store(
     int64_t m_base, int64_t m_end,
     int groupID, int t,
     int64_t oc_base,
-    float4& D4
+    const float4 D4
 ){
     #pragma unroll
     for (int j=0;j<4;++j){
@@ -728,15 +729,15 @@ __global__ void phantom_usp14_w4a16_sym_sm80_fmoe_w13AS_mm_phase(
         //metadata_gate = park(gate, (int)t);
         //metadata_up = park(up, (int)t);
 
-        //if (t==0 or t==1) {
-        metadata_gate0 = park_h0(gate, (int)t);
-        metadata_up0   = park_h0(up, (int)t);     // used with up_ah0
-        //}
+        if (t==0 or t==1) {
+            metadata_gate0 = park_h0(gate, (int)t);
+            metadata_up0   = park_h0(up, (int)t);     // used with up_ah0
+        }
 
-        //if (t==2 || t==3) {
-        metadata_gate1 = park_h1(gate, (int)t);
-        metadata_up1   = park_h1(up, (int)t);     // used with up_ah1
-        //}
+        if (t==2 || t==3) {
+            metadata_gate1 = park_h1(gate, (int)t);
+            metadata_up1   = park_h1(up, (int)t);     // used with up_ah1
+        }
 
         fscales_gate.x = bf16_bits_to_f32(gate.sc_pack.x);
         fscales_gate.y = bf16_bits_to_f32(gate.sc_pack.y);
@@ -838,15 +839,15 @@ __global__ void phantom_usp14_w4a16_sym_sm80_fmoe_w13AS_mm_phase(
                 //metadata_gate = park(gate, (int)t);
                 //metadata_up = park(up, (int)t);
 
-                //if (t==0 or t==1) {
-                metadata_gate0 = park_h0(gate, (int)t);
-                metadata_up0   = park_h0(up, (int)t);     // used with up_ah0
-                //}
+                if (t==0 or t==1) {
+                    metadata_gate0 = park_h0(gate, (int)t);
+                    metadata_up0   = park_h0(up, (int)t);     // used with up_ah0
+                }
 
-                //if (t==2 || t==3) {
-                metadata_gate1 = park_h1(gate, (int)t);
-                metadata_up1   = park_h1(up, (int)t);     // used with up_ah1
-                //}
+                if (t==2 || t==3) {
+                    metadata_gate1 = park_h1(gate, (int)t);
+                    metadata_up1   = park_h1(up, (int)t);     // used with up_ah1
+                }
                 
                 
                 
@@ -940,13 +941,13 @@ __global__ void phantom_usp14_w4a16_sym_sm80_fmoe_w2AS_mm(
     stage_decode(qwTop, qwBot, (int)t, 0, (int)groupID, out);
 
 
-    //if (t==0 or t==1) {
-    metadata_out0 = park_h0(out, (int)t);
-    //}
+    if (t==0 or t==1) {
+        metadata_out0 = park_h0(out, (int)t);
+    }
 
-    //if (t==2 || t==3) {
-    metadata_out1 = park_h1(out, (int)t);
-    //}
+    if (t==2 || t==3) {
+        metadata_out1 = park_h1(out, (int)t);
+    }
 
     
 
@@ -1007,13 +1008,13 @@ __global__ void phantom_usp14_w4a16_sym_sm80_fmoe_w2AS_mm(
                 fscales_out.z = bf16_bits_to_f32(out.sc_pack.z);
                 fscales_out.w = bf16_bits_to_f32(out.sc_pack.w);
                 
-                //if (t==0 or t==1) {
-                metadata_out0 = park_h0(out, (int)t);
-                //}
+                if (t==0 or t==1) {
+                    metadata_out0 = park_h0(out, (int)t);
+                }
 
-                //if (t==2 || t==3) {
-                metadata_out1 = park_h1(out, (int)t);
-                //}
+                if (t==2 || t==3) {
+                    metadata_out1 = park_h1(out, (int)t);
+                }
 
                 bf16x2x2_from_i8x4(out.top_h0, out_h0_a0, out_h0_a1);
                 bf16x2x2_from_i8x4(out.bot_h0, out_h0_a2, out_h0_a3);
