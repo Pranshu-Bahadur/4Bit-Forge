@@ -659,7 +659,6 @@ __global__ void phantom_usp14_w4a16_sym_sm80_fmoe_w13AS_mm_phase(
     extern __shared__ __nv_bfloat16 XS[7168][NTOK];
     
     for (int64_t c = (int64_t)threadIdx.x; c < C; c += (int64_t)blockDim.x) {
-        #pragma unroll NTOK
         for (int64_t n = 0; n < NTOK; ++n) {
             //contiguous along N is cleaner
             XS[c][n] = ((m_base + n) < m_end) ? X[(m_base + n) * C + c] : __float2bfloat16(0.0f);
