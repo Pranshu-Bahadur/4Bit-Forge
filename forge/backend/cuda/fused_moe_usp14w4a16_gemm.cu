@@ -248,15 +248,15 @@ __device__ __forceinline__ StageOut stage_decode(
     decode(qwBot.y, i_lo, bot.z, meta_nib_bot.z);
     decode(qwBot.y, i_hi, bot.w, meta_nib_bot.w);
 
-    out.top_h0 = pack_i8x4_from_i16x2(top.x, top.y);
-    out.bot_h0 = pack_i8x4_from_i16x2(bot.x, bot.y);
-    out.top_h1 = pack_i8x4_from_i16x2(top.z, top.w);
-    out.bot_h1 = pack_i8x4_from_i16x2(bot.z, bot.w);
+    //out.top_h0 = pack_i8x4_from_i16x2(top.x, bot.y);
+    //out.bot_h0 = pack_i8x4_from_i16x2(bot.x, bot.y);
+    //out.top_h1 = pack_i8x4_from_i16x2(top.z, top.w);
+    //out.bot_h1 = pack_i8x4_from_i16x2(bot.z, bot.w);
 
-    //out.top_h0 = pack_i8x4_from_i16x2(top.x, bot.x);
-    //out.bot_h0 = pack_i8x4_from_i16x2(top.y, bot.y);
-    //out.top_h1 = pack_i8x4_from_i16x2(top.z, bot.z);
-    //out.bot_h1 = pack_i8x4_from_i16x2(top.w, bot.w);
+    out.top_h0 = pack_i8x4_from_i16x2(top.x, bot.x);
+    out.bot_h0 = pack_i8x4_from_i16x2(top.y, bot.y);
+    out.top_h1 = pack_i8x4_from_i16x2(top.z, bot.z);
+    out.bot_h1 = pack_i8x4_from_i16x2(top.w, bot.w);
 
     out.nib_h0_lo = pack_nib2(meta_nib_top.x, meta_nib_bot.x);
     out.nib_h0_hi = pack_nib2(meta_nib_top.y, meta_nib_bot.y);
@@ -435,8 +435,8 @@ __device__ __forceinline__ void store_tile_swiglu(
                 u = up4.w;
             }
             
-            float sig = 1.0f / (1.0f + expf(-g));
-            float y = (g * sig) * u;                // silu(g)*u
+            float sig = (g / (1.0f + expf(-g)));
+            float y = sig * u;                // silu(g)*u
             X2[m*I + col] = __float2bfloat16(y);
         }
     }
@@ -543,7 +543,7 @@ __device__ inline void mma_f0(
     const float z = 0.0f;
     asm volatile(
             "mma.sp::ordered_metadata.sync.aligned.m16n8k32.row.col.f32.bf16.bf16.f32 "
-            "{%0,%1,%2,%3}, {%4,%5,%6,%7}, {%8,%9,%10,%11}, {%12,%13,%14,%15}, %16, 0x0;\n"
+            "{%0,%1,%2,%3}, {%4,%5,%6,%7}, {%8,%9,%10,%11}, {%12,%13,%14,%15}, %16, 0;\n"
             : "=f"(c[0]), "=f"(c[1]), "=f"(c[2]), "=f"(c[3])
             : "r"(a0), "r"(a1), "r"(a2), "r"(a3), "r"(b[0]), "r"(b[1]), "r"(b[2]), "r"(b[3]), "f"(z), "f"(z), "f"(z), "f"(z),
               "r"(e)
@@ -652,7 +652,7 @@ __global__ void phantom_usp14_w4a16_sym_sm80_fmoe_w13AS_mm_phase(
     const int64_t m_base = offsets[uid] + (((int64_t)(blockIdx.x)) * NTOK);
     const int64_t m_end = offsets[uid + 1];
 
-    if (m_base >= m_end) return;
+    if (m_base > m_end) return;
     
     const int64_t tid = (int64_t)threadIdx.x;
 
@@ -891,7 +891,7 @@ __global__ void phantom_usp14_w4a16_sym_sm80_fmoe_w2AS_mm(
     const int64_t m_base = offsets[uid] + (((int64_t)(blockIdx.x)) * NTOK);
     const int64_t m_end = offsets[uid + 1];
 
-    if (m_base >= m_end) return;
+    if (m_base > m_end) return;
     
     const int64_t tid = (int64_t)threadIdx.x;
 
