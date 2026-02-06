@@ -988,8 +988,8 @@ __global__ void phantom_usp14_w4a16_sym_sm80_fmoe_w2AS_mm(
     float4 D = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
     
     StageOut out;
-    __nv_bfloat162 out_h0_a0, out_h0_a1, out_h0_a2, out_h0_a3;
-    __nv_bfloat162 out_h1_a0, out_h1_a1, out_h1_a2, out_h1_a3;
+    uint32_t out_h0_a0, out_h0_a1, out_h0_a2, out_h0_a3;
+    uint32_t out_h1_a0, out_h1_a1, out_h1_a2, out_h1_a3;
 
     uint32_t bh0[4] = {0u, 0u, 0u, 0u};
     uint32_t bh1[4] = {0u, 0u, 0u, 0u};
