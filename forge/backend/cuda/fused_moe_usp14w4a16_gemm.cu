@@ -136,8 +136,8 @@ __device__ __forceinline__ uint32_t bf16bitx2_from_packed_i8pair(const uint16_t 
 
 __device__ __forceinline__ void bf16bitx2x2_from_i8x4(
     const uint32_t i8x4,
-    uint32_t &out_lo_bf16x2,
-    uint32_t &out_hi_bf16x2
+    uint32_t& out_lo_bf16x2,
+    uint32_t& out_hi_bf16x2
 ) {
     uint16_t lo = (uint16_t)(i8x4 & 0xFFFFu);
     uint16_t hi = (uint16_t)((i8x4 >> 16)  & 0xFFFFu);
@@ -178,8 +178,8 @@ struct StageOut {
 __device__ __forceinline__ void decode(
     const uint64_t u64,
     const int chunk_i,
-    uint16_t &v01_packed,    
-    uint32_t &meta_nibble
+    uint16_t& v01_packed,    
+    uint32_t& meta_nibble
 ) {
     const uint32_t qw32  = (const uint32_t)(u64 & 0xFFFFFFFFull);
     const uint32_t hi32  = (const uint32_t)(u64 >> 32);
@@ -187,8 +187,8 @@ __device__ __forceinline__ void decode(
     const uint32_t q4   = (qw32 >> (4 * chunk_i)) & 0xFu;
     const uint32_t idx2 = (idx16 >> (2 * chunk_i)) & 0x3u;
     
-    const uint16_t v0 = (idx2 & 1) ? (uint16_t)0 : (uint16_t)(q4 & 0xFFu);
-    const uint16_t v1 = (idx2 & 1) ? (uint16_t)(q4 & 0xFFu) : (uint16_t)0;
+    const uint16_t v0 = (idx2 & 1) ? (uint16_t)8 : (uint16_t)(q4);
+    const uint16_t v1 = (idx2 & 1) ? (uint16_t)(q4) : (uint16_t)8;
 
     v01_packed = v0 | (v1 << 8);
     meta_nibble = (idx2 >> 1) ? (uint32_t)0xE : (uint32_t)0x4;
@@ -352,14 +352,14 @@ __device__ __forceinline__ uint32_t park_tok(
     */
 
     uint32_t E =
-        (bot0 <<  0) | //[3..0]
-        (bot1 <<  4) | //[7..4]
-        (bot2 <<  8) | //[11..8]
-        (bot3 << 12) | //[15..12]
-        (top0 << 16) | //[19..16]
-        (top1 << 20) | //[23..20]
-        (top2 << 24) | //[27..24]
-        (top3 << 28);  //[31..28]
+        (top0 <<  0) | //[3..0]
+        (top1 <<  4) | //[7..4]
+        (top2 <<  8) | //[11..8]
+        (top3 << 12) | //[15..12]
+        (bot0 << 16) | //[19..16]
+        (bot1 << 20) | //[23..20]
+        (bot2 << 24) | //[27..24]
+        (bot3 << 28);  //[31..28]
 
     return E;
 }
