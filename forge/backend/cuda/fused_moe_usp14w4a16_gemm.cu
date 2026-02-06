@@ -339,7 +339,7 @@ __device__ __forceinline__ uint32_t park_tok(
     uint32_t bot2 = (tok2 >> 4)  & 0xEu;
     uint32_t bot3 = (tok3 >> 4)  & 0xEu;
 
-   
+   /*
     uint32_t E =
         (top0 <<  0) | //[3..0]
         (top1 <<  4) | //[7..4]
@@ -349,6 +349,17 @@ __device__ __forceinline__ uint32_t park_tok(
         (bot1 << 20) | //[23..20]
         (bot2 << 24) | //[27..24]
         (bot3 << 28);  //[31..28]
+    */
+
+    uint32_t E =
+        (bot0 <<  0) | //[3..0]
+        (bot1 <<  4) | //[7..4]
+        (bot2 <<  8) | //[11..8]
+        (bot3 << 12) | //[15..12]
+        (top0 << 16) | //[19..16]
+        (top1 << 20) | //[23..20]
+        (top2 << 24) | //[27..24]
+        (top3 << 28);  //[31..28]
 
     return E;
 }
