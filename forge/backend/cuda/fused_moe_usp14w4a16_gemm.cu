@@ -879,7 +879,7 @@ __global__ void phantom_usp14_w4a16_sym_sm80_fmoe_w13AS_mm_phase(
             mma_f0(up_h0_a0, up_h0_a1, up_h0_a2, up_h0_a3, bh0, metadata_up0, C3);
 
             if (g2 < G2) {
-                ldsmB((__nv_bfloat16*)(&XS0[((g2 << 6) + ((int64_t)0 << 5)) * NTOK * NTOK]), bh0);
+                ldsmB((__nv_bfloat16*)(&XS0[((g2 << 6) + ((int64_t)0 << 5)) * NTOK]), bh0);
             }
 
 
@@ -893,7 +893,7 @@ __global__ void phantom_usp14_w4a16_sym_sm80_fmoe_w13AS_mm_phase(
             mma_f1(gate_h1_a0, gate_h1_a1, gate_h1_a2, gate_h1_a3, bh1, metadata_gate1, C1);
 
             if (g2 < G2) {
-                ldsmB((__nv_bfloat16*)(&XS0[((g2 << 6) + ((int64_t)1 << 5)) * NTOK * NTOK]), bh1);
+                ldsmB((__nv_bfloat16*)(&XS0[((g2 << 6) + ((int64_t)1 << 5)) * NTOK]), bh1);
             }
             
 
