@@ -656,12 +656,12 @@ __global__ void phantom_usp14_w4a16_sym_sm80_fmoe_w13AS_mm_phase(
     
     const int64_t tid = (int64_t)threadIdx.x;
 
-    extern __shared__ __nv_bfloat16 XS[7168][NTOK];
+    extern __shared__ __nv_bfloat16 XS0[];
     
     for (int64_t c = (int64_t)threadIdx.x; c < C; c += (int64_t)blockDim.x) {
         for (int64_t n = 0; n < NTOK; ++n) {
             //contiguous along N is cleaner
-            XS[c][n] = ((m_base + n) < m_end) ? X[(m_base + n) * C + c] : __float2bfloat16(0.0f);
+            XS0[c * NTOK + n] = ((m_base + n) < m_end) ? X[(m_base + n) * C + c] : __float2bfloat16(0.0f);
         }
     }
     __syncthreads();
@@ -747,8 +747,8 @@ __global__ void phantom_usp14_w4a16_sym_sm80_fmoe_w13AS_mm_phase(
         fscales_up.z = bf16_bits_to_f32(up.sc_pack.z);
         fscales_up.w = bf16_bits_to_f32(up.sc_pack.w);
 
-        ldsmB(&(XS[(((int64_t)0 << 6) + ((int64_t)0 << 5))][0]), bh0);
-        ldsmB(&(XS[(((int64_t)0 << 6) + ((int64_t)1 << 5))][0]), bh1);
+        ldsmB((__nv_bfloat16*)(&XS0[((0 << 6) + ((int64_t)0 << 5)) * NTOK]), bh0);
+        ldsmB((__nv_bfloat16*)(&XS0[((0 << 6) + ((int64_t)1 << 5)) * NTOK]), bh1);
 
         bf16x2x2_from_i8x4(gate.top_h0, gate_h0_a0, gate_h0_a1);
         bf16x2x2_from_i8x4(gate.bot_h0, gate_h0_a2, gate_h0_a3);
@@ -795,7 +795,7 @@ __global__ void phantom_usp14_w4a16_sym_sm80_fmoe_w13AS_mm_phase(
             mma_f0(up_h0_a0, up_h0_a1, up_h0_a2, up_h0_a3, bh0, metadata_up0, C3);
 
             if (g2 < G2) {
-                ldsmB(&(XS[((g2 << 6) + ((int64_t)0 << 5))][0]), bh0);
+                ldsmB((__nv_bfloat16*)(&XS0[((g2 << 6) + ((int64_t)0 << 5)) * NTOK]), bh0);
             }
 
 
@@ -809,7 +809,7 @@ __global__ void phantom_usp14_w4a16_sym_sm80_fmoe_w13AS_mm_phase(
             mma_f1(gate_h1_a0, gate_h1_a1, gate_h1_a2, gate_h1_a3, bh1, metadata_gate1, C1);
 
             if (g2 < G2) {
-                ldsmB(&(XS[((g2 << 6) + ((int64_t)1 << 5))][0]), bh1);
+                ldsmB((__nv_bfloat16*)(&XS0[((g2 << 6) + ((int64_t)1 << 5)) * NTOK]), bh1);
             }
             
 
@@ -895,13 +895,13 @@ __global__ void phantom_usp14_w4a16_sym_sm80_fmoe_w2AS_mm(
     
     const int64_t tid = (int64_t)threadIdx.x;
 
-    extern __shared__ __nv_bfloat16 XS1[2048][NTOK];
+    extern __shared__ __nv_bfloat16 XS1[];
 
     
     for (int64_t c = (int64_t)threadIdx.x; c < C; c += (int64_t)blockDim.x) {
         for (int64_t n = 0; n < NTOK; ++n) {
             //contiguous along N is cleaner
-            XS1[c][n] = ((m_base + n) < m_end) ? X2[(m_base + n) * C + c] : __float2bfloat16(0.0f);
+            XS1[c * NTOK + n] = ((m_base + n) < m_end) ? X2[(m_base + n) * C + c] : __float2bfloat16(0.0f);
         }
     }
     __syncthreads();
@@ -955,8 +955,8 @@ __global__ void phantom_usp14_w4a16_sym_sm80_fmoe_w2AS_mm(
     fscales_out.w = bf16_bits_to_f32(out.sc_pack.w);
 
 
-    ldsmB(&(XS1[(((int64_t)0 << 6) + ((int64_t)0 << 5))][0]), bh0);
-    ldsmB(&(XS1[(((int64_t)0 << 6) + ((int64_t)1 << 5))][0]), bh1);
+    ldsmB((__nv_bfloat16*)(&XS1[((0 << 6) + ((int64_t)0 << 5)) * NTOK]), bh0);
+    ldsmB((__nv_bfloat16*)(&XS1[((0 << 6) + ((int64_t)1 << 5)) * NTOK]), bh1);
 
     bf16x2x2_from_i8x4(out.top_h0, out_h0_a0, out_h0_a1);
     bf16x2x2_from_i8x4(out.bot_h0, out_h0_a2, out_h0_a3);
@@ -976,15 +976,15 @@ __global__ void phantom_usp14_w4a16_sym_sm80_fmoe_w2AS_mm(
 
             mma_f1(out_h1_a0, out_h1_a1, out_h1_a2, out_h1_a3, bh1, metadata_out1, C2);
 
-             if (g2 < G2) {
-                ldsmB(&(XS1[((g2 << 6) + ((int64_t)1 << 5))][0]), bh1);
+            if (g2 < G2) {
+                ldsmB((__nv_bfloat16*)(&XS1[((g2 << 6) + ((int64_t)1 << 5)) * NTOK]), bh1);
             }
 
 
             mma_f0(out_h0_a0, out_h0_a1, out_h0_a2, out_h0_a3, bh0, metadata_out0, C1);
 
             if (g2 < G2) {
-                ldsmB(&(XS1[((g2 << 6) + ((int64_t)0 << 5))][0]), bh0);
+                ldsmB((__nv_bfloat16*)(&XS1[((g2 << 6) + ((int64_t)0 << 5)) * NTOK]), bh0);
             }
 
             D.x = __fmaf_rn(C1.x, fscales_out.x, D.x);
@@ -1041,7 +1041,7 @@ torch::Tensor usp14w4a16sym_sm80_fused_moe_w13_gemm(
     X = X.contiguous();
     const int64_t N = (int64_t)X.size(0);
     const int64_t C = (int64_t)X.size(1);
-    const int64_t G2 = (C + 64 -1)/64;
+    const int64_t G2 = (int64_t)((C + 64 -1)/64);
 
 
     U = U.contiguous();
@@ -1101,7 +1101,7 @@ torch::Tensor usp14w4a16sym_sm80_fused_moe_w2_gemm(
     X2 = X2.contiguous();
     const int64_t N = (int64_t)X2.size(0);
     const int64_t C = (int64_t)X2.size(1);
-    const int64_t G2 = (C + 64 -1)/64;
+    const int64_t G2 = (int64_t)((C + 64 -1)/64);
     U = U.contiguous();
     
     offsets = offsets.contiguous();
